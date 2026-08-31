@@ -119,6 +119,9 @@ pub struct StartOpts {
     /// vaapi` has NO software fallback, so we only enable it for codecs the iGPU
     /// can decode (see [`is_vaapi_hw_decodable`]). `None` → software decode.
     pub source_codec: Option<String>,
+    /// Source video profile (e.g. `High`, `High 10`) from the file's probe,
+    /// used to keep 10-bit H.264 on the software-decode path.
+    pub source_profile: Option<String>,
     /// Whole-container average bitrate of the SOURCE file (kbps), derived from
     /// size/duration by the grant route. Caps the re-encode bitrate ladder so a
     /// low-bitrate source is never inflated past its own quality (see
@@ -196,6 +199,8 @@ struct Session {
     /// Source video codec, carried for the supervisor respawn so the full-HW
     /// gate is recomputed identically on every spawn.
     source_codec: Option<String>,
+    /// Source video profile, carried for identical full-HW gating on respawn.
+    source_profile: Option<String>,
     /// Source average bitrate (kbps), carried for respawn arg parity.
     source_avg_kbps: Option<u32>,
     /// Full source duration (secs) for the native VOD-manifest synthesis.
@@ -530,17 +535,18 @@ fn path_within_roots(input: &str, roots: &[PathBuf]) -> bool {
         .any(|r| norm.starts_with(lexically_normalize(r)))
 }
 
-/// Codecs the Intel iGPU can decode via VAAPI (`-hwaccel vaapi
-/// -hwaccel_output_format vaapi`). Anything outside this set — notably MPEG-4
-/// part 2 / DivX, which modern Intel fixed-function decode dropped — has NO
-/// software fallback under `-hwaccel_output_format vaapi` and would hard-fail the
-/// session, so it must use the software-decode path instead. The list is kept
-/// deliberately conservative: an omitted-but-decodable codec merely costs a CPU
-/// decode (correct, just slower), whereas a wrongly-included one breaks playback.
+/// Codecs that may use VAAPI decode (`-hwaccel vaapi
+/// -hwaccel_output_format vaapi`) on this Intel iGPU. AV1/VP9 are excluded even
+/// though the iGPU can decode them because their VAAPI-decoded surfaces are
+/// unusable by the downstream VPP/Vulkan filters; they must CPU-decode. Anything
+/// else outside this set — notably MPEG-4 part 2 / DivX, which modern Intel
+/// fixed-function decode dropped — has NO software fallback and would hard-fail
+/// the session. The list is deliberately conservative: an omission merely costs
+/// a CPU decode, whereas a wrongly-included codec breaks playback.
 fn is_vaapi_hw_decodable(codec: &str) -> bool {
     matches!(
         codec.trim().to_ascii_lowercase().as_str(),
-        "hevc" | "h265" | "h264" | "avc" | "avc1" | "av1" | "vp9"
+        "hevc" | "h265" | "h264" | "avc" | "avc1"
     )
 }
 
@@ -831,24 +837,36 @@ impl SessionManager {
     ///
     /// Everything else — including a VAAPI-ENCODE session whose decode/
     /// tone-map/scale run in software (full-HW probe failed, or the source
-    /// codec isn't iGPU-decodable, or a subtitle burn forces CPU frames) —
-    /// loads the CPU materially and must be charged against the CPU cap. A 4K
-    /// HDR software decode+tonemap saturates cores even when the final encode
-    /// is on the GPU; charging by encoder family alone let several of those
-    /// stack up and starve the box.
-    fn uses_full_hw_pipeline(&self, plan: &TranscodePlan, source_codec: Option<&str>) -> bool {
+    /// codec/profile isn't safe for hardware decode, or a subtitle burn forces
+    /// CPU frames) — loads the CPU materially and must be charged against the
+    /// CPU cap. A 4K HDR software decode+tonemap saturates cores even when the
+    /// final encode is on the GPU; charging by encoder family alone let several
+    /// of those stack up and starve the box.
+    fn uses_full_hw_pipeline(
+        &self,
+        plan: &TranscodePlan,
+        source_codec: Option<&str>,
+        source_profile: Option<&str>,
+    ) -> bool {
         use crate::plan::VideoOp;
+        let codec_lc = source_codec.map(str::to_ascii_lowercase);
+        // Intel has no fixed-function decode for 10-bit AVC. With VAAPI output
+        // forced there is no software fallback, so profiles such as High 10 must
+        // stay on the CPU-decode path.
+        let h264_10bit = matches!(codec_lc.as_deref(), Some("h264" | "avc" | "avc1"))
+            && source_profile.is_some_and(|p| p.to_ascii_lowercase().contains("10"));
         // AV1/VP9 HDR tone-map does NOT ride the full-HW VAAPI-decode pipeline: its
         // surfaces can't hwmap to Vulkan for libplacebo, so it CPU-decodes and
         // hwuploads (see args.rs `cpu_vulkan_tonemap`). Only hevc/h264 surfaces map
         // to Vulkan, so only they (plus non-tone-map plans) are full-HW here.
         let vulkan_hwmap_safe = matches!(
-            source_codec.map(str::to_ascii_lowercase).as_deref(),
+            codec_lc.as_deref(),
             None | Some("hevc" | "h265" | "h264" | "avc" | "avc1")
         );
         self.vaapi_hw_decode
             && matches!(self.encoder, HwEncoder::Vaapi)
             && source_codec.is_some_and(is_vaapi_hw_decodable)
+            && !h264_10bit
             && matches!(
                 plan,
                 TranscodePlan::Transcode {
@@ -883,6 +901,7 @@ impl SessionManager {
         dir: &PathBuf,
         start_secs: u64,
         source_codec: Option<&str>,
+        source_profile: Option<&str>,
         source_avg_kbps: Option<u32>,
         media_kind: &str,
         start_number: u64,
@@ -892,10 +911,11 @@ impl SessionManager {
         // VAAPI, the boot probe having confirmed the VPP+encode chain
         // (`vaapi_hw_decode`), the SOURCE codec being one the iGPU can decode
         // — `-hwaccel_output_format vaapi` hard-fails with no software fallback
-        // on an undecodable codec (e.g. MPEG-4/DivX) — and the plan being a
-        // video re-encode without subtitle burn-in. The shared helper is also
-        // what the CPU-cap accounting keys on, so they cannot drift.
-        let hw_decode = self.uses_full_hw_pipeline(plan, source_codec);
+        // on an undecodable codec/profile (e.g. MPEG-4/DivX or H.264 High 10) —
+        // and the plan being a video re-encode without subtitle burn-in. The
+        // shared helper is also what the CPU-cap accounting keys on, so they
+        // cannot drift.
+        let hw_decode = self.uses_full_hw_pipeline(plan, source_codec, source_profile);
         let args = ffmpeg_args_for(&ArgSpec {
             plan,
             input: opts_input,
@@ -1139,12 +1159,16 @@ impl SessionManager {
         // * A video re-encode charges the CPU cap UNLESS it runs the full-HW
         //   VAAPI pipeline (GPU decode + VPP + encode). Keying on the encoder
         //   family alone under-counted: a VAAPI-encode session whose
-        //   decode/tone-map/scale run in software (probe failed, source codec
-        //   not iGPU-decodable, subtitle burn) still hammers the CPU — a 4K
-        //   HDR software decode+tonemap saturates cores even though `-c:v` is
+        //   decode/tone-map/scale run in software (probe failed, source codec or
+        //   profile not HW-safe, subtitle burn) still hammers the CPU — a 4K HDR
+        //   software decode+tonemap saturates cores even though `-c:v` is
         //   h264_vaapi.
         let cpu_charge = opts.plan.reencodes_video()
-            && !self.uses_full_hw_pipeline(&opts.plan, opts.source_codec.as_deref());
+            && !self.uses_full_hw_pipeline(
+                &opts.plan,
+                opts.source_codec.as_deref(),
+                opts.source_profile.as_deref(),
+            );
         let permit = self
             .limiter
             .try_acquire(cpu_charge)
@@ -1275,6 +1299,7 @@ impl SessionManager {
                 &dir,
                 eff_start,
                 opts.source_codec.as_deref(),
+                opts.source_profile.as_deref(),
                 opts.source_avg_kbps,
                 &opts.media_kind,
                 eff_start_number,
@@ -1297,6 +1322,7 @@ impl SessionManager {
             plan: opts.plan,
             input_path: opts.input_path,
             source_codec: opts.source_codec,
+            source_profile: opts.source_profile,
             source_avg_kbps: opts.source_avg_kbps,
             duration_secs: opts.duration_secs,
             owner: opts.owner,
@@ -1910,7 +1936,17 @@ impl SessionManager {
     /// dir recreated behind it (a leak on the bounded /scratch tmpfs) and never
     /// leaves an unsupervised encoder.
     async fn respawn(&self, id: &str, mode: RespawnMode) -> Respawn {
-        let (input, plan, dir, start_secs, source_codec, source_avg_kbps, media_kind, prev_number) = {
+        let (
+            input,
+            plan,
+            dir,
+            start_secs,
+            source_codec,
+            source_profile,
+            source_avg_kbps,
+            media_kind,
+            prev_number,
+        ) = {
             let guard = self.sessions.lock().await;
             let Some(s) = guard.get(id) else {
                 return Respawn::Gone;
@@ -1921,6 +1957,7 @@ impl SessionManager {
                 s.dir.clone(),
                 s.start_secs,
                 s.source_codec.clone(),
+                s.source_profile.clone(),
                 s.source_avg_kbps,
                 s.info_kind.clone(),
                 s.start_number,
@@ -1963,6 +2000,7 @@ impl SessionManager {
                 &dir,
                 spawn_secs,
                 source_codec.as_deref(),
+                source_profile.as_deref(),
                 source_avg_kbps,
                 &media_kind,
                 next_number,
@@ -2274,6 +2312,7 @@ mod tests {
             plan: remux_plan(),
             start_secs: 0,
             source_codec: None,
+            source_profile: None,
             duration_secs: None,
             owner: None,
             subtitle: None,
@@ -2758,6 +2797,7 @@ mod tests {
         let first = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
         let resumed = StartOpts {
             start_secs: 120,
+            source_profile: None,
             ..encode_opts_id("/lib/a.mkv", 7)
         };
         let second = mgr
@@ -3141,6 +3181,7 @@ mod tests {
     fn remux_opts_id(input: &str, media_id: i64) -> StartOpts {
         StartOpts {
             source_avg_kbps: None,
+            source_profile: None,
             media_id,
             ..opts(input)
         }
@@ -3169,6 +3210,7 @@ mod tests {
             },
             start_secs: 0,
             source_codec: Some("hevc".into()),
+            source_profile: None,
             duration_secs: None,
             owner: None,
             subtitle: None,
@@ -3201,6 +3243,7 @@ mod tests {
         let copy_ts = mgr
             .start(StartOpts {
                 duration_secs: Some(600),
+                source_profile: None,
                 ..remux_opts_id("/lib/copy_ts.mkv", 1)
             })
             .await
@@ -3214,6 +3257,7 @@ mod tests {
         let hevc_fmp4 = mgr
             .start(StartOpts {
                 duration_secs: Some(600),
+                source_profile: None,
                 plan: TranscodePlan::Transcode {
                     video: VideoOp::Copy,
                     audio: AudioOp::Copy,
@@ -3236,6 +3280,7 @@ mod tests {
         let encode = mgr
             .start(StartOpts {
                 duration_secs: Some(600),
+                source_profile: None,
                 ..encode_opts_id("/lib/encode.mkv", 3)
             })
             .await
@@ -3280,6 +3325,7 @@ mod tests {
         let sid = mgr
             .start(StartOpts {
                 duration_secs: Some(30),
+                source_profile: None,
                 plan: TranscodePlan::Transcode {
                     video: VideoOp::Copy,
                     audio: AudioOp::Copy,
@@ -3309,13 +3355,14 @@ mod tests {
 
     #[test]
     fn vaapi_hw_decodable_allowlist() {
-        for c in [
-            "hevc", "H265", "h264", "AVC", "avc1", "av1", "vp9", " hevc ",
-        ] {
+        for c in ["hevc", "H265", "h264", "AVC", "avc1", " hevc "] {
             assert!(is_vaapi_hw_decodable(c), "{c} must be HW-decodable");
         }
-        // MPEG-4 part 2 / DivX has no Intel HW decode → must fall back to SW.
+        // AV1/VP9 decode surfaces are unusable by the downstream filters on this
+        // iGPU; MPEG-4 part 2 / DivX has no Intel HW decode. All must use SW decode.
         for c in [
+            "av1",
+            "vp9",
             "mpeg4",
             "msmpeg4v3",
             "mpeg2video",
@@ -3397,6 +3444,19 @@ mod tests {
         .with_vaapi_hw_decode(vaapi_hw_decode)
     }
 
+    #[test]
+    fn full_hw_pipeline_requires_filter_usable_decode_surfaces() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = cap_matrix_manager(&tmp, HwEncoder::Vaapi, true);
+        let plan = encode_opts_id("/lib/source.mkv", 7).plan;
+
+        assert!(!mgr.uses_full_hw_pipeline(&plan, Some("av1"), None));
+        assert!(!mgr.uses_full_hw_pipeline(&plan, Some("vp9"), None));
+        assert!(!mgr.uses_full_hw_pipeline(&plan, Some("h264"), Some("High 10")));
+        assert!(mgr.uses_full_hw_pipeline(&plan, Some("h264"), Some("High")));
+        assert!(mgr.uses_full_hw_pipeline(&plan, Some("hevc"), Some("Main 10")));
+    }
+
     #[tokio::test]
     async fn full_hw_vaapi_reencode_does_not_charge_cpu_cap() {
         // VAAPI with the full-HW pipeline confirmed + an iGPU-decodable source:
@@ -3421,6 +3481,7 @@ mod tests {
         let mgr = cap_matrix_manager(&tmp, HwEncoder::Vaapi, true);
         let sw_opts = |path: &str, id: i64| StartOpts {
             source_codec: Some("mpeg4".into()),
+            source_profile: None,
             ..encode_opts_id(path, id)
         };
         let _a = mgr.start(sw_opts("/lib/a.avi", 7)).await.unwrap();

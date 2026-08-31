@@ -2115,6 +2115,43 @@ mod tests {
     }
 
     #[test]
+    fn av1_sdr_cpu_decodes_no_hwaccel() {
+        let plan = encode(None, false, None);
+        let args = ffmpeg_args_for(&ArgSpec {
+            plan: &plan,
+            input: "/in.mkv",
+            session_dir: "/tmp/s",
+            start_secs: 0,
+            encoder: HwEncoder::Vaapi,
+            hw_decode: false,
+            source_codec: Some("av1"),
+            media_kind: "movie",
+            start_number: 0,
+            source_avg_kbps: None,
+        });
+        let joined = args.join(" ");
+        let vf = args
+            .iter()
+            .position(|arg| arg == "-vf")
+            .map(|i| &args[i + 1])
+            .expect("missing -vf");
+        let codec_idx = args
+            .iter()
+            .position(|arg| arg == "-c:v")
+            .expect("missing -c:v");
+
+        assert!(!args.iter().any(|arg| arg == "-hwaccel"), "{joined}");
+        assert!(
+            !args.iter().any(|arg| arg == "-hwaccel_output_format"),
+            "{joined}"
+        );
+        assert!(vf.ends_with("format=nv12,hwupload"), "{joined}");
+        assert_eq!(args[codec_idx + 1], "h264_vaapi", "{joined}");
+        assert!(!joined.contains("libplacebo"), "{joined}");
+        assert!(!joined.contains("scale_vaapi"), "{joined}");
+    }
+
+    #[test]
     fn hevc_hdr_tonemap_keeps_vaapi_decode_route() {
         // HEVC surfaces DO hwmap to Vulkan, so hevc HDR keeps the fast VAAPI-decode
         // full-HW route (contrast av1 above).

@@ -427,9 +427,10 @@ async fn grant(
         row.hdr_format = Some("Dolby Vision".to_string());
     }
 
-    // Source codec gates the full-hardware VAAPI decode path (see
+    // Source codec/profile gate the full-hardware VAAPI decode path (see
     // SessionManager::spawn_child); carry it through to StartOpts.
     let source_codec = row.video_codec.clone();
+    let source_profile = row.video_profile.clone();
     // Whole-container average bitrate (kbps) caps the re-encode ladder so a
     // low-bitrate source is never inflated past its own quality.
     let source_avg_kbps = match (row.size_bytes, row.duration_secs) {
@@ -468,6 +469,7 @@ async fn grant(
         plan: plan.clone(),
         start_secs,
         source_codec,
+        source_profile,
         source_avg_kbps,
         duration_secs: row.duration_secs,
         owner,
