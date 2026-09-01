@@ -80,8 +80,19 @@ function isNativeBootstrap(c: Parameters<MiddlewareHandler>[0]): boolean {
 // allowedOrigins — the same trust model under which the token-authed GET
 // segment/manifest requests already serve cross-origin. A request presenting BOTH
 // a `?t=` and a cookie stays gated: the cookie is still a CSRF vector.
+//
+// Scoped to the routes that actually authenticate by `?t=`: an unscoped
+// exemption also disarmed the gate on the cookie-MINTING auth POSTs
+// (/api/auth/plex/check ignores ?t= but sets eex.session), reopening login
+// CSRF for a signed-out victim.
+const TOKEN_AUTH_PREFIXES = ['/api/transcode/session/']
+
 function isStreamTokenOnly(c: Parameters<MiddlewareHandler>[0]): boolean {
-  return !!c.req.query('t') && !c.req.header('cookie')
+  return (
+    !!c.req.query('t') &&
+    !c.req.header('cookie') &&
+    TOKEN_AUTH_PREFIXES.some((p) => c.req.path.startsWith(p))
+  )
 }
 
 // Same-origin pass (plan 006 Phase 2): a request whose Origin host equals

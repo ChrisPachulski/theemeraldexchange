@@ -117,19 +117,15 @@ export function roleFor(username: string, sub?: string): Role {
   // a non-Plex identity.
   if (sub && (env.adminSubs ?? []).includes(sub)) return 'admin'
   // Legacy admin-by-Plex-username (env.admins) must NEVER promote a non-Plex
-  // identity. ADMINS is documented as *Plex usernames*; for Apple the username
-  // is `verified.email.split('@')[0]` (attacker-chosen) and for legacy local: rows it is
-  // a self-chosen handle — matching either against ADMINS would let any invited
-  // apple:/local: user whose name collides with an admin entry escalate to
-  // admin, and reconcileSession would re-grant it on every request. Block the
-  // username match for the non-Plex providers; plex: and legacy bare-numeric
-  // Plex subs keep the historical behavior. Apple/Google/WorkOS admins must
-  // instead be named explicitly by stable sub in ADMIN_SUBS (handled above).
-  if (
-    sub &&
-    (sub.startsWith('apple:') || sub.startsWith('local:') || sub.startsWith('google:'))
-  )
-    return 'user'
+  // identity. ADMINS is documented as *Plex usernames*; every other provider's
+  // display name is attacker-chosen (Apple/Google email local-part, WorkOS
+  // first+last name, a self-chosen local: handle) — matching it against ADMINS
+  // would let any invited user whose name collides with an admin entry
+  // escalate, and reconcileSession would re-grant it on every request. Fail
+  // closed: only plex: and legacy bare-numeric Plex subs may match by name
+  // (an enumerated deny-list once missed workos:). Non-Plex admins are named
+  // explicitly by stable sub in ADMIN_SUBS (handled above).
+  if (sub && !(sub.startsWith('plex:') || /^\d+$/.test(sub))) return 'user'
   const lower = username.toLowerCase()
   return env.admins.some((a) => a.toLowerCase() === lower) ? 'admin' : 'user'
 }

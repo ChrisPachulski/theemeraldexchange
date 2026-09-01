@@ -455,6 +455,9 @@ services:
       TRANSCODER_HOST: "0.0.0.0"
       TRANSCODER_PORT: "8003"
       TRANSCODER_TMP_DIR: "/scratch"
+      # Source-path confinement: ffmpeg may only read under the media mount.
+      # Boot refuses (principal mode log/enforce) when this is unset.
+      TRANSCODER_MEDIA_ROOT: "/media"
       TRANSCODER_FFMPEG_BIN: "/usr/bin/ffmpeg"
       # Intel VAAPI hardware H.264 encode on the NAS iGPU (Pentium 8505, Alder
       # Lake UHD), via Debian's stock ffmpeg + intel-media-va-driver. The mapped

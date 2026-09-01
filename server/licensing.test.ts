@@ -200,7 +200,7 @@ describe('third-party license notice', () => {
   it('documents every non-registry npm dependency as a supply-chain note', () => {
     // npm records no integrity hash for git-resolved dependencies, so each one
     // is a supply-chain deviation that must be consciously tracked in the
-    // notice (currently: webworkify-webpack via mpegts.js, commit-pinned).
+    // notice (none today; webworkify-webpack via mpegts.js was the last).
     const notice = readFileSync(noticePath, 'utf8')
     const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')) as {
       packages?: Record<string, { resolved?: string; link?: boolean }>

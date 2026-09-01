@@ -702,6 +702,19 @@ impl SessionManager {
     /// Restrict source media to the given root directories. Returns `self` for
     /// chaining off [`SessionManager::new`]. An empty list leaves confinement
     /// off. Paths are compared lexically (see [`path_within_roots`]).
+    /// Configured source-path allow-list (empty = unconfined; see
+    /// [`crate::routes::require_media_root`] for the boot-time gate).
+    pub fn media_roots(&self) -> &[PathBuf] {
+        &self.media_roots
+    }
+
+    /// The single source-path gate: every entry point that hands a caller-
+    /// supplied path to ffmpeg/ffprobe (start, warm, the grant pre-probe) must
+    /// route through here so confinement cannot be bypassed by ordering.
+    pub fn is_source_path_allowed(&self, input: &str) -> bool {
+        self.media_roots.is_empty() || path_within_roots(input, &self.media_roots)
+    }
+
     pub fn with_media_roots(mut self, roots: Vec<PathBuf>) -> Self {
         self.media_roots = roots;
         self
@@ -1092,7 +1105,7 @@ impl SessionManager {
         // bounds WHAT ffmpeg may be pointed at even for an authorized caller, so
         // a crafted source_path cannot read arbitrary container files. Checked
         // before acquiring a permit so a rejected request consumes no slot.
-        if !self.media_roots.is_empty() && !path_within_roots(&opts.input_path, &self.media_roots) {
+        if !self.is_source_path_allowed(&opts.input_path) {
             return Err(StartError::Forbidden(opts.input_path.clone()));
         }
 
@@ -3117,7 +3130,12 @@ mod tests {
         let dir = manifest.parent().unwrap().to_path_buf();
 
         assert!(mgr.seek(&id, 120).await, "seek must succeed");
-        let args = wait_for_args(&dir.join("args.txt"), |a| a.iter().any(|s| s == "120")).await;
+        // Both markers: `> args.txt` truncates before the shell flushes, so a
+        // partial read could carry `-ss 120` but not yet `-start_number`.
+        let args = wait_for_args(&dir.join("args.txt"), |a| {
+            a.iter().any(|s| s == "120") && a.iter().any(|s| s == "-start_number")
+        })
+        .await;
         let ss = args.iter().position(|s| s == "-ss").expect("-ss");
         assert_eq!(args[ss + 1], "120", "seek target honored exactly");
         let sn = args

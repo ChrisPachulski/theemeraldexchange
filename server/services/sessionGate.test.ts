@@ -150,6 +150,12 @@ describe('roleFor', () => {
     expect(roleFor('admin-user', 'apple:001')).toBe('user')
     expect(roleFor('admin-user', 'local:01HZXABCDEF')).toBe('user')
   })
+  it('refuses to promote a workos/google identity whose displayName matches ADMINS', () => {
+    // WorkOS first/last name and the Google email local-part are attacker-chosen
+    // too; the guard must fail closed for every non-Plex provider.
+    expect(roleFor('admin-user', 'workos:user_01ABC')).toBe('user')
+    expect(roleFor('admin-user', 'google:1234567890')).toBe('user')
+  })
   it('still promotes a plex (and legacy bare-numeric) identity matching ADMINS', () => {
     expect(roleFor('admin-user', 'plex:42')).toBe('admin')
     expect(roleFor('admin-user', '42')).toBe('admin')

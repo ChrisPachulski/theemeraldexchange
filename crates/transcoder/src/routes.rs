@@ -78,12 +78,37 @@ impl AppState {
                 "principal_mode=enforce requires INTERNAL_PRINCIPAL_SECRET to be set".into(),
             );
         }
+        require_media_root(
+            principal_mode.clone(),
+            sessions.media_roots().is_empty(),
+            std::env::var("TRANSCODER_ALLOW_ANY_PATH").as_deref() == Ok("1"),
+        )?;
         Ok(AppState {
             sessions,
             principal_mode,
             internal_principal_secret: secret,
         })
     }
+}
+
+/// Boot gate for source-path confinement. Any production posture (principal
+/// mode log/enforce) must name the media root(s) ffmpeg may read; an unset
+/// `TRANSCODER_MEDIA_ROOT` used to fail OPEN and let any member point ffmpeg
+/// at arbitrary container paths or URLs. `TRANSCODER_ALLOW_ANY_PATH=1` is the
+/// explicit dev opt-out.
+pub fn require_media_root(
+    mode: PrincipalMode,
+    media_roots_empty: bool,
+    allow_any: bool,
+) -> Result<(), String> {
+    if mode != PrincipalMode::Off && media_roots_empty && !allow_any {
+        return Err(
+            "TRANSCODER_MEDIA_ROOT must list the media root(s) ffmpeg may read \
+             (set TRANSCODER_ALLOW_ANY_PATH=1 to run unconfined)"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 /// Build the router. Public health/version; authed `/api/transcode/*`.
@@ -312,8 +337,20 @@ async fn warm(
         )
             .into_response();
     }
+    if !state.sessions.is_source_path_allowed(&req.path) {
+        return source_path_forbidden();
+    }
     state.sessions.spawn_keyframe_warm(req.path);
     StatusCode::ACCEPTED.into_response()
+}
+
+/// 403 for a source path outside the media root(s); never echoes the path.
+fn source_path_forbidden() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({ "error": "source_path_forbidden" })),
+    )
+        .into_response()
 }
 
 /// Derive the `ffprobe` path from the configured ffmpeg path (same install
@@ -377,6 +414,11 @@ async fn grant(
         force_transcode,
     } = req;
     let input_path = file.path.clone();
+    // Confinement runs BEFORE anything touches the path (the Dolby Vision
+    // pre-probe below used to reach ffprobe first). start() re-checks.
+    if !state.sessions.is_source_path_allowed(&input_path) {
+        return source_path_forbidden();
+    }
     let mut row = file.into_row();
 
     // A file with NO video stream (audio-only, or a probe that found none —
@@ -513,11 +555,7 @@ async fn grant(
             .into_response(),
         // Source path outside the configured media root(s) — refuse without
         // echoing the attempted path back to the caller (§ audit 1-3).
-        Err(StartError::Forbidden(_)) => (
-            StatusCode::FORBIDDEN,
-            Json(json!({ "error": "source_path_forbidden" })),
-        )
-            .into_response(),
+        Err(StartError::Forbidden(_)) => source_path_forbidden(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": e.to_string() })),
@@ -1022,6 +1060,104 @@ mod tests {
 
     fn grant_body(file: &MediaFileRow) -> String {
         grant_body_id(file, 7)
+    }
+
+    /// State whose session manager confines source paths to `roots`, with an
+    /// `ffmpeg` stub whose sibling `ffprobe` records every invocation to
+    /// `<tmp>/probe_called` — so a test can prove a probe did NOT run.
+    fn state_confined(tmp: &tempfile::TempDir, roots: Vec<std::path::PathBuf>) -> AppState {
+        let bin = tmp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let stub = write_stub(tmp.path());
+        std::fs::copy(&stub, bin.join("ffmpeg")).unwrap();
+        let probe = bin.join("ffprobe");
+        std::fs::write(
+            &probe,
+            format!(
+                "#!/bin/sh\ntouch {}\nexit 1\n",
+                tmp.path().join("probe_called").display()
+            ),
+        )
+        .unwrap();
+        let mut perms = std::fs::metadata(&probe).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&probe, perms).unwrap();
+        let mgr = SessionManager::new(
+            Limiter::new(Caps {
+                max_total: 2,
+                max_cpu: 1,
+            }),
+            bin.join("ffmpeg").to_string_lossy().into_owned(),
+            tmp.path().join("sessions"),
+            HwEncoder::VideoToolbox,
+        )
+        .with_media_roots(roots);
+        AppState {
+            sessions: mgr,
+            principal_mode: PrincipalMode::Off,
+            internal_principal_secret: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn warm_rejects_path_outside_media_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let media = tmp.path().join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        let app = router(state_confined(&tmp, vec![media]));
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/warm")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"path":"/etc/passwd"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn grant_rejects_path_outside_media_roots_before_any_probe() {
+        // The Dolby Vision pre-probe used to run ffprobe on the caller's raw
+        // path BEFORE start() applied confinement — a blind SSRF/file oracle.
+        let tmp = tempfile::tempdir().unwrap();
+        let media = tmp.path().join("media");
+        std::fs::create_dir_all(&media).unwrap();
+        let app = router(state_confined(&tmp, vec![media]));
+        let mut file = h264_file();
+        file.path = "https://attacker.example/beacon".into();
+        file.video_codec = Some("hevc".into());
+        file.hdr_format = None;
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(grant_body(&file)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        assert!(
+            !tmp.path().join("probe_called").exists(),
+            "ffprobe must not touch an unconfined path"
+        );
+    }
+
+    #[test]
+    fn enforce_posture_requires_a_media_root() {
+        use crate::routes::require_media_root;
+        assert!(require_media_root(PrincipalMode::Enforce, true, false).is_err());
+        assert!(require_media_root(PrincipalMode::Log, true, false).is_err());
+        assert!(require_media_root(PrincipalMode::Enforce, false, false).is_ok());
+        assert!(require_media_root(PrincipalMode::Off, true, false).is_ok());
+        // Explicit opt-out for dev boxes that run the binary against ad-hoc paths.
+        assert!(require_media_root(PrincipalMode::Enforce, true, true).is_ok());
     }
 
     /// Grant body for a specific `media_id` — lets a test request a SECOND,
@@ -1893,12 +2029,15 @@ mod tests {
             .asset_path(&sid, "seg_00000.ts")
             .await
             .unwrap();
-        for _ in 0..200 {
+        // Generous bound: under a full-workspace `cargo test` the stub shell can
+        // take >2s to start, which used to surface as a spurious authz 404.
+        for _ in 0..1000 {
             if seg.exists() {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
+        assert!(seg.exists(), "stub never wrote seg_00000.ts");
 
         let manifest_uri = format!("/api/transcode/session/{sid}/index.m3u8");
         let segment_uri = format!("/api/transcode/session/{sid}/seg_00000.ts");

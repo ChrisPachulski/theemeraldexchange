@@ -41,8 +41,13 @@ import { config as dotenvConfig } from 'dotenv'
 import { validateSecretStrength, assertSecretsDistinct } from './services/secrets.js'
 import { parseSub } from './services/sub.js'
 
-dotenvConfig({ path: '.env.local' })
-dotenvConfig({ path: '.env' })
+// Never under vitest: env.test.ts deletes vars and re-imports this module per
+// case, and a dotenv load here silently restored them from the developer's real
+// .env.local (suite red locally, green in CI).
+if (!process.env.VITEST) {
+  dotenvConfig({ path: '.env.local' })
+  dotenvConfig({ path: '.env' })
+}
 
 function required(name: string): string {
   const v = process.env[name]

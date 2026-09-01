@@ -140,24 +140,12 @@ copyright statements at `/usr/share/doc/<package>/copyright` inside the image,
 so the texts travel with the corresponding source referenced by the written
 offer above.
 
-## Web Application Supply-Chain Note: webworkify-webpack
+## Web Application Supply-Chain Note
 
-The web SPA depends on `mpegts.js`, which pulls in **`webworkify-webpack`**
-(MIT) — the **single non-registry package** in `package-lock.json`. It resolves
-from a git URL rather than the npm registry:
-
-```
-git+ssh://git@github.com/xqq/webworkify-webpack.git#24d1e719b4a6cac37a518b2bb10fe124527ef4ef
-```
-
-npm does not record an `integrity` hash for git-resolved dependencies, so this
-entry lacks the SRI guarantee every registry package has. The risk is bounded:
-the lockfile pins the dependency to an exact **commit hash**
-(`24d1e719b4a6cac37a518b2bb10fe124527ef4ef`), which git content-addresses, so
-the fetched tree cannot be silently substituted without changing the lockfile.
-This is tracked here as a known supply-chain deviation; `server/licensing.test.ts`
-fails if any non-registry package appears in the lockfile without being
-documented in this file.
+Every package in `package-lock.json` resolves from the npm registry with an
+`integrity` hash. `server/licensing.test.ts` fails if a non-registry (git URL)
+dependency ever appears without being documented in this section; the last such
+entry, `webworkify-webpack` via `mpegts.js`, left the tree with mpegts.js 1.8.
 
 ---
 

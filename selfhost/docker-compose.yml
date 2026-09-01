@@ -160,6 +160,8 @@ services:
       TRANSCODER_HOST: "0.0.0.0"
       TRANSCODER_PORT: "8003"
       TRANSCODER_TMP_DIR: "/scratch"
+      # ffmpeg may only read under the media mount; boot refuses without it.
+      TRANSCODER_MEDIA_ROOT: "/media"
       TRANSCODER_HW_ENCODER: "${TRANSCODER_HW_ENCODER:-cpu}"
       INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET}"
       MEDIA_INTERNAL_PRINCIPAL_MODE: "enforce"

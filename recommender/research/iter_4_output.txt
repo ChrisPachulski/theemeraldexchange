@@ -1,6 +1,6 @@
 emerald_contracts unavailable — sub-namespace validation disabled. Build the wheel via `cd crates/emerald-contracts-pyo3 && maturin develop --release` or run the recommender Docker image which installs it at build time.
 {
-  "db_path": "/Users/cujo253/Documents/eex-recsys-lit/snapshot/exchange.db",
+  "db_path": "<snapshot-dir>/exchange.db",
   "db_exists": true,
   "n_titles": 37738,
   "n_title_vec": 37738,

@@ -33,6 +33,7 @@ import {
 } from '../services/iptvCatalog.js'
 import { epgChannelWindow, epgGrid, epgNow, epgSearch } from '../services/iptvEpgQuery.js'
 import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
+import { memberStatus } from '../services/membership.js'
 import { checkReplay } from '../services/tokenReplayCache.js'
 import { parseSub } from '../services/sub.js'
 import { resolveSourcePrecedence } from '../services/sourcePrecedence.js'
@@ -983,6 +984,12 @@ function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId: string)
       sub = parseSub(claims.sub).raw
     } catch {
       return { ok: false, resp: c.json({ error: 'invalid_token', detail: 'sub_invalid_format' }, 401) }
+    }
+    // Tokens are stateless and live up to 12h: membership must be re-checked
+    // at serve time (same as media/transcode/dvr) or revocation cannot reach
+    // an already-minted stream grant.
+    if (memberStatus(sub) !== 'allowed') {
+      return { ok: false, resp: c.json({ error: 'access_revoked' }, 401) }
     }
     return { ok: true, sub }
   } catch (err) {

@@ -481,7 +481,7 @@ Deliberate, bounded departures; ceilings, not precedents.
 
 ## Recorded debt
 
-- **Hex literals bypassing tokens:** ~97 occurrences across 12 CSS files at
+- **Hex literals bypassing tokens:** ~118 occurrences across 12 CSS files at
   last count (`grep -rEo '#[0-9a-fA-F]{3,8}\b' src --include='*.css'`),
   chiefly `src/index.css` (~64), `auth/AppleSignInButton.css` (~7 — Apple's
   mandated branding, likely permanent), `player/IptvPlayer.css`,

@@ -106,6 +106,8 @@ ENV TRANSCODER_HOST=0.0.0.0
 ENV TRANSCODER_PORT=8003
 ENV TRANSCODER_FFMPEG_BIN=/usr/bin/ffmpeg
 ENV TRANSCODER_TMP_DIR=/scratch
+# Source-path confinement default; compose mounts the library at /media.
+ENV TRANSCODER_MEDIA_ROOT=/media
 # libplacebo (DV re-encode path) writes a Vulkan shader cache under $XDG_CACHE_HOME
 # (default $HOME/.cache = /srv/.cache, which is read-only here → a per-session
 # "Failed to create … shader cache … disabling" warning + a shader recompile on

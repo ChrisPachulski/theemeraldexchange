@@ -33,13 +33,14 @@ __pycache__/
 *.pyc
 
 # Internal-only docs & planning — kept locally, not published to the public repo.
-# Four files under docs/ are deliberate exceptions, force-added before this rule
-# and therefore permanently exempt from it (a tracked path ignores gitignore):
-# operations/login-auth-runbook.md, trickplay-iframe-spec.md, and the two
-# superpowers/ login-reliability records. Anything NEW under these dirs stays
-# local — never `git add -f` into them without deciding to publish it.
+# Two files under docs/ are deliberate, published exceptions, force-added before
+# this rule (a tracked path ignores gitignore): operations/login-auth-runbook.md
+# and trickplay-iframe-spec.md. Anything else under these dirs stays local —
+# never `git add -f` into them without deciding to publish it.
 docs/
 plans/
+# Cross-repo campaign punch-lists (goal-*.md) are planning artifacts, not docs.
+/goal-*.md
 .planning/
 # Starforge autonomous-loop state. Its own .starforge/.gitignore is an ALLOWLIST
 # that un-ignores CONTROL.md/GOALS.md/NEXT-SESSION-GOAL.md so the loop can track

@@ -94,3 +94,26 @@ def test_health_surfaces_principal_mode(monkeypatch):
     assert body["ok"] is True
     assert body["internal_principal_mode"] == "off"
     assert body["optimizer"]["mode"] in {"active", "record-only", "unknown"}
+
+
+def test_score_enforce_rejects_body_sub_mismatch(monkeypatch):
+    # /score reads per-user state, so the verified principal must be
+    # authoritative there exactly as on the /events/* writers.
+    _set_mode(monkeypatch, "enforce")
+    conn = _seeded_conn()
+    app = main_module.app
+    app.dependency_overrides[main_module.get_db] = lambda: conn
+    app.dependency_overrides[main_module.require_event_secret] = lambda: None
+    app.dependency_overrides[main_module.internal_principal_dep] = lambda: _principal("plex:1001")
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post("/score", json={"sub": "plex:2002", "kind": "movie", "n": 5})
+    finally:
+        for dep in (
+            main_module.get_db,
+            main_module.require_event_secret,
+            main_module.internal_principal_dep,
+        ):
+            app.dependency_overrides.pop(dep, None)
+        conn.close()
+    assert resp.status_code == 403

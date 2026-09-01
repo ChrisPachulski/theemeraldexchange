@@ -414,6 +414,16 @@ describe('playlist token lifecycle', () => {
     expect(body.detail).toBe('sub_invalid_format')
   })
 
+  it('rejects a banked live stream token once the member is revoked', async () => {
+    // Stream tokens are stateless and live up to 12h; revocation must bite at
+    // serve time exactly like the media/transcode/dvr token routes do.
+    tokenState.sub = 'plex:42'
+    membershipState.status = 'revoked'
+    const res = await app.request('/api/iptv/stream/live/10.ts?t=' + fakeToken('live', '10'))
+    expect(res.status).toBe(401)
+    expect((await res.json()) as { error: string }).toEqual({ error: 'access_revoked' })
+  })
+
   it('caps playlist token request bodies', async () => {
     const res = await app.request('/api/iptv/playlist/token', {
       method: 'POST',

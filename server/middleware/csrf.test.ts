@@ -36,6 +36,8 @@ async function buildApp(opts: {
   }
   // The cookie web-login path stays outside the native allowlist.
   app.all('/api/auth/plex/check', (c) => c.json({ ok: true }))
+  // The one state-changing surface authenticated by a ?t= stream token.
+  app.all('/api/transcode/session/:id/heartbeat', (c) => c.json({ ok: true }))
   return app
 }
 
@@ -140,7 +142,7 @@ describe('requireSafeOrigin — stream-token cookieless exemption', () => {
   // unforgeable, non-ambient credential — like a bearer, the Origin check is moot.
   it('lets a token-authed (?t=) cookieless POST through despite a non-allowlisted Origin', async () => {
     const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
-    const r = await app.request('/echo?t=streamtoken', {
+    const r = await app.request('/api/transcode/session/abc/heartbeat?t=streamtoken', {
       method: 'POST',
       headers: { Origin: 'https://www.app.example' },
     })
@@ -149,8 +151,23 @@ describe('requireSafeOrigin — stream-token cookieless exemption', () => {
 
   it('lets a token-authed cookieless POST through with no Origin header', async () => {
     const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
-    const r = await app.request('/echo?t=streamtoken', { method: 'POST' })
+    const r = await app.request('/api/transcode/session/abc/heartbeat?t=streamtoken', {
+      method: 'POST',
+    })
     expect(r.status).toBe(200)
+  })
+
+  it('does NOT let a ?t= cookieless POST bypass the gate on the cookie-minting auth path', async () => {
+    // Login CSRF / session fixation: /api/auth/plex/check ignores ?t= but mints
+    // eex.session. The token exemption must only cover routes that actually
+    // authenticate by ?t= (transcode session keepalives), never the auth flow.
+    const app = await buildApp({ allowedOrigins: ['https://app.example'], isProd: true })
+    const r = await app.request('/api/auth/plex/check?t=x', {
+      method: 'POST',
+      headers: { Origin: 'https://attacker.example' },
+    })
+    expect(r.status).toBe(403)
+    expect(await r.json()).toEqual({ error: 'forbidden', reason: 'bad_origin' })
   })
 
   it('STILL gates a ?t= POST that also carries a cookie (cookie remains a CSRF vector)', async () => {

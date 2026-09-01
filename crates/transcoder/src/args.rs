@@ -332,8 +332,14 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
     // (the fast full-HW route). AV1/VP9 VAAPI surfaces do NOT (ffmpeg hwmap
     // "Function not implemented"), so those decode on the CPU and hwupload to
     // Vulkan — still GPU-tone-mapped and GPU-encoded, ~1.4x realtime on 4K.
-    let is_hdr_tonemap =
-        matches!(video, VideoOp::EncodeH264 { tone_map: true, burn_subtitle_index: None, .. });
+    let is_hdr_tonemap = matches!(
+        video,
+        VideoOp::EncodeH264 {
+            tone_map: true,
+            burn_subtitle_index: None,
+            ..
+        }
+    );
     let vulkan_hwmap_safe = matches!(
         source_codec.map(str::to_ascii_lowercase).as_deref(),
         None | Some("hevc" | "h265" | "h264" | "avc" | "avc1")
@@ -418,6 +424,10 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
 
     push(&mut a, "-fflags");
     push(&mut a, "+genpts");
+    // Sources are filesystem paths by contract; without this ffmpeg treats
+    // "https://…" / "concat:" / "subfile:" inputs as URLs (SSRF, file oracle).
+    push(&mut a, "-protocol_whitelist");
+    push(&mut a, "file");
     push(&mut a, "-i");
     a.push(input.to_string());
 
@@ -871,9 +881,9 @@ fn build_cpu_vulkan_tonemap_filter(scale_to_height: Option<i64>) -> String {
         Some(h) => format!(
             "format=p010,hwupload=derive_device=vulkan,{placebo}:w=-2:h={h},hwmap=derive_device=vaapi"
         ),
-        None => format!(
-            "format=p010,hwupload=derive_device=vulkan,{placebo},hwmap=derive_device=vaapi"
-        ),
+        None => {
+            format!("format=p010,hwupload=derive_device=vulkan,{placebo},hwmap=derive_device=vaapi")
+        }
     }
 }
 
@@ -890,9 +900,9 @@ fn build_vaapi_hw_filter(scale_to_height: Option<i64>, tone_map: bool) -> String
     if tone_map {
         let placebo = "libplacebo=tonemapping=bt.2390:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=nv12";
         return match scale_to_height {
-            Some(h) => format!(
-                "hwmap=derive_device=vulkan,{placebo}:w=-2:h={h},hwmap=derive_device=vaapi"
-            ),
+            Some(h) => {
+                format!("hwmap=derive_device=vulkan,{placebo}:w=-2:h={h},hwmap=derive_device=vaapi")
+            }
             None => format!("hwmap=derive_device=vulkan,{placebo},hwmap=derive_device=vaapi"),
         };
     }
@@ -1048,7 +1058,8 @@ mod tests {
         let joined = args.join(" ");
         assert_eq!(
             joined,
-            "-hide_banner -loglevel warning -nostdin -fflags +genpts -i /lib/m.mkv \
+            "-hide_banner -loglevel warning -nostdin -fflags +genpts \
+             -protocol_whitelist file -i /lib/m.mkv \
              -map 0:v:0 -map 0:a:0? -c:v copy -c:a copy \
              -f hls -hls_time 2 -hls_list_size 0 -hls_flags append_list \
              -hls_playlist_type event \
@@ -1098,6 +1109,23 @@ mod tests {
         assert!(
             joined.contains("hwdownload,format=yuv420p,scale=-2:1080"),
             "{joined}"
+        );
+    }
+
+    #[test]
+    fn input_protocol_is_confined_to_file() {
+        // A source path is a filesystem path by contract; without a whitelist
+        // ffmpeg would happily treat "https://..." or "concat:" as an input.
+        let args = args_for_kind("movie");
+        let wl = args
+            .iter()
+            .position(|s| s == "-protocol_whitelist")
+            .expect("missing -protocol_whitelist");
+        let i = args.iter().position(|s| s == "-i").expect("missing -i");
+        assert_eq!(args[wl + 1], "file");
+        assert!(
+            wl < i,
+            "-protocol_whitelist is an input option and must precede -i"
         );
     }
 
@@ -2057,7 +2085,10 @@ mod tests {
             args.join(" ")
         );
         let j = args.join(" ");
-        assert!(j.contains("-init_hw_device vulkan=vk"), "vulkan device init: {j}");
+        assert!(
+            j.contains("-init_hw_device vulkan=vk"),
+            "vulkan device init: {j}"
+        );
         assert!(!j.contains("tonemap_vaapi"), "no tonemap_vaapi: {j}");
         assert!(!j.contains("zscale"), "no CPU zscale under full-HW: {j}");
         assert!(
@@ -2079,7 +2110,11 @@ mod tests {
             "{}",
             args.join(" ")
         );
-        assert!(args.join(" ").contains("-init_hw_device vulkan=vk"), "{}", args.join(" "));
+        assert!(
+            args.join(" ").contains("-init_hw_device vulkan=vk"),
+            "{}",
+            args.join(" ")
+        );
     }
 
     #[test]
@@ -2108,10 +2143,16 @@ mod tests {
             "{j}"
         );
         assert!(j.contains("-init_hw_device vulkan=vk"), "vulkan dev: {j}");
-        assert!(j.contains("-init_hw_device vaapi=va:/dev/dri/renderD128"), "vaapi dev: {j}");
+        assert!(
+            j.contains("-init_hw_device vaapi=va:/dev/dri/renderD128"),
+            "vaapi dev: {j}"
+        );
         assert!(!j.contains("-hwaccel "), "no -hwaccel (CPU decode): {j}");
         assert!(!j.contains("tonemap_vaapi"), "no tonemap_vaapi: {j}");
-        assert!(!j.contains("format=nv12,hwupload"), "no trailing vaapi hwupload: {j}");
+        assert!(
+            !j.contains("format=nv12,hwupload"),
+            "no trailing vaapi hwupload: {j}"
+        );
     }
 
     #[test]
@@ -2170,8 +2211,14 @@ mod tests {
         });
         let j = args.join(" ");
         assert!(j.contains("-hwaccel vaapi"), "hevc keeps VAAPI decode: {j}");
-        assert!(j.contains("hwmap=derive_device=vulkan,libplacebo"), "hevc vaapi->vulkan: {j}");
-        assert!(!j.contains("format=p010,hwupload=derive_device=vulkan"), "not the cpu path: {j}");
+        assert!(
+            j.contains("hwmap=derive_device=vulkan,libplacebo"),
+            "hevc vaapi->vulkan: {j}"
+        );
+        assert!(
+            !j.contains("format=p010,hwupload=derive_device=vulkan"),
+            "not the cpu path: {j}"
+        );
     }
 
     #[test]

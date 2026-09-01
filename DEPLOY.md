@@ -78,7 +78,7 @@ Open it and fill the required rows plus whichever optional integrations you use:
 | `RADARR_URL`, `RADARR_API_KEY` | Existing Radarr install. |
 | `SAB_URL`, `SAB_API_KEY` | Existing SAB install. |
 | `MIN_FREE_GB` | Default 100. |
-| `GLITCHTIP_SECRET_KEY`, `GLITCHTIP_DB_PASSWORD`, `GLITCHTIP_DOMAIN` | **Set BEFORE the first `compose up`** — see [docs/operations/glitchtip-setup.md](./docs/operations/glitchtip-setup.md). The DB password must be hex (base64 characters break the `DATABASE_URL`); the domain needs an `http(s)://` scheme. |
+| `GLITCHTIP_SECRET_KEY`, `GLITCHTIP_DB_PASSWORD`, `GLITCHTIP_DOMAIN` | **Set BEFORE the first `compose up`** (`openssl rand -base64 48` for the secret key, `openssl rand -hex 24` for the DB password). The DB password must be hex (base64 characters break the `DATABASE_URL`); the domain needs an `http(s)://` scheme. |
 | `EEX_TELEMETRY_DSN` | Optional GlitchTip browser/client ingestion DSN. Leave unset to run telemetry-off; configure later without blocking a healthy app deploy. |
 
 `.env.production.example` carries an annotated list of the common keys, but it is
@@ -121,9 +121,8 @@ Site loads at https://theemeraldexchange.com but the API isn't there yet — ont
 
 Telemetry is mandatory and self-hosted; the Glitchtip sidecar stack
 (`glitchtip` + `glitchtip-db` + `glitchtip-redis` + `glitchtip-worker`) comes
-up with everything else. **Work through
-[docs/operations/glitchtip-setup.md](./docs/operations/glitchtip-setup.md)
-first** — it generates `GLITCHTIP_SECRET_KEY` / `GLITCHTIP_DB_PASSWORD` /
+up with everything else. **Generate the three values
+first** (see the `GLITCHTIP_*` rows in the table above) — that step sets `GLITCHTIP_SECRET_KEY` / `GLITCHTIP_DB_PASSWORD` /
 `GLITCHTIP_DOMAIN`, which must exist in `.env.production` before the first
 `docker compose up`, and walks the admin-account + DSN minting steps.
 

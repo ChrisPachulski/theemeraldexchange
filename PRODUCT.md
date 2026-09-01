@@ -82,8 +82,8 @@ confirmations, not hidden modes.
 - **Live** appears only when IPTV is enabled; **Users** is owner-only.
 - No public sign-up exists or ever will; authorization is the invite/members
   allowlist by construction.
-- The repository stays private until the first binary is distributed;
-  redistribution is not granted (see LICENSE).
+- The repository is public and source-visible, but proprietary: reading is
+  fine, redistribution and derivative works are not granted (see LICENSE).
 
 ## Tone and personality
 
