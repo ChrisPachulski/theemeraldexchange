@@ -75,7 +75,7 @@ use self::stream::{play_grant, stream_file};
 use self::subtitles::{
     download_subtitle, list_subtitles, subtitle_file, subtitle_job_status, transcribe_subtitle,
 };
-use self::watch::{get_watch, post_watch};
+use self::watch::{delete_watch, get_watch, post_watch};
 
 /// Bounded total-request timeout for the small, fast JSON/metadata handlers. The
 /// streaming route is intentionally excluded (see [`router`]).
@@ -101,7 +101,7 @@ pub fn router(state: AppState) -> Router {
         .route("/music/albums/{id}/art", get(album_art))
         .route("/music/tracks", get(list_tracks))
         .route("/play/{kind}/{id}/grant", post(play_grant))
-        .route("/watch", get(get_watch).post(post_watch))
+        .route("/watch", get(get_watch).post(post_watch).delete(delete_watch))
         .route("/playlists", get(list_playlists).post(create_playlist))
         .route(
             "/playlists/{id}",

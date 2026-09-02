@@ -203,6 +203,62 @@ export function revokeMemberSafely(opts: {
   return tx.immediate()
 }
 
+/** Outcome of a member revoking their own record (DELETE /api/account/self). */
+export type SelfRevocation = 'revoked' | 'already_revoked' | 'last_admin'
+
+/**
+ * Revoke the CALLER's own membership and every invite they issued, in one
+ * immediate transaction (self-service account deletion).
+ *
+ * Refuses with 'last_admin' when nobody else could issue invites afterwards.
+ * Another administrator counts whether they come from an active members row
+ * with role 'admin', from ADMIN_SUBS, or from the legacy ADMINS username list.
+ * An ADMIN_SUBS owner is always refused: the env re-admits that sub on its next
+ * login, so a "deleted" owner would be a lie — remove the sub from ADMIN_SUBS
+ * first. A sub with no active row is 'already_revoked' (idempotent replay).
+ */
+export function revokeSelf(opts: {
+  sub: string
+  immutableAdminSubs: readonly string[]
+  legacyAdminUsernames: readonly string[]
+}): SelfRevocation {
+  if (!isValidSub(opts.sub)) return 'already_revoked'
+  const immutableAdmins = new Set(opts.immutableAdminSubs.filter(isValidSub))
+  if (immutableAdmins.has(opts.sub)) return 'last_admin'
+  const legacyAdmins = new Set(
+    opts.legacyAdminUsernames.map((username) => username.trim().toLowerCase()).filter(Boolean),
+  )
+
+  const db = serverDb().raw
+  const tx = db.transaction((): SelfRevocation => {
+    const row = db
+      .prepare(`SELECT sub, display_name, role, revoked_at FROM members WHERE sub = ?`)
+      .get(opts.sub) as Pick<Member, 'sub' | 'display_name' | 'role' | 'revoked_at'> | undefined
+    if (!row || row.revoked_at !== null) return 'already_revoked'
+
+    const isAdmin = (m: Pick<Member, 'sub' | 'display_name' | 'role'>): boolean =>
+      m.role === 'admin' || immutableAdmins.has(m.sub) || isLegacyPlexAdmin(m.sub, m.display_name, legacyAdmins)
+    if (isAdmin(row)) {
+      const others = db
+        .prepare(`SELECT sub, display_name, role FROM members WHERE revoked_at IS NULL AND sub != ?`)
+        .all(opts.sub) as Array<Pick<Member, 'sub' | 'display_name' | 'role'>>
+      const rowAdmins = others.filter(isAdmin).length
+      // ADMIN_SUBS entries are admins before their first login writes a row.
+      const envOnlyAdmins = [...immutableAdmins].filter(
+        (sub) => sub !== opts.sub && !others.some((m) => m.sub === sub),
+      ).length
+      if (rowAdmins + envOnlyAdmins === 0) return 'last_admin'
+    }
+
+    const now = new Date().toISOString()
+    db.prepare(`UPDATE members SET revoked_at = ? WHERE sub = ? AND revoked_at IS NULL`).run(now, opts.sub)
+    db.prepare(`UPDATE invites SET revoked_at = ? WHERE issued_by = ? AND revoked_at IS NULL`).run(now, opts.sub)
+    return 'revoked'
+  })
+
+  return tx.immediate()
+}
+
 function isLegacyPlexAdmin(
   sub: string,
   username: string | null,

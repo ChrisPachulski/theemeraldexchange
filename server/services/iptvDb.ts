@@ -24,8 +24,10 @@ export interface IptvDb {
     addFavorite: Database.Statement
     removeFavorite: Database.Statement
     getFavorites: Database.Statement
+    deleteFavoritesBySub: Database.Statement
     putHistory: Database.Statement
     getHistory: Database.Statement
+    deleteHistoryBySub: Database.Statement
     // Implicit-feedback wiring: read the prior watch row (transition detection)
     // and resolve an IPTV item_id to its TMDB id so a watch can be forwarded to
     // the recommender as a 'watched' positive signal.
@@ -136,6 +138,9 @@ export function openIptvDb(filePath: string, serverDb?: Database.Database): Iptv
       WHERE sub = ?
       ORDER BY added_ts DESC
     `),
+    deleteFavoritesBySub: raw.prepare(`
+      DELETE FROM iptv_favorites WHERE sub = ?
+    `),
     putHistory: raw.prepare(`
       INSERT INTO iptv_watch_history (sub, kind, item_id, position_secs, duration_secs, watched_at, completed)
       VALUES (@sub, @kind, @item_id, @position_secs, @duration_secs, @watched_at, @completed)
@@ -149,6 +154,9 @@ export function openIptvDb(filePath: string, serverDb?: Database.Database): Iptv
       WHERE sub = ?
       ORDER BY watched_at DESC
       LIMIT ?
+    `),
+    deleteHistoryBySub: raw.prepare(`
+      DELETE FROM iptv_watch_history WHERE sub = ?
     `),
     getHistoryItem: raw.prepare(`
       SELECT position_secs, duration_secs, completed

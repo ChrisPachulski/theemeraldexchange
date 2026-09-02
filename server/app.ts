@@ -40,11 +40,12 @@ import { recommenderEvents } from './routes/recommenderEvents.js'
 import { telemetry } from './routes/telemetry.js'
 import { device } from './routes/device.js'
 import { deviceLink } from './routes/deviceLink.js'
-import { media } from './routes/media.js'
+import { media, eraseMediaWatchState } from './routes/media.js'
 import { transcode } from './routes/transcode.js'
 import { devices, adminDevices } from './routes/devices.js'
 import { adminInvites, adminMembers } from './routes/adminInvites.js'
 import { version } from './routes/version.js'
+import { accountRoutes } from './routes/account.js'
 
 export const app = new Hono()
 
@@ -238,6 +239,12 @@ app.get('/api/limits', async (c) => {
     sonarrEnabled: Boolean(env.sonarrApiKey),
     radarrEnabled: Boolean(env.radarrApiKey),
     sabEnabled: Boolean(env.sabApiKey),
+    // Self-service account deletion is mounted unconditionally
+    // (DELETE /api/account/self, routes/account.ts). The Apple app offers
+    // "Delete Account" on the server only when this is true; older servers
+    // omit the key and the app falls back to revoke-and-erase. Public
+    // boolean — the same fact is implied by the route's 401-vs-404.
+    accountDeletionEnabled: true,
   })
 })
 
@@ -254,6 +261,13 @@ app.route('/api/version', version)
 // scope to session.sub; admin routes cover every paired device.
 app.route('/api/devices', devices)
 app.route('/api/admin/devices', adminDevices)
+// Self-service account deletion (Apple clients, Guideline 5.1.1(v)). The
+// media-core watch-state purge rides the same proxy the media routes use and
+// is only wired when that proxy is mounted.
+app.route(
+  '/api/account',
+  accountRoutes(env.useMediaCore ? { eraseMediaWatchState } : {}),
+)
 // Owner-issued invites + the members allowlist (authZ). Both routers are
 // gated by requireAdmin internally (mirroring adminDevices). The members
 // allowlist is the single shared authZ gate for BOTH the Plex and Apple

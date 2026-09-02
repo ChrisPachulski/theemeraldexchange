@@ -198,6 +198,22 @@ export function upsertWatchlist(
   return op
 }
 
+// Drop one member's whole watchlist (account deletion). No-op when absent.
+export function clearUserWatchlist(sub: string): Promise<void> {
+  const op = writeQueue.then(async () => {
+    const file = await load()
+    if (!(sub in file)) return
+    const snapshot: WatchlistFile = { ...file }
+    delete snapshot[sub]
+    await persistSnapshot(snapshot)
+    cached = snapshot
+  })
+  writeQueue = op.catch((err) => {
+    log.error('write failed', { err })
+  })
+  return op
+}
+
 export function removeWatchlist(sub: string, kind: WatchlistKind, id: number): Promise<void> {
   const op = writeQueue.then(async () => {
     const file = await load()

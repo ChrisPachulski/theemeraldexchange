@@ -85,7 +85,7 @@ otherwise be able to poison another user's recommendation rotation.
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/api/health` | public | Liveness/readiness probe used by the Docker healthcheck and cloudflared. Probes `server.db` with `SELECT 1`; 503 on failure. (`app.ts:162`) |
-| GET | `/api/limits` | public (session optional) | Configured limits/feature flags the SPA needs pre-login (min free space, size caps, which integrations are configured). Two fields (`defaultSonarrRootFolderPath`, `defaultRadarrRootFolderPath`) are withheld unless a session is present. (`app.ts:178`) |
+| GET | `/api/limits` | public (session optional) | Configured limits/feature flags the SPA needs pre-login (min free space, size caps, which integrations are configured). Two fields (`defaultSonarrRootFolderPath`, `defaultRadarrRootFolderPath`) are withheld unless a session is present. `accountDeletionEnabled: true` advertises `DELETE /api/account/self` to the Apple app. (`app.ts:178`) |
 
 ## /api/auth (server/auth.ts)
 
@@ -94,7 +94,8 @@ otherwise be able to poison another user's recommendation rotation.
 | GET | `/api/auth/plex/config` | public | Non-secret `X-Plex-Client-Identifier` + product label so the SPA can create a Plex PIN in the browser. (`auth.ts:378`) |
 | GET | `/api/auth/methods` | public | Which login providers this install has configured (plex/apple/google/workos booleans). (`auth.ts:391`) |
 | POST | `/api/auth/plex/check` | public (CSRF-gated; mints the session) | Poll a Plex PIN; on success, verify identity, run the shared invite/members authZ gate, optionally auto-admit via Plex-server-share, and set the session cookie. (`auth.ts:419`) |
-| POST | `/api/auth/apple` | public (native-bootstrap CSRF exemption) | Verify a Sign in with Apple identity token against Apple's JWKS, run the shared authZ gate, then either mint a device-token Bearer (device-pair body) or set a session cookie. (`auth.ts:565`) |
+| GET | `/api/auth/apple/nonce` | public (apple rate-limit bucket) | Issue a single-use, five-minute nonce for the native device-pair Sign in with Apple flow: the app gives Apple its SHA-256 hex and returns the raw value with the token. 503 when SIWA is not configured. (`auth.ts`, `issueAppleNonce`) |
+| POST | `/api/auth/apple` | public (native-bootstrap CSRF exemption) | Verify a Sign in with Apple identity token against Apple's JWKS, run the shared authZ gate, then either mint a device-token Bearer (device-pair body) or set a session cookie. A device-pair body must carry a server-issued `nonce` (400 `invalid_nonce` otherwise; the nonce is burned on first use); browser sign-ins keep the client-chosen nonce. (`auth.ts`, `auth.post('/apple')`) |
 | POST | `/api/auth/google` | public (native-bootstrap CSRF exemption) | Same as `/apple` for Google Sign-In identity tokens. (`auth.ts:685`) |
 | GET | `/api/auth/workos/start` | public | Parks a CSRF nonce (+ optional invite code) in a short-lived HttpOnly cookie and redirects to the WorkOS AuthKit hosted login page. (`auth.ts:818`) |
 | GET | `/api/auth/workos/callback` | public | Exchanges the WorkOS authorization code, verifies the state cookie, runs the shared authZ gate, sets the session cookie, redirects back to the SPA. (`auth.ts:837`) |
@@ -147,6 +148,12 @@ native PIN flow of their own.
 | GET | `/api/admin/devices` | admin | List every paired device across all users. (`devices.ts:179`) |
 | DELETE | `/api/admin/devices/:jti` | admin | Revoke any device. (`devices.ts:192`) |
 | PATCH | `/api/admin/devices/:jti/name` | admin | Rename any device. (`devices.ts:202`) |
+
+## /api/account (server/routes/account.ts)
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| DELETE | `/api/account/self` | session (cookie/bearer) | Self-service account deletion for the Apple clients (Guideline 5.1.1(v)). Revokes the caller's members row and every invite they issued in one transaction, then cascade-revokes every device token (including the one authorizing the call), IPTV playlist tokens, favorites and watch history, the API key, passkeys, policy, feedback, watchlist, and (when `USE_MEDIA_CORE=1`) media-core watch state. `204` empty on success or replay; `409 {"error":"last_admin"}` when the caller is the only remaining administrator or is listed in `ADMIN_SUBS`. Erasure steps that fail are logged, never surfaced. (`account.ts`) |
 
 ## /api/admin/invites, /api/admin/members (server/routes/adminInvites.ts)
 

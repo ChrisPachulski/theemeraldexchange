@@ -515,3 +515,19 @@ media.all('/*', async (c) => {
     headers: outHeaders,
   })
 })
+
+/** Purge one member's media-core watch state (self-service account deletion,
+ *  routes/account.ts). Best effort by contract: a media-core build without
+ *  DELETE /watch answers 404/405 and the caller records a failed erasure step.
+ *  Same internal-principal posture as the proxied reads; in the off posture
+ *  media-core resolves the acting user from `?sub=` instead. */
+export async function eraseMediaWatchState(sub: string): Promise<void> {
+  const headers = principalHeader(sessionFromSub(sub))
+  const query = env.internalPrincipalSecret ? '' : `?sub=${encodeURIComponent(sub)}`
+  const r = await fetch(`${env.mediaCoreUrl}/api/media/watch${query}`, {
+    method: 'DELETE',
+    headers,
+    signal: AbortSignal.timeout(10_000),
+  })
+  if (!r.ok) throw new Error(`media-core DELETE /api/media/watch answered ${r.status}`)
+}

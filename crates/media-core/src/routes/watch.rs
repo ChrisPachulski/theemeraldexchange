@@ -142,6 +142,23 @@ pub(super) async fn post_watch(
     Ok(Json(json!({ "ok": true, "watched_at": watched_at })))
 }
 
+/// Drop every watch row for the acting user. Backs the exchange server's
+/// self-service account deletion; idempotent, and the acting sub is resolved
+/// exactly like the reads, so a member can only ever erase their own rows.
+pub(super) async fn delete_watch(
+    State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Query(q): Query<WatchQuery>,
+) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
+    let result = sqlx::query("DELETE FROM media_watch_state WHERE sub = ?")
+        .bind(&sub)
+        .execute(&state.db.pool)
+        .await?;
+    Ok(Json(json!({ "ok": true, "deleted": result.rows_affected() })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +203,50 @@ mod tests {
         assert_eq!(items[0]["sub"], "plex:1");
         assert_eq!(items[0]["media_id"], movie_id);
         assert_eq!(items[0]["position_secs"], 120);
+    }
+
+    #[tokio::test]
+    async fn delete_watch_erases_only_the_acting_user() {
+        let state = test_state().await;
+        let file_id = seed_media_file(&state, "/lib/erase.mp4").await;
+        let movie_id = seed_movie_for_file(&state, file_id).await;
+        let app = crate::build_router(state.clone());
+
+        for sub in ["plex:1", "plex:2"] {
+            let post = app
+                .clone()
+                .oneshot(json_req(
+                    "POST",
+                    &format!("/api/media/watch?sub={sub}"),
+                    json!({ "media_kind": "movie", "media_id": movie_id, "position_secs": 10 })
+                        .to_string(),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(post.status(), StatusCode::OK);
+        }
+
+        let del = app
+            .clone()
+            .oneshot(req("DELETE", "/api/media/watch?sub=plex:1"))
+            .await
+            .unwrap();
+        assert_eq!(del.status(), StatusCode::OK);
+        assert_eq!(body_json(del).await["deleted"], 1);
+
+        // Idempotent replay reports nothing left to delete.
+        let again = app
+            .clone()
+            .oneshot(req("DELETE", "/api/media/watch?sub=plex:1"))
+            .await
+            .unwrap();
+        assert_eq!(body_json(again).await["deleted"], 0);
+
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM media_watch_state")
+            .fetch_one(&state.db.pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 1, "the other member's row must survive");
     }
 
     #[tokio::test]

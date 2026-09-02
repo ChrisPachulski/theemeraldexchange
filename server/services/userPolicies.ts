@@ -165,6 +165,22 @@ export function setPolicy(sub: string, policy: Policy): Promise<void> {
   return op
 }
 
+// Drop one member's stored policy (account deletion). No-op when unset.
+export function removePolicy(sub: string): Promise<void> {
+  const op = writeQueue.then(async () => {
+    const file = await load()
+    if (!(sub in file)) return
+    const snapshot: PoliciesFile = { ...file }
+    delete snapshot[sub]
+    await persistSnapshot(snapshot)
+    cached = snapshot
+  })
+  writeQueue = op.catch((err) => {
+    log.error('write failed', { err })
+  })
+  return op
+}
+
 // Middleware factory that fails a request with 403 { error: 'section_blocked' }
 // when the caller's policy explicitly denies `section`. Admins are NEVER
 // blocked. `mutationsOnly` skips safe methods (GET/HEAD/OPTIONS) so it can

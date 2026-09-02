@@ -241,6 +241,23 @@ function mutate(
   return op
 }
 
+// Drop every like/dislike one member recorded (account deletion). No-op when
+// the member has no bucket.
+export function clearUserFeedback(sub: string): Promise<void> {
+  const op = writeQueue.then(async () => {
+    const file = await load()
+    if (!(sub in file)) return
+    const snapshot: FeedbackFile = { ...file }
+    delete snapshot[sub]
+    await persistSnapshot(snapshot)
+    cached = snapshot
+  })
+  writeQueue = op.catch((err) => {
+    log.error('write failed', { error: err })
+  })
+  return op
+}
+
 export function setLike(
   sub: string,
   kind: FeedbackKind,
