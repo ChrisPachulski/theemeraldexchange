@@ -2,6 +2,9 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { env } from '../env.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('iptv-remux')
 
 export function scrubXtreamCreds(line: string): string {
   let result = line
@@ -181,18 +184,20 @@ export function markChannelDeadFeed(streamId: string): void {
   const count = prior && prior.expiresAt > now ? prior.count + 1 : 1
   if (count < DEAD_FEED_STRIKES_TO_TAG) {
     deadStrikes.set(streamId, { count, expiresAt: now + DEAD_FEED_STRIKE_WINDOW_MS })
-    console.warn(
-      `[iptv-remux] stream ${streamId} fast clean EOF (strike ${count}/${DEAD_FEED_STRIKES_TO_TAG}) — ` +
-        `re-dialing before declaring it dead`,
-    )
+    log.warn('fast clean EOF — re-dialing before declaring it dead', {
+      streamId,
+      strike: count,
+      strikesToTag: DEAD_FEED_STRIKES_TO_TAG,
+    })
     return
   }
   deadStrikes.delete(streamId)
   deadFeed.set(streamId, now + DEAD_FEED_MEMORY_MS)
-  console.warn(
-    `[iptv-remux] stream ${streamId} fast clean EOF ${count}x — tagged as a dead feed for ` +
-      `${DEAD_FEED_MEMORY_MS / 1000}s; failing over to a sibling`,
-  )
+  log.warn('fast clean EOF — tagged as a dead feed; failing over to a sibling', {
+    streamId,
+    times: count,
+    deadFeedMemorySec: DEAD_FEED_MEMORY_MS / 1000,
+  })
 }
 
 /** How fast a clean EOF must arrive to count as a dead-placeholder loop rather
@@ -270,9 +275,12 @@ export function stopRemuxSession(sessionId: string, reason = 'manual'): void {
   // how long since it was last polled. A mid-watch stop (small sinceSeenMs while
   // a viewer is active) is the signature of the "plays then stalls" report.
   const now = Date.now()
-  console.log(
-    `[iptv-remux ${sessionId}] stop reason=${reason} ageMs=${now - s.startedAt} sinceSeenMs=${now - s.lastSeen}`,
-  )
+  log.info('remux session stopped', {
+    sessionId,
+    reason,
+    ageMs: now - s.startedAt,
+    sinceSeenMs: now - s.lastSeen,
+  })
   // The child keeps its provider connection open until it actually exits, so it
   // still counts against the upstream cap. Track it as draining and drop it on
   // exit/error so startRemuxSession won't dial a replacement while it lingers.
@@ -364,11 +372,11 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
         if (!lru || s.lastSeen < lru.lastSeen) lru = s
       }
       if (lru) {
-        console.warn(
-          `[iptv-remux] upstream cap ${cap} reached — evicting LRU ${lru.sessionId} ` +
-            `(idle ${Date.now() - lru.lastSeen}ms); deferring the new dial until it ` +
-            `releases its provider connection`,
-        )
+        log.warn('upstream cap reached — evicting LRU; deferring the new dial until it releases its provider connection', {
+          cap,
+          evictedSessionId: lru.sessionId,
+          idleMs: Date.now() - lru.lastSeen,
+        })
         stopRemuxSession(lru.sessionId, 'upstream-cap')
       }
     }
@@ -497,17 +505,17 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
           const codec = m[1].toLowerCase()
           if (codec !== 'h264' && codec !== 'avc') {
             markChannelNeedsReencode(opts.streamId)
-            console.warn(`[iptv-remux ${sessionId}] input video is ${codec}, not H.264 — re-encoding`)
+            log.warn('input video is not H.264 — re-encoding', { sessionId, codec })
             proc.kill('SIGKILL')
             return
           }
         }
       }
-      console.warn(`[iptv-remux ${sessionId}] ${line}`)
+      log.warn(line, { sessionId })
     }
   })
   proc.on('error', (err) => {
-    console.warn(`[iptv-remux ${sessionId}] ffmpeg error: ${scrubXtreamCreds(err.message)}`)
+    log.warn('ffmpeg error', { sessionId, message: scrubXtreamCreds(err.message) })
     sessions.delete(sessionId)
     removeDir(dir)
   })
@@ -521,14 +529,13 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
     // code null) is NOT a dead feed and must not poison the failover path.
     if (code === 0 && signal == null && livedMs < DEAD_FEED_MAX_LIFETIME_MS) {
       markChannelDeadFeed(opts.streamId)
-      console.warn(
-        `[iptv-remux ${sessionId}] clean EOF after ${livedMs}ms — tagging stream ` +
-          `${opts.streamId} as a dead feed (fail over to a sibling)`,
-      )
+      log.warn('clean EOF — tagging stream as a dead feed (fail over to a sibling)', {
+        sessionId,
+        livedMs,
+        streamId: opts.streamId,
+      })
     }
-    console.log(
-      `[iptv-remux ${sessionId}] ffmpeg exited code=${code} signal=${signal ?? ''} livedMs=${livedMs}`,
-    )
+    log.info('ffmpeg exited', { sessionId, code, signal: signal ?? '', livedMs })
     sessions.delete(sessionId)
     removeDir(dir)
   })
