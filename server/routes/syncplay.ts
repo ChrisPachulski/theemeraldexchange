@@ -31,22 +31,19 @@ function isMediaKind(v: unknown): v is SyncMediaKind {
   return v === 'movie' || v === 'episode'
 }
 
-// Discovery listing: every authenticated user may see that a group exists and
-// what it is pinned to (that is how you find one to join), but who is watching
-// is confidential to that group — same boundary GET /groups/:id enforces.
+// Discovery listing: every authenticated member sees every group, pinned item
+// and full roster. This used to redact host_sub/members for non-members, which
+// was a boundary the rest of the router does not enforce — POST /groups/:id/join
+// is open to any authenticated member and immediately unlocks the roster and the
+// shared transport. Redacting one hop ahead of a join anybody can make is
+// confidentiality theatre; the honest contract is that group membership is
+// visible household-wide.
 syncplay.get('/groups', (c) => {
   const now = Date.now()
-  const sub = c.get('session').sub
-  const items = listGroups(now).map((g) => {
-    const snap = snapshot(g, now)
-    const isMember = g.members.has(sub)
-    return {
-      ...snap,
-      host_sub: isMember ? snap.host_sub : null,
-      members: isMember ? snap.members : [],
-      member_count: g.members.size,
-    }
-  })
+  const items = listGroups(now).map((g) => ({
+    ...snapshot(g, now),
+    member_count: g.members.size,
+  }))
   return c.json({ items })
 })
 

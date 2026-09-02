@@ -135,7 +135,7 @@ describe('syncplay groups', () => {
     expect(frozen.position_secs).toBe(41)
   })
 
-  it('hides the roster from non-members in the listing, but shows enough to join', async () => {
+  it('lists the full roster to every authenticated member, joined or not', async () => {
     const app = appUnderTest()
     const alice = await cookieFor('alice')
     const bob = await cookieFor('bob')
@@ -144,38 +144,36 @@ describe('syncplay groups', () => {
       await post(app, alice, '/groups', { media_kind: 'movie', media_id: 42 })
     ).json()) as Snapshot
 
-    // Bob never joined: he must not learn who is watching, only that a
-    // joinable group exists and what it is pinned to.
+    // Bob has not joined, and still sees the roster. Joining is an unguarded
+    // POST any authenticated member can make, after which GET /groups/:id
+    // hands over the same names — so redacting the listing only hid what was
+    // one request away, and promised a confidentiality the code cannot keep.
     const [seenByBob] = await listGroupsAs(app, bob)
     expect(seenByBob.id).toBe(g.id)
     expect(seenByBob.media_kind).toBe('movie')
     expect(seenByBob.media_id).toBe(42)
     expect(seenByBob.paused).toBe(true)
     expect(seenByBob.member_count).toBe(1)
-    expect(seenByBob.members).toEqual([])
-    expect(seenByBob.host_sub).toBeNull()
-    // Belt and braces: alice's identifiers appear nowhere in the payload.
-    expect(JSON.stringify(seenByBob)).not.toContain('plex:1')
-    expect(JSON.stringify(seenByBob)).not.toContain('user-alice')
+    expect(seenByBob.host_sub).toBe('plex:1')
+    expect(seenByBob.members).toEqual([{ sub: 'plex:1', username: 'user-alice' }])
 
-    // Alice is a member, so her own listing keeps the roster.
+    // One shape for everyone: a member's own view is byte-identical.
     const [seenByAlice] = await listGroupsAs(app, alice)
-    expect(seenByAlice.host_sub).toBe('plex:1')
-    expect(seenByAlice.members).toEqual([{ sub: 'plex:1', username: 'user-alice' }])
+    expect(seenByAlice).toEqual(seenByBob)
 
-    // Joining is what unlocks it: after the join, bob sees the same roster.
+    // Joining changes the roster's CONTENTS, never its visibility.
     expect((await post(app, bob, `/groups/${g.id}/join`)).status).toBe(200)
     const [afterJoin] = await listGroupsAs(app, bob)
     expect(afterJoin.host_sub).toBe('plex:1')
     expect(afterJoin.member_count).toBe(2)
     expect(afterJoin.members.map((m) => m.username).sort()).toEqual(['user-alice', 'user-bob'])
 
-    // ...and leaving re-closes it.
+    // ...and leaving drops him from it, still fully visible to him.
     await post(app, bob, `/groups/${g.id}/leave`)
     const [afterLeave] = await listGroupsAs(app, bob)
-    expect(afterLeave.members).toEqual([])
-    expect(afterLeave.host_sub).toBeNull()
     expect(afterLeave.member_count).toBe(1)
+    expect(afterLeave.host_sub).toBe('plex:1')
+    expect(afterLeave.members).toEqual([{ sub: 'plex:1', username: 'user-alice' }])
   })
 
   it('rejects non-members and unknown groups', async () => {
