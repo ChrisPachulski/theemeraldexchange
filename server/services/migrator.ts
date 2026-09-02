@@ -10,7 +10,7 @@
  *
  * Per-migration behaviour:
  *   - CRLF→LF normalization before both checksum computation and exec.
- *   - console.info('[migration] applying %s', file) before exec.
+ *   - log.info('applying <file>') before exec.
  *   - 30-second slow-migration WARN after exec.
  *   - Checksum mismatch on already-applied migration → WARN, continue.
  *   - SQL containing DROP TABLE without a `-- DESTRUCTIVE` comment line → refuse.
@@ -26,6 +26,9 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
+import { createLogger } from './logger.js'
+
+const log = createLogger('migration')
 
 const DESTRUCTIVE_MARKER = '-- DESTRUCTIVE'
 const SLOW_MIGRATION_MS = 30_000
@@ -115,18 +118,16 @@ function bootstrapMigrationsTable(
       return
     }
     // Unexpected shape — leave it alone and warn; do not corrupt data.
-    console.warn(
-      '[migration] schema_migrations exists but first column is %s not version; ' +
-      'skipping bootstrap — manual intervention may be required',
-      firstCol?.name ?? '(unknown)',
-    )
+    log.warn('schema_migrations exists but first column is not version; skipping bootstrap — manual intervention may be required', {
+      firstColumn: firstCol?.name ?? '(unknown)',
+    })
     return
   }
 
   if (names.has('_migrations')) {
     // Legacy Hono shape: _migrations(id TEXT PRIMARY KEY, applied_at TEXT NOT NULL)
     // Rename to schema_migrations and backfill version + checksum.
-    console.info('[migration] legacy _migrations table detected; upgrading to schema_migrations shape')
+    log.info('legacy _migrations table detected; upgrading to schema_migrations shape')
 
     const legacyRows = db
       .prepare(`SELECT id, applied_at FROM _migrations`)
@@ -147,7 +148,7 @@ function bootstrapMigrationsTable(
     for (const row of legacyRows) {
       const version = parseInt(row.id.substring(0, 4), 10)
       if (isNaN(version)) {
-        console.warn('[migration] legacy row id %s has non-numeric prefix; skipping backfill', row.id)
+        log.warn('legacy row id has non-numeric prefix; skipping backfill', { legacyId: row.id })
         continue
       }
       // Compute checksum from the current file content (best we can do for already-applied rows).
@@ -157,18 +158,16 @@ function bootstrapMigrationsTable(
         const sql = fs.readFileSync(filePath, 'utf-8')
         checksum = sha256(sql)
       } else {
-        console.warn(
-          '[migration] legacy row %s: migration file not found at %s; ' +
-          'checksum recorded as placeholder',
-          row.id,
+        log.warn('legacy row: migration file not found; checksum recorded as placeholder', {
+          legacyId: row.id,
           filePath,
-        )
+        })
       }
       insertMig.run(version, row.applied_at, checksum)
     }
 
     db.exec(`DROP TABLE _migrations`)
-    console.info('[migration] upgraded %d legacy migration row(s) to schema_migrations', legacyRows.length)
+    log.info('upgraded legacy migration row(s) to schema_migrations', { count: legacyRows.length })
     return
   }
 
@@ -233,11 +232,8 @@ export function applyMigrations(opts: MigratorOptions): void {
   // newer version. Do NOT abort boot — warn and skip so the operator can still start.
   for (const [version] of appliedMap) {
     if (!fileVersions.has(version)) {
-      console.warn(
-        '[migration] version %d is recorded in schema_migrations but no matching .sql file ' +
-        'exists in %s — skipping (app may have been downgraded; re-upgrade to re-run)',
-        version,
-        migrationsDir,
+      log.warn(
+        `version ${version} is recorded in schema_migrations but no matching .sql file exists in ${migrationsDir} — skipping (app may have been downgraded; re-upgrade to re-run)`,
       )
     }
   }
@@ -256,14 +252,10 @@ export function applyMigrations(opts: MigratorOptions): void {
       // Already applied — verify checksum.
       const stored = appliedMap.get(version)!
       if (stored !== checksum && stored !== '(file-not-found)') {
-        console.warn(
-          '[migration] checksum mismatch on %d (%s): ' +
-          'stored=%s computed=%s — file may have been edited after apply',
-          version,
-          file,
+        log.warn(`checksum mismatch on ${version} (${file}) — file may have been edited after apply`, {
           stored,
-          checksum,
-        )
+          computed: checksum,
+        })
       }
       continue
     }
@@ -286,7 +278,7 @@ export function applyMigrations(opts: MigratorOptions): void {
       }
     }
 
-    console.info('[migration] applying %s', file)
+    log.info(`applying ${file}`)
 
     const t0 = Date.now()
     db.exec('BEGIN')
@@ -302,11 +294,7 @@ export function applyMigrations(opts: MigratorOptions): void {
 
     if (elapsed > SLOW_MIGRATION_MS) {
       const elapsedSec = (elapsed / 1000).toFixed(1)
-      console.warn(
-        '[migration] %s took %ss — subsequent table-rebuild migrations may also be slow on this hardware',
-        file,
-        elapsedSec,
-      )
+      log.warn(`${file} took ${elapsedSec}s — subsequent table-rebuild migrations may also be slow on this hardware`)
     }
   }
 }
