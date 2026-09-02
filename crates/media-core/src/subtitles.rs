@@ -22,14 +22,23 @@ fn job_slot() -> &'static Mutex<Option<Value>> {
     TRANSCRIBE_JOB.get_or_init(|| Mutex::new(None))
 }
 
+/// Lock the job slot, recovering the guard from a poisoned mutex. A panic in a
+/// subtitle worker leaves the slot poisoned; propagating that would turn one
+/// dead job into a permanent 500 on every later status/claim call. The slot
+/// holds only a status `Value`, so the worst a poisoned read yields is a stale
+/// status — degrade, do not cascade.
+fn lock_slot() -> std::sync::MutexGuard<'static, Option<Value>> {
+    job_slot().lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Current transcription job status (None when idle).
 pub fn job_status() -> Option<Value> {
-    job_slot().lock().expect("job slot poisoned").clone()
+    lock_slot().clone()
 }
 
 /// Claim the job slot. `Err` carries the currently running job.
 pub fn claim_job(status: Value) -> Result<(), Value> {
-    let mut slot = job_slot().lock().expect("job slot poisoned");
+    let mut slot = lock_slot();
     match slot.as_ref() {
         Some(running) if running.get("state").and_then(Value::as_str) == Some("running") => {
             Err(running.clone())
@@ -44,12 +53,12 @@ pub fn claim_job(status: Value) -> Result<(), Value> {
 /// Record a terminal state ("done"/"error") without releasing history — the
 /// status endpoint shows the last outcome until the next job claims the slot.
 pub fn finish_job(status: Value) {
-    *job_slot().lock().expect("job slot poisoned") = Some(status);
+    *lock_slot() = Some(status);
 }
 
 #[cfg(test)]
 pub fn reset_jobs_for_tests() {
-    *job_slot().lock().expect("job slot poisoned") = None;
+    *lock_slot() = None;
 }
 
 /// Sidecar filename for one subtitle. `lang`/`source` are sanitized to
