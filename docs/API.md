@@ -249,7 +249,7 @@ that video id.
 |---|---|---|---|
 | GET | `/api/ratings?ids=tt...` | session | IMDb/Rotten Tomatoes/Metacritic scores by IMDb id, cached in `server.db`; fills missing ids from OMDb + Wikidata + the RT page, waits briefly, returns whatever's ready plus a `pending` list. (`ratings.ts:248`) |
 
-## /api/iptv (server/routes/iptv.ts, mounted only when `IPTV_DISABLED` is unset)
+## /api/iptv (server/routes/iptv.ts composing server/routes/iptv/*.ts, mounted only when `IPTV_DISABLED` is unset)
 
 Most routes carry `requireAuth` plus `requireSection('live')`, the whole
 IPTV surface (catalog, EPG, grants, favorites, history) lives under the

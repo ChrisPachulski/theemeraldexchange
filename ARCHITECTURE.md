@@ -161,7 +161,7 @@ Four independent credential mechanisms, plus one narrow export secret:
   instead of, the internal-principal check, the recommender's `/events/*` routes can require both.
 
 - One more narrow secret worth naming: `IPTV_RECOMMENDER_EXPORT_SECRET`, checked in
-  `server/routes/iptv.ts:1625` and unrelated to the four boundaries above, it gates a single IPTV
+  `server/routes/iptv/admin.ts` and unrelated to the four boundaries above, it gates a single IPTV
   catalog-export endpoint the recommender pulls from the backend, distinct from
   `RECOMMENDER_EVENT_SECRET`.
 
