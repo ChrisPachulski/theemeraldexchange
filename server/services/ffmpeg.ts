@@ -9,6 +9,9 @@
 // silently at runtime (ENOENT on spawn).
 
 import { execFileSync } from 'node:child_process'
+import { createLogger } from './logger.js'
+
+const log = createLogger('ffmpeg')
 
 const MIN_MAJOR = 6
 
@@ -158,7 +161,7 @@ export function validateFfmpegOrExit(): void {
   // Infinity → git dev/master build, passes unconditionally.
   // null     → unknown format, passes with a warning (operator's responsibility).
   if (major === null) {
-    console.warn(`[ffmpeg] version=${token} (unrecognised format — assuming current) path=${ffprobePath}`)
+    log.warn(`version=${token} (unrecognised format — assuming current) path=${ffprobePath}`)
     return
   }
 
@@ -167,5 +170,5 @@ export function validateFfmpegOrExit(): void {
     throw new Error(`ffmpeg ${token} is below minimum required version 6.0`)
   }
 
-  console.log(`[ffmpeg] version=${token} path=${ffprobePath}`)
+  log.info(`version=${token} path=${ffprobePath}`)
 }

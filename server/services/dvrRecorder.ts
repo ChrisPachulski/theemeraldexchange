@@ -22,6 +22,9 @@ import {
   listRecordings,
   type DvrRecording,
 } from './dvrRecordings.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('dvr')
 
 // A DVR recording opens a real provider connection exactly like a live viewer,
 // so it MUST count against the same IPTV_MAX_UPSTREAM_CONNECTIONS ceiling the
@@ -195,9 +198,11 @@ export class FfmpegRecorder implements Recorder {
     if (this.tracker) {
       const cap = this.upstreamCap()
       if (cap > 0 && upstreamInUse(this.tracker) >= cap) {
-        console.warn(
-          `[dvr ${rec.id}] upstream busy (${upstreamInUse(this.tracker)}/${cap}) — deferring recording`,
-        )
+        log.warn('upstream busy — deferring recording', {
+          recordingId: rec.id,
+          inUse: upstreamInUse(this.tracker),
+          cap,
+        })
         return null
       }
     }
@@ -217,7 +222,10 @@ export class FfmpegRecorder implements Recorder {
       title: rec.channel_name,
     })
     if (slot && !slot.ok) {
-      console.warn(`[dvr ${rec.id}] concurrency slot denied (${slot.reason}) — deferring recording`)
+      log.warn('concurrency slot denied — deferring recording', {
+        recordingId: rec.id,
+        reason: slot.reason,
+      })
       return null
     }
     // From here the slot is HELD: a throw below leaks it until the tracker's 30s
@@ -232,7 +240,7 @@ export class FfmpegRecorder implements Recorder {
       // ffmpeg echoes the input URL (with creds) on error — always scrub.
       const line = scrubXtreamCreds(chunk.toString())
       if (/error|failed|invalid/i.test(line)) {
-        console.warn(`[dvr ${rec.id}] ffmpeg: ${line.trim()}`)
+        log.warn('ffmpeg stderr', { recordingId: rec.id, line: line.trim() })
       }
     })
     proc.on('error', (err) => {
@@ -241,7 +249,7 @@ export class FfmpegRecorder implements Recorder {
       // crashes the backend. Drop the child, release its provider slot, and
       // fail the row if it is still active.
       const detail = scrubXtreamCreds(err.message)
-      console.warn(`[dvr ${rec.id}] ffmpeg spawn error: ${detail}`)
+      log.warn('ffmpeg spawn error', { recordingId: rec.id, detail })
       this.children.delete(rec.id)
       this.tracker?.release(recordSessionId(rec.id))
       const row = getRecording(this.db, rec.id)
@@ -360,7 +368,7 @@ export function startDvrScheduler(
     try {
       await tick(db, recorder)
     } catch (err) {
-      console.error('[dvr] scheduler tick failed:', err)
+      log.error('scheduler tick failed', { error: err })
     }
   }
   void run()

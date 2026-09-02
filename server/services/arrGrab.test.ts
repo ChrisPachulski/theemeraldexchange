@@ -134,6 +134,6 @@ describe('createGrabEventRecorder', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const record = createGrabEventRecorder('sonarr')
     await expect(record({ itemId: 1, type: 'grab_failed' })).resolves.toBeUndefined()
-    expect(errorSpy).toHaveBeenCalledWith('[sonarr] grab log write failed:', expect.any(Error))
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('[sonarr] grab log write failed'))
   })
 })
