@@ -33,9 +33,9 @@ __pycache__/
 *.pyc
 
 # Internal-only docs & planning — kept locally, not published to the public repo.
-# Two files under docs/ are deliberate, published exceptions, force-added before
-# this rule (a tracked path ignores gitignore): operations/login-auth-runbook.md
-# and trickplay-iframe-spec.md. Anything else under these dirs stays local —
+# Three files under docs/ are deliberate, published exceptions, force-added before
+# this rule (a tracked path ignores gitignore): operations/login-auth-runbook.md,
+# trickplay-iframe-spec.md, and API.md. Anything else under these dirs stays local —
 # never `git add -f` into them without deciding to publish it.
 docs/
 plans/

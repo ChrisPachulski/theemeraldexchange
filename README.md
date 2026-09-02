@@ -271,6 +271,25 @@ Two tracks (see **[DEPLOY.md](./DEPLOY.md)**):
 - **[crates/emerald-contracts/README.md](./crates/emerald-contracts/README.md)** — the cross-language
   token/HKDF/`sub` contract and its test-vector oracle.
 
+## Documentation
+
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)**: services, trust boundaries, data stores, and the
+  request flow across the backend and its sidecars.
+- **[CHANGELOG.md](./CHANGELOG.md)**: release history, grouped by month and area.
+- **[CONTRIBUTING.md](./CONTRIBUTING.md)**: contribution policy, bug/security reporting, local
+  test commands.
+- **[SECURITY.md](./SECURITY.md)**: vulnerability reporting scope and process.
+- **[DEPLOY.md](./DEPLOY.md)**: NAS setup and ongoing deploys.
+- **[DESIGN.md](./DESIGN.md)**: the design contract (palette, type, motion).
+- **[PRODUCT.md](./PRODUCT.md)**: audience, principles, scope.
+- **[THIRD-PARTY-LICENSES.md](./THIRD-PARTY-LICENSES.md)**: third-party components distributed
+  with the server images and the licenses under which they're conveyed.
+- **[docs/API.md](./docs/API.md)**: backend route reference: method, path, auth guard, purpose.
+- **[docs/operations/login-auth-runbook.md](./docs/operations/login-auth-runbook.md)**: the
+  operator contract for browser login, native pairing, session truth, and the members allowlist.
+- **[docs/trickplay-iframe-spec.md](./docs/trickplay-iframe-spec.md)**: HLS trick-play (I-frame
+  scrubbing thumbnails) design record and on-device verification guide.
+
 ## Status
 
 The **backend track is shipped and running on the NAS**: the IPTV core, the locked cross-service
