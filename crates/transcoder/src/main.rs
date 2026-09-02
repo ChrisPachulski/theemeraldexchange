@@ -150,14 +150,12 @@ fn init_telemetry() -> Option<sentry::ClientInitGuard> {
         Ok(d) if !d.trim().is_empty() => d,
         _ => return None,
     };
-    Some(sentry::init((
-        dsn,
-        sentry::ClientOptions {
-            release: Some(env!("CARGO_PKG_VERSION").into()),
-            send_default_pii: false,
-            ..Default::default()
-        },
-    )))
+    // sentry 0.49 marks ClientOptions #[non_exhaustive]; a struct literal
+    // (even with ..Default::default()) no longer compiles outside the crate.
+    let mut options = sentry::ClientOptions::default();
+    options.release = Some(env!("CARGO_PKG_VERSION").into());
+    options.send_default_pii = false;
+    Some(sentry::init((dsn, options)))
 }
 
 /// Await the first OS shutdown signal so axum can drain in-flight requests and
