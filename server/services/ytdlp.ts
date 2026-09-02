@@ -12,6 +12,9 @@
 // so a 3h TTL keeps re-taps instant without ever serving a dead link.
 
 import { execFile } from 'node:child_process'
+import { createLogger } from './logger.js'
+
+const log = createLogger('ytdlp')
 
 const CACHE_TTL_MS = 3 * 60 * 60 * 1000
 const RESOLVE_TIMEOUT_MS = 20_000
@@ -58,7 +61,7 @@ function runYtDlp(id: string): Promise<string | null> {
       { timeout: RESOLVE_TIMEOUT_MS, maxBuffer: 1024 * 1024, env: { ...process.env, TMPDIR: '/tmp' } },
       (err, stdout) => {
         if (err) {
-          console.warn(`[ytdlp] resolve failed for ${id}: ${err.message.split('\n')[0]}`)
+          log.warn('resolve failed', { id, err: err.message.split('\n')[0] })
           return resolve(null)
         }
         // `-g` prints one URL per selected stream; our format is a single muxed

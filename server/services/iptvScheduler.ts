@@ -10,13 +10,16 @@ import { syncOnce } from './iptvSync.js'
 import { iptvDb } from './iptvDbSingleton.js'
 import { reportServerEvent } from './serverTelemetry.js'
 import { resolveCronExpr } from './cronConfig.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('iptv')
 
 // Surface a scheduler failure to the mandatory §15 telemetry pipeline in
 // addition to console — a sync/sweep that quietly stops makes the catalog go
 // stale with no signal otherwise.
 function reportSchedulerFailure(message: string, err: unknown): void {
   const detail = err instanceof Error ? err.message : String(err)
-  console.error(`[iptv] ${message}:`, detail)
+  log.error(message, { detail })
   void reportServerEvent({ level: 'error', message: `iptv ${message}`, context: { error: detail } })
 }
 
@@ -51,7 +54,7 @@ export async function registerIptvSchedule(cronExpr: string): Promise<ScheduledT
         `DELETE FROM iptv_title_link WHERE removed_at < datetime('now', '-14 days')`,
       ).run()
       if (result.changes > 0) {
-        console.log(`[iptv] tombstone sweep: removed ${result.changes} stale link row(s)`)
+        log.info('tombstone sweep: removed stale link rows', { removed: result.changes })
       }
     } catch (err) {
       reportSchedulerFailure('tombstone sweep failed', err)

@@ -20,6 +20,9 @@ import {
   listSharedServerInvitees,
 } from '../plex.js'
 import { roleFor } from '../services/sessionGate.js'
+import { createLogger } from '../services/logger.js'
+
+const log = createLogger('users')
 
 export const users = new Hono<Env>()
 
@@ -48,19 +51,19 @@ users.get('/', async (c) => {
       getUser(session.plexAuthToken),
       listAcceptedUsers(session.plexAuthToken),
       listSharedServerInvitees(session.plexAuthToken).catch((err) => {
-        console.warn('users: listSharedServerInvitees failed, omitting:', err)
+        log.warn('listSharedServerInvitees failed, omitting', { err })
         return []
       }),
       listHomeUsers(session.plexAuthToken).catch((err) => {
-        console.warn('users: listHomeUsers failed, omitting:', err)
+        log.warn('listHomeUsers failed, omitting', { err })
         return []
       }),
       listLocalServerAccounts(session.plexAuthToken).catch((err) => {
-        console.warn('users: listLocalServerAccounts failed, omitting:', err)
+        log.warn('listLocalServerAccounts failed, omitting', { err })
         return []
       }),
       listPendingInvites(session.plexAuthToken).catch((err) => {
-        console.warn('users: listPendingInvites failed, omitting:', err)
+        log.warn('listPendingInvites failed, omitting', { err })
         return []
       }),
     ])

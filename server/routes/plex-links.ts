@@ -21,6 +21,9 @@
 import { Hono } from 'hono'
 import { requireAuth, type Env } from '../middleware/auth.js'
 import { env } from '../env.js'
+import { createLogger } from '../services/logger.js'
+
+const log = createLogger('plex-links')
 
 export const plexLinks = new Hono<Env>()
 plexLinks.use('*', requireAuth)
@@ -211,7 +214,7 @@ plexLinks.get('/library-links', async (c) => {
     const map = await getMap(session.sub, session.plexAuthToken)
     return c.json(map)
   } catch (e) {
-    console.error('[plex-links] resolver failed:', e instanceof Error ? e.message : String(e))
+    log.error('resolver failed', { err: e instanceof Error ? e.message : String(e) })
     return c.json({ error: 'plex_unreachable', detail: String(e) }, 502)
   }
 })

@@ -17,6 +17,9 @@
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
 import { env } from '../env.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('grabLog')
 
 export type GrabEventType =
   | 'grab_started'
@@ -78,7 +81,7 @@ export function appendGrabEvent(e: Omit<GrabEvent, 'ts'>): Promise<void> {
   const line = JSON.stringify(event) + '\n'
   const op = writeQueue.then(() => writeLine(line))
   writeQueue = op.catch((err) => {
-    console.error('[grabLog] append failed:', err)
+    log.error('append failed', { err })
   })
   return op
 }

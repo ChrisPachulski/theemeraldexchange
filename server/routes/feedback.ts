@@ -31,6 +31,9 @@ import {
 } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
 import { env } from '../env.js'
+import { createLogger } from '../services/logger.js'
+
+const log = createLogger('feedback')
 
 export const feedback = new Hono<Env>()
 
@@ -138,10 +141,10 @@ feedback.post('/', async (c) => {
           ).catch(() => true)
           if (!stillDissenting) {
             await removeRejection(type, tmdbId).catch((rbErr) => {
-              console.error(
-                '[feedback] dislike rollback failed — split-brain (rejection persisted, personal write failed):',
-                { setErr: err, rbErr },
-              )
+              log.error('dislike rollback failed — split-brain (rejection persisted, personal write failed)', {
+                setErr: err,
+                rbErr,
+              })
             })
           }
         }
@@ -181,10 +184,10 @@ feedback.post('/', async (c) => {
             tmdbId,
             priorDislike?.title ?? title,
           ).catch((rbErr) => {
-            console.error(
-              '[feedback] red-to-green rollback failed — split-brain (rejection cleared, like write failed):',
-              { setErr: err, rbErr },
-            )
+            log.error('red-to-green rollback failed — split-brain (rejection cleared, like write failed)', {
+              setErr: err,
+              rbErr,
+            })
           })
         }
         throw err
@@ -267,10 +270,10 @@ feedback.delete('/:type/:tmdbId/:signal', async (c) => {
       try {
         await setDislike(session.sub, type, tmdbId, priorTitle)
       } catch (rbErr) {
-        console.error(
-          '[feedback] dislike-delete rollback failed — split-brain (personal cleared, household veto kept):',
-          { remErr: err, rbErr },
-        )
+        log.error('dislike-delete rollback failed — split-brain (personal cleared, household veto kept)', {
+          remErr: err,
+          rbErr,
+        })
       }
       throw err
     }

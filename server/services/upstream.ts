@@ -1,4 +1,7 @@
 // Shared upstream fetch wrapper. Wraps a vanilla fetch with an
+import { createLogger } from './logger.js'
+
+const log = createLogger('upstream')
 // AbortController-driven timeout, then synthesizes a 504 Response on
 // abort so every caller path treats the timeout as a normal non-2xx
 // upstream response instead of a thrown exception. That keeps the
@@ -86,7 +89,7 @@ export async function fetchWithTimeout(
     const name = (err as { name?: string }).name
     const message = err instanceof Error ? err.message : String(err)
     const reason = name === 'AbortError' ? 'upstream_timeout' : 'upstream_unreachable'
-    console.error(`[upstream] ${label} ${reason}: ${message}`)
+    log.error(`${label} ${reason}: ${message}`)
     return new Response(
       JSON.stringify({ error: reason, service: label, message }),
       {
@@ -136,7 +139,7 @@ export async function fetchStreamWithConnectTimeout(
     const name = (err as { name?: string }).name
     const message = err instanceof Error ? err.message : String(err)
     const reason = name === 'AbortError' ? 'upstream_timeout' : 'upstream_unreachable'
-    console.error(`[upstream] ${label} ${reason}: ${message}`)
+    log.error(`${label} ${reason}: ${message}`)
     return new Response(JSON.stringify({ error: reason, service: label, message }), {
       status: 504,
       headers: { 'Content-Type': 'application/json' },
@@ -169,7 +172,7 @@ export async function fetchJsonWithTimeout(
       throw err
     }
     const reason = name === 'AbortError' ? 'upstream_timeout' : 'upstream_unreachable'
-    console.error(`[upstream] ${label} ${reason}: ${message}`)
+    log.error(`${label} ${reason}: ${message}`)
     throw new Error(`${label}_${reason}`, { cause: err })
   } finally {
     clearTimeout(timer)

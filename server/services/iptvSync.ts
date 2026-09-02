@@ -6,6 +6,9 @@ import { fetchAndStreamEpg } from './iptvEpg.js'
 import { buildEpgNameIndex, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
 import { ingestAllExternalEpg } from './iptvEpgExternal.js'
 import type { IptvDb } from './iptvDb.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('iptv-sync')
 
 export type SyncResult =
   | {
@@ -165,7 +168,7 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
           const eps = await fetchSeriesInfo(s.series_id, creds)
           episodeRows.push(...eps)
         } catch (err) {
-          console.error(`[iptv-sync] series_info ${s.series_id} failed:`, err)
+          log.error('series_info failed', { seriesId: s.series_id, err })
         }
       }
     }
@@ -260,10 +263,10 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
     // external fetch never fails the provider sync.
     try {
       for (const r of await ingestAllExternalEpg(db)) {
-        console.log('[iptv-sync] external epg', JSON.stringify(r))
+        log.info('external epg', { result: r })
       }
     } catch (err) {
-      console.error('[iptv-sync] external epg failed:', err)
+      log.error('external epg failed', { err })
     }
 
     // Refresh query-planner statistics now that epg_programs (and the catalog
@@ -284,7 +287,7 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
     } catch (err) {
       // Stats are an optimization, never a correctness requirement — a failed
       // optimize must not fail the sync.
-      console.error('[iptv-sync] pragma optimize failed:', err)
+      log.error('pragma optimize failed', { err })
     }
 
     const finishedAt = new Date()

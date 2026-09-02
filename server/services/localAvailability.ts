@@ -22,6 +22,9 @@ import { mediaLibraryDb } from './mediaLibraryDbSingleton.js'
 // shared helper is the single source of truth (this module used to
 // carry a "kept in sync deliberately" copy).
 import { normalizeTitle } from './suggestionsShared.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('suggestions')
 
 // Minimal structural type — kept local so this module does not depend on
 // the route module. Matches the SuggestionItem fields we read/write.
@@ -114,10 +117,9 @@ export function tagLocalAvailability<T extends LocalTaggableItem>(
       return { ...item, available_on: available } as T
     })
   } catch (err) {
-    console.warn(
-      '[suggestions] local availability lookup failed:',
-      err instanceof Error ? err.message : String(err),
-    )
+    log.warn('local availability lookup failed', {
+      err: err instanceof Error ? err.message : String(err),
+    })
     return items
   }
 }

@@ -23,6 +23,9 @@ import {
 } from '../services/mediaStreamToken.js'
 import { memberStatus } from '../services/membership.js'
 import { ratingBlocked } from '../services/parentalRating.js'
+import { createLogger } from '../services/logger.js'
+
+const log = createLogger('media')
 
 export const media = new Hono<Env>()
 
@@ -230,7 +233,7 @@ media.post('/playback/:kind/:id', async (c) => {
   try {
     auth = principalHeader(session, c.get('requestId'))
   } catch (e) {
-    console.error('[media] playback grant: mint failed, failing closed:', e)
+    log.error('playback grant: mint failed, failing closed', { err: e })
     return c.json({ error: 'principal_mint_failed' }, 502)
   }
 
@@ -441,7 +444,7 @@ media.all('/*', async (c) => {
   try {
     headers = principalHeader(session, c.get('requestId'))
   } catch (e) {
-    console.error('[media] failed to mint internal-principal, failing closed:', e)
+    log.error('failed to mint internal-principal, failing closed', { err: e })
     return c.json({ error: 'principal_mint_failed' }, 502)
   }
 

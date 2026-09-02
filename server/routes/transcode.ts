@@ -11,6 +11,9 @@ import {
   MEDIA_HLS_KIND,
 } from '../services/mediaStreamToken.js'
 import { memberStatus } from '../services/membership.js'
+import { createLogger } from '../services/logger.js'
+
+const log = createLogger('transcode')
 
 // Authenticated proxy for the transcoder's HLS surface. When a library file
 // cannot direct-play, media-core's /playback grant routes the client to an HLS
@@ -106,7 +109,7 @@ transcode.all('/*', async (c) => {
     try {
       headers['authorization'] = `Bearer ${mintInternalPrincipal(caller)}`
     } catch (e) {
-      console.error('[transcode] failed to mint internal-principal, failing closed:', e)
+      log.error('failed to mint internal-principal, failing closed', { err: e })
       return c.json({ error: 'principal_mint_failed' }, 502)
     }
   }

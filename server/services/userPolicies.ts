@@ -23,6 +23,9 @@ import { promises as fs } from 'fs'
 import { dirname } from 'path'
 import { env } from '../env.js'
 import type { Env } from '../middleware/auth.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('userPolicies')
 
 export type PolicySection = 'live' | 'downloads' | 'arr'
 
@@ -157,7 +160,7 @@ export function setPolicy(sub: string, policy: Policy): Promise<void> {
     cached = snapshot
   })
   writeQueue = op.catch((err) => {
-    console.error('[userPolicies] write failed:', err)
+    log.error('write failed', { err })
   })
   return op
 }

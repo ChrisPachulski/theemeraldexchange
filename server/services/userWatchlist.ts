@@ -25,6 +25,9 @@
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
 import { env } from '../env.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('userWatchlist')
 
 export type WatchlistKind = 'movie' | 'tv'
 
@@ -190,7 +193,7 @@ export function upsertWatchlist(
     cached = snapshot
   })
   writeQueue = op.catch((err) => {
-    console.error('[userWatchlist] write failed:', err)
+    log.error('write failed', { err })
   })
   return op
 }
@@ -207,7 +210,7 @@ export function removeWatchlist(sub: string, kind: WatchlistKind, id: number): P
     cached = snapshot
   })
   writeQueue = op.catch((err) => {
-    console.error('[userWatchlist] write failed:', err)
+    log.error('write failed', { err })
   })
   return op
 }

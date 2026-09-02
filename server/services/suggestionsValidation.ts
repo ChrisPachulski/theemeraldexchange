@@ -17,6 +17,9 @@ import {
   type SuggestionItem,
 } from './suggestionsShared.js'
 import { TMDB_LOOKUP_CONCURRENCY, tmdbLookup } from './suggestionsTmdb.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('suggestions')
 
 // Everything household-specific the validator needs, captured once per
 // request by the route. Sets are shared by reference — the validator
@@ -144,7 +147,7 @@ export async function validatePicks(
       if (libraryTmdbIds.has(r.id) || titleMatches(r.title, libraryTitles)) {
         counters.droppedAsLibrary++
         rejectedForRetry.push({ title: original, reason: 'already in the household library' })
-        console.warn('[suggestions] library duplicate dropped:', {
+        log.warn('library duplicate dropped', {
           kind,
           pickId: r.id,
           pickTitle: r.title,

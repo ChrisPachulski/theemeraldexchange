@@ -51,6 +51,9 @@ import { validatePicks, type PickValidationContext } from './suggestionsValidati
 import { tagIptvAvailability } from './iptvAvailability.js'
 import { getUserApiKey } from './userApiKeys.js'
 import type { SuggestionRequestContext } from './suggestionsContext.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('suggestions')
 
 // Minimum library size for a meaningful taste signal. Below this, the
 // genre distribution is statistically noise (3 shows can be all Drama
@@ -93,7 +96,7 @@ export async function runClaudeSuggestionPath(
 
   // Cold start: library too small for meaningful taste signal.
   if (library.length < COLD_START_THRESHOLD) {
-    console.warn('[suggestions] Cold-start path: library too small to filter', diag())
+    log.warn('Cold-start path: library too small to filter', diag())
     const endTrending = timing.mark('trending')
     const trending = filterHouseholdSafe(await tmdbTrending(type)).map((it) => ({
       ...it,
@@ -240,7 +243,7 @@ export async function runClaudeSuggestionPath(
       await appendUsageEvent(event)
     } catch (err) {
       usageLogFailed = true
-      console.error('[suggestions] usage log append failed:', err)
+      log.error('usage log append failed', { err })
     }
   }
   // One salt per request — shared by initial + retry. Refresh variety
@@ -272,7 +275,7 @@ export async function runClaudeSuggestionPath(
       typeof (e as { status?: unknown }).status === 'number'
         ? ((e as { status: number }).status)
         : undefined
-    console.error('[suggestions] Claude call failed:', errorMsg, errorStatus ?? '')
+    log.error('Claude call failed', { errorMsg, errorStatus })
     await recordUsageEvent({
       sub: session.sub,
       username: session.username,
@@ -371,7 +374,7 @@ export async function runClaudeSuggestionPath(
         }
       }
     } catch (e) {
-      console.error('[suggestions] Claude retry failed:', e)
+      log.error('Claude retry failed', { err: e })
       // Fall through with whatever we accepted from r1.
     }
   }
@@ -439,7 +442,7 @@ export async function runClaudeSuggestionPath(
     }
     const filled = [...accepted, ...fill].slice(0, TARGET_COUNT)
     endFill()
-    console.warn('[suggestions] Personalized picks short of target — filling', {
+    log.warn('Personalized picks short of target — filling', {
       kind: type,
       sub: session.sub,
       libraryCount: library.length,

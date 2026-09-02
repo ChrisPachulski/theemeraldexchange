@@ -8,6 +8,9 @@
 // via the _reset*ForTests escape hatches.
 
 import { radarrFetch, sonarrFetch } from './arr.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('suggestions')
 
 type SonarrSeries = { title: string; year?: number; tmdbId?: number; genres?: string[] }
 type RadarrMovie = { title: string; year?: number; tmdbId?: number; genres?: string[] }
@@ -110,23 +113,23 @@ export async function fetchLibraryCached(kind: 'movie' | 'tv'): Promise<LibraryI
       if (stale) {
         const ageMs = Date.now() - stale.fetchedAt
         if (ageMs > LIBRARY_STALE_FALLBACK_MAX_AGE_MS) {
-          console.error(
-            `[suggestions] ${kind} library fetch failed and stale snapshot is expired (${Math.round(ageMs / 3_600_000)}h old) — failing closed:`,
-            err instanceof Error ? err.message : String(err),
-          )
+          log.error(`${kind} library fetch failed and stale snapshot is expired — failing closed`, {
+            ageHours: Math.round(ageMs / 3_600_000),
+            err: err instanceof Error ? err.message : String(err),
+          })
           throw new LibraryUnavailableError(kind, err)
         }
-        console.warn(
-          `[suggestions] ${kind} library fetch failed, serving stale snapshot of ${stale.items.length} items (${Math.round(ageMs / 3_600_000)}h old):`,
-          err instanceof Error ? err.message : String(err),
-        )
+        log.warn(`${kind} library fetch failed, serving stale snapshot`, {
+          items: stale.items.length,
+          ageHours: Math.round(ageMs / 3_600_000),
+          err: err instanceof Error ? err.message : String(err),
+        })
         libraryCache[kind] = { items: stale.items, expiresAt: Date.now() + LIBRARY_FAILURE_CACHE_TTL_MS }
         return stale.items
       }
-      console.error(
-        `[suggestions] ${kind} library fetch failed and no stale snapshot — failing closed:`,
-        err instanceof Error ? err.message : String(err),
-      )
+      log.error(`${kind} library fetch failed and no stale snapshot — failing closed`, {
+        err: err instanceof Error ? err.message : String(err),
+      })
       throw new LibraryUnavailableError(kind, err)
     })
     .finally(() => {

@@ -12,6 +12,9 @@ import { env } from '../env.js'
 import { updateRejectionTitleIfPresent } from './rejections.js'
 import { updateLikedTitleIfPresent } from './userFeedback.js'
 import type { SuggestionItem } from './suggestionsShared.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('suggestions')
 
 // Cap concurrent TMDB /search lookups. validate() previously fired one
 // Promise.all over every survivor (~30+), which can burst past TMDB's rate
@@ -104,14 +107,12 @@ async function tmdbFetchWithRetry(
     const retryAfterStr = r.headers.get('retry-after')
     const requestedMs = retryAfterStr ? Number(retryAfterStr) * 1000 : 2_000
     if (!Number.isFinite(requestedMs) || requestedMs > TMDB_MAX_RETRY_WAIT_MS) {
-      console.warn(
-        '[suggestions] TMDB 429 — Retry-After',
-        retryAfterStr,
-        'exceeds budget; surfacing 429 to caller',
-      )
+      log.warn('TMDB 429 — Retry-After exceeds budget; surfacing 429 to caller', {
+        retryAfter: retryAfterStr,
+      })
       return r
     }
-    console.warn('[suggestions] TMDB 429 — retrying after', requestedMs, 'ms')
+    log.warn('TMDB 429 — retrying', { afterMs: requestedMs })
     const aborted = await new Promise<boolean>((res) => {
       const t = setTimeout(() => res(false), requestedMs)
       signal.addEventListener(
@@ -257,7 +258,7 @@ export async function backfillRejectionTitles(
   )
   for (const r of writes) {
     if (r.status === 'rejected') {
-      console.error('[suggestions] rejection title backfill failed:', r.reason)
+      log.error('rejection title backfill failed', { reason: r.reason })
     }
   }
   return entries.map((e) => (updates.has(e.id) ? { ...e, title: updates.get(e.id)! } : e))
@@ -285,7 +286,7 @@ export async function backfillLikedTitles(
   )
   for (const r of writes) {
     if (r.status === 'rejected') {
-      console.error('[suggestions] liked title backfill failed:', r.reason)
+      log.error('liked title backfill failed', { reason: r.reason })
     }
   }
   return entries.map((e) => (updates.has(e.id) ? { ...e, title: updates.get(e.id)! } : e))
@@ -549,14 +550,14 @@ export async function fetchCandidatePool(
         if (!r || !r.ok) {
           if (r && r.status !== 429) {
             // 429s are already logged inside tmdbFetchWithRetry after the retry fails
-            console.error('[suggestions] TMDB /discover (pool) non-ok:', r.status, 'page', i + 1)
+            log.error('TMDB /discover (pool) non-ok', { status: r.status, page: i + 1 })
           }
           return null
         }
         const data = (await r.json()) as { results?: TmdbRow[] }
         return data.results ?? []
       } catch (e) {
-        console.error('[suggestions] TMDB /discover (pool) threw on page', i + 1, e instanceof Error ? e.message : String(e))
+        log.error('TMDB /discover (pool) threw', { page: i + 1, err: e instanceof Error ? e.message : String(e) })
         return null
       } finally {
         clearTimeout(timer)
@@ -668,14 +669,14 @@ export async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem
         const r = await tmdbFetchWithRetry(url, controller.signal)
         if (!r || !r.ok) {
           if (r && r.status !== 429) {
-            console.error('[suggestions] TMDB /trending non-ok:', r.status, 'page', i + 1)
+            log.error('TMDB /trending non-ok', { status: r.status, page: i + 1 })
           }
           return null
         }
         const data = (await r.json()) as { results?: TmdbRow[] }
         return data.results ?? []
       } catch (e) {
-        console.error('[suggestions] TMDB /trending fetch threw on page', i + 1, e instanceof Error ? e.message : String(e))
+        log.error('TMDB /trending fetch threw', { page: i + 1, err: e instanceof Error ? e.message : String(e) })
         return null
       } finally {
         clearTimeout(timer)
@@ -687,7 +688,7 @@ export async function tmdbTrending(kind: 'movie' | 'tv'): Promise<SuggestionItem
     const rows = p.status === 'fulfilled' ? p.value : null
     if (rows && rows.length > 0) all.push(...rows)
     else if (p.status === 'rejected') {
-      console.error('[suggestions] TMDB /trending page settled rejected:', p.reason instanceof Error ? p.reason.message : String(p.reason))
+      log.error('TMDB /trending page settled rejected', { reason: p.reason instanceof Error ? p.reason.message : String(p.reason) })
     }
   }
   const seenIds = new Set<number>()

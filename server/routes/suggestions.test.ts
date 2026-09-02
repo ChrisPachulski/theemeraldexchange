@@ -1376,7 +1376,10 @@ describe('suggestions route — prompt shape', () => {
       String(c[0]).includes('Personalized picks short of target'),
     )
     expect(call).toBeDefined()
-    expect(call?.[1]).toMatchObject({ accepted: 0, retryAttempted: true })
+    // The structured logger emits one line: "[tag] message {json}".
+    const line = String(call?.[0])
+    const context = JSON.parse(line.slice(line.indexOf(' {') + 1)) as Record<string, unknown>
+    expect(context).toMatchObject({ accepted: 0, retryAttempted: true })
 
     warnSpy.mockRestore()
   })

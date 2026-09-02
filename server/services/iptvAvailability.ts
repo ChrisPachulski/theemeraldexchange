@@ -8,6 +8,9 @@
 
 import { iptvDb } from './iptvDbSingleton.js'
 import type { SuggestionItem } from './suggestionsShared.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('suggestions')
 
 export function tagIptvAvailability(items: SuggestionItem[]): SuggestionItem[] {
   const ids = Array.from(new Set(items.map((item) => item.id).filter((id) => Number.isInteger(id))))
@@ -31,7 +34,7 @@ export function tagIptvAvailability(items: SuggestionItem[]): SuggestionItem[] {
       return { ...item, available_on: available }
     })
   } catch (err) {
-    console.warn('[suggestions] iptv availability lookup failed:', err instanceof Error ? err.message : String(err))
+    log.warn('iptv availability lookup failed', { err: err instanceof Error ? err.message : String(err) })
     return items
   }
 }

@@ -30,6 +30,9 @@ import { tmdbKeyConfigured, tmdbTrending } from './suggestionsTmdb.js'
 import { tagIptvAvailability } from './iptvAvailability.js'
 import { tagLocalAvailability } from './localAvailability.js'
 import type { SuggestionRequestContext } from './suggestionsContext.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('suggestions')
 
 // Local-recommender fast path. When USE_LOCAL_RECOMMENDER=1, the
 // Python sidecar in the same compose stack does retrieval + ranking
@@ -120,7 +123,7 @@ export async function runRecommenderSuggestionPath(
     recSucceeded = true
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e)
-    console.warn('[suggestions] recommender call failed, falling back to trending:', detail)
+    log.warn('recommender call failed, falling back to trending', { detail })
     // The fallback keeps the request working, but a recommender that is down
     // silently degrades EVERY user to trending — surface it (warning level so
     // Glitchtip groups occurrences) instead of hiding it in stdout.

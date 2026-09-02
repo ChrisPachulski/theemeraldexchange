@@ -19,6 +19,9 @@ import { authModeFromSession, type Session } from '../session.js'
 import { ensureServerId } from './serverDb.js'
 import { reportServerEvent } from './serverTelemetry.js'
 import type { RecommenderCaller } from './recommender.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('recommenderCaller')
 
 let cachedServerId: string | null = null
 // Epoch-ms of the last ensureServerId() failure (0 = none pending). We do NOT
@@ -57,11 +60,10 @@ function getServerId(): string | null {
     // enforce mode 401s, surfacing the misconfiguration loud and clear.
     serverIdFailedAt = Date.now()
     const detail = e instanceof Error ? e.message : String(e)
-    console.warn(
-      '[recommenderCaller] ensureServerId failed — degrading to no-Bearer ' +
-        `recommender calls; will retry after ${SERVER_ID_RETRY_COOLDOWN_MS}ms:`,
+    log.warn('ensureServerId failed — degrading to no-Bearer recommender calls; will retry', {
+      retryAfterMs: SERVER_ID_RETRY_COOLDOWN_MS,
       detail,
-    )
+    })
     // Make the demotion observable in the mandatory telemetry pipeline, not
     // just console (§S0-6): if server.db never recovers, an operator can see
     // the recommender was silently demoted instead of guessing why recs went

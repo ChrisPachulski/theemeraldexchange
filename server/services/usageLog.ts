@@ -10,6 +10,9 @@
 import { promises as fs } from 'fs'
 import { dirname } from 'path'
 import { env } from '../env.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('usageLog')
 
 export type UsageEventType = 'claude_call' | 'claude_error'
 
@@ -45,7 +48,7 @@ export function appendUsageEvent(e: Omit<UsageEvent, 'ts'>): Promise<void> {
   const line = JSON.stringify(event) + '\n'
   const op = writeQueue.then(() => writeLine(line))
   writeQueue = op.catch((err) => {
-    console.error('[usageLog] append failed:', err)
+    log.error('append failed', { err })
   })
   return op
 }

@@ -13,6 +13,9 @@
 
 import { env } from '../env.js'
 import { openMediaLibraryDb, type MediaLibraryDb } from './mediaLibraryDb.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('mediaLibraryDb')
 
 let cached: MediaLibraryDb | null = null
 // Once we've failed to open (e.g. file absent), remember it so we don't
@@ -27,10 +30,10 @@ export function mediaLibraryDb(): MediaLibraryDb | null {
     return cached
   } catch (err) {
     openFailed = true
-    console.warn(
-      `[mediaLibraryDb] media.db unavailable at ${env.MEDIA_DB_PATH}; local availability tagging disabled`,
-      err instanceof Error ? err.message : err,
-    )
+    log.warn('media.db unavailable; local availability tagging disabled', {
+      path: env.MEDIA_DB_PATH,
+      err: err instanceof Error ? err.message : err,
+    })
     return null
   }
 }
