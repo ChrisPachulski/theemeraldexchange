@@ -28,13 +28,14 @@
         <div>
           <p class="eyebrow">Self-hosted by design</p>
           <h1>Privacy Policy</h1>
-          <p class="lede">Emerald is a thin client for a media server that you own and operate. The developer does not run a backend for the app and does not receive your library, account, or viewing data.</p>
-          <p class="updated">Last updated July 12, 2026</p>
+          <p class="lede">Emerald is a thin client for a media server that you own and operate. It connects to the server address you enter, to the sign-in provider you choose, and, for artwork and trailers while you browse, to the public services listed below. The developer does not run a backend for the app, does not receive your data, and operates no analytics, advertising, or tracking infrastructure.</p>
+          <p>The first-run screen offers a one-tap connection to theemeraldexchange.com, the developer's own household server. Nothing is sent to that server unless you choose it; entering any other address connects only to that address.</p>
+          <p class="updated">Last updated September 1, 2026</p>
         </div>
         <aside class="exchange-path" aria-label="How data moves">
-          <div class="path-node"><span class="path-dot" aria-hidden="true"></span><span><strong>Your device</strong>Stores connection and sign-in state locally.</span></div>
+          <div class="path-node"><span class="path-dot" aria-hidden="true"></span><span><strong>Your device</strong>Stores connection, sign-in state, and your settings locally.</span></div>
           <div class="path-node"><span class="path-dot" aria-hidden="true"></span><span><strong>Your server</strong>Receives library, playback, and progress requests.</span></div>
-          <div class="path-node"><span class="path-dot" aria-hidden="true"></span><span><strong>Services you choose</strong>Sign-in and artwork services are contacted only when needed.</span></div>
+          <div class="path-node"><span class="path-dot" aria-hidden="true"></span><span><strong>Services you choose</strong>Sign-in, artwork, and trailer services are contacted only when needed.</span></div>
         </aside>
       </header>
 
@@ -43,38 +44,44 @@
         <div class="policy-copy">
           <ul>
             <li><strong>Your server address</strong>, the URL you enter to connect.</li>
-            <li><strong>An opaque device identifier</strong>, a random value generated on first launch so your server can recognize this installation. It is not your Apple ID or an advertising identifier.</li>
-            <li><strong>An authentication token</strong> issued by your server after sign-in. It is stored in the device Keychain. A development Simulator build uses app preferences instead.</li>
+            <li><strong>An opaque device identifier</strong>, a random value generated on first launch to identify this device to your server during pairing. It is not your Apple ID, not an advertising identifier, and is not shared with the developer or any third party.</li>
+            <li><strong>An authentication token</strong> issued by your server after you sign in, stored in the device Keychain. On the iOS and tvOS Simulator only, a development build stores it in app preferences instead. It lets the app stay paired without re-entering credentials.</li>
+            <li><strong>Your settings</strong>, including whether crash reports may be uploaded (Settings, then Diagnostics, on by default).</li>
           </ul>
-          <p>This information uses the operating system's standard app storage. When you sign out, Emerald removes your authentication credentials, paired-account state, the signed-out member's cached library data, and the tvOS Top Shelf snapshot. The configured server address remains so the sign-in screen can reconnect to the same server. The opaque device identifier remains for the lifetime of the app installation so your server can recognize the same device.</p>
-          <p>Choosing <strong>Change server</strong> also removes the configured server address. Deleting the app removes app-container information, including that address and the opaque identifier. Keychain credentials may persist after app deletion according to operating-system behavior. Sign out before deleting the app to remove the active authentication credential immediately.</p>
+          <p>Current versions do not ask for a third-party AI-provider key. On upgrade, Emerald attempts to remove obsolete AI-provider keys stored by earlier builds.</p>
+          <p>This information uses the operating system's standard app storage. When you sign out, the app removes your authentication credentials, paired-account state, the signed-out member's cached library data, and the tvOS Top Shelf snapshot. The configured server address remains so the sign-in screen can reconnect to the same server. The opaque device identifier remains for the lifetime of the app installation so your server can recognize the same device after sign-in.</p>
+          <p>Choosing <strong>Change server</strong> removes the configured server address as well as the current authentication and paired-account state. Deleting the app removes app-container information, including the configured server address and opaque device identifier. Keychain credentials may persist after app deletion according to operating-system behavior. To remove the active authentication credential immediately, sign out before deleting the app.</p>
+          <p><strong>Settings, Account, Delete Account</strong> erases more than signing out does. When your server supports self-service deletion, the app deletes your membership on the server, which signs out every device paired to it. It then removes the authentication credential, the configured server address, the opaque device identifier, every cached library and artwork file, watch progress held on this device, queued diagnostics, and your app settings, returning the app to its first-run screen. Because your server is operated by your household rather than by the developer, an older server may offer no self-service deletion: then the app asks it to sign out every device paired to your account, completes everything else, tells you so, and shows you the member ID to give the person who runs the server so they can remove the record.</p>
         </div>
       </section>
 
       <section class="policy-layout" aria-labelledby="connections">
-        <div><p class="section-label">Connections</p><h2 id="connections">What the app sends</h2></div>
+        <div><p class="section-label">Connections</p><h2 id="connections">What the app sends, and to whom</h2></div>
         <div class="policy-copy">
           <ul>
-            <li><strong>To your server:</strong> authenticated requests to browse your library, stream content, and save watch progress. Traffic goes to the address you configured and does not pass through the developer.</li>
-            <li><strong>To your self-hosted error service:</strong> the app may keep a capped local queue of crash and hang diagnostics. If your server supplies a valid GlitchTip HTTPS address, reports go directly there. They can include app build, platform, failure type, backtrace, and an operating-system diagnostic payload. They exclude your Emerald token, server address, advertising identifier, and identity.</li>
-            <li><strong>To Plex:</strong> only when you choose Sign in with Plex, using Plex's standard sign-in flow and subject to <a href="https://www.plex.tv/about/privacy-legal/">Plex's privacy policy</a>.</li>
-            <li><strong>To Google:</strong> only when your server offers Google sign-in and you choose it, using Google's standard OAuth flow and subject to <a href="https://policies.google.com/privacy">Google's privacy policy</a>.</li>
-            <li><strong>To artwork services:</strong> posters and cast artwork may load from TMDB, and trailer thumbnails from YouTube. These image requests reveal the requested image path and your IP address to the CDN. They do not send an Emerald token, account identifier, or watch history.</li>
+            <li><strong>To your server:</strong> requests to browse your library, stream content, and save your watch progress, authenticated with the token above. This traffic goes to the address you configured; it does not pass through the developer. Household owners can also view their server's own administrative statistics in the app, including the server's AI-usage counts and cost; that data is produced and stored by your server, not by the app.</li>
+            <li><strong>To your self-hosted error service:</strong> the app may record operating-system crash and hang diagnostics in a capped local queue. If your server supplies a valid GlitchTip ingestion address and uploads are on in Settings, then Diagnostics, the app sends those diagnostics directly to that service over HTTPS. It never uploads telemetry over plain HTTP, including on a local network; an invalid or plaintext address, or the switch being off, leaves reports queued locally until the capped queue replaces older reports. Reports contain the app build, platform, failure type, backtrace, and OS diagnostic payload when available. They do not contain your Emerald authentication token, configured server address, advertising identifier, or user identity.</li>
+            <li><strong>To Plex:</strong> when you choose Sign in with Plex, the app uses Plex's sign-in flow to establish your identity with your server. That step is governed by <a href="https://www.plex.tv/about/privacy-legal/">Plex's Privacy Policy</a>. The app does not send Plex any data beyond what the standard sign-in flow requires.</li>
+            <li><strong>To Apple:</strong> when you choose Sign in with Apple, Apple issues an identity token that the app forwards only to your server.</li>
+            <li><strong>To your server's hosted sign-in page:</strong> when your server offers Sign in with email or Google (iPhone and iPad), the app opens the sign-in page your server configured, hosted by WorkOS (AuthKit), in a private in-app browser session. What you enter there is governed by <a href="https://workos.com/privacy">WorkOS's Privacy Policy</a> and, if you pick Google on that page, by <a href="https://policies.google.com/privacy">Google's Privacy Policy</a>. The app only opens a page on your server's own domain or WorkOS's, and receives back a one-time code that it hands to your server. On Apple TV the equivalent Sign in on the web shows a short code you enter on another device.</li>
+            <li><strong>To Google directly:</strong> only if your server offers native Sign in with Google and this build is configured for it: the app opens Google's standard OAuth sign-in (accounts.google.com, oauth2.googleapis.com), governed by <a href="https://policies.google.com/privacy">Google's Privacy Policy</a>. Nothing is sent to Google otherwise.</li>
+            <li><strong>To artwork services while you browse:</strong> poster, cast, and suggestion artwork is loaded directly from TMDB's public image CDN (image.tmdb.org), and trailer thumbnails from YouTube's (img.youtube.com). These requests necessarily reveal to those services which titles' images your device asked for, a standard consequence of loading any remote image, along with your IP address. No account identifier, token, or watch history is sent, only the image paths.</li>
+            <li><strong>To YouTube's embedded player:</strong> on iPhone and iPad, a trailer plays inside YouTube's own embedded player (youtube-nocookie.com), subject to <a href="https://www.youtube.com/t/terms">YouTube's Terms of Service</a>; the app sends it only the trailer's video id. Apple TV has no trailer playback.</li>
           </ul>
+          <p>The app contains no third-party analytics, advertising, or tracking SDKs, sets no advertising identifier, and embeds no ad or tracking network. The developer does not sell, rent, or share your data, because the developer never receives it.</p>
         </div>
       </section>
 
       <section class="policy-layout" aria-labelledby="collection">
         <div><p class="section-label">Developer</p><h2 id="collection">Data collection</h2></div>
         <div class="policy-copy">
-          <p>The developer collects no personal data. All account, viewing, and diagnostic information stays between your device and services you control, subject to how you configure and secure them.</p>
-          <p>The app contains no third-party analytics, advertising, or tracking SDKs, sets no advertising identifier, and embeds no advertising or tracking network. The developer does not sell, rent, or share your data because the developer never receives it.</p>
+          <p>Because all data is exchanged solely between your device and services you control or choose, the developer collects no personal data. Any information about your viewing, account, or diagnostics stays within infrastructure you operate and is subject to how you have configured and secured it.</p>
         </div>
       </section>
 
       <section class="policy-layout" aria-labelledby="children">
         <div><p class="section-label">Audience</p><h2 id="children">Children</h2></div>
-        <div class="policy-copy"><p>The app is not directed to children and the developer does not knowingly collect information from children.</p></div>
+        <div class="policy-copy"><p>The app is not directed to children and does not knowingly collect information from children.</p></div>
       </section>
 
       <section class="policy-layout" aria-labelledby="changes">
@@ -84,8 +91,8 @@
 
       <section class="support-card" aria-labelledby="privacy-contact">
         <p class="section-label">Contact</p>
-        <h2 id="privacy-contact">Questions about privacy?</h2>
-        <p>Ask what the app stores, where a request goes, or how to remove the active credential.</p>
+        <h2 id="privacy-contact">Questions about this policy?</h2>
+        <p>Ask what the app stores, where a request goes, or how to remove the active credential or delete your account.</p>
         <a href="mailto:pachun95@gmail.com">pachun95@gmail.com</a>
       </section>
     </main>

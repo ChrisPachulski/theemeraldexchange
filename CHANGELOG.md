@@ -8,8 +8,26 @@ per-feature release; the current package version is 0.9.0.
 
 ## [Unreleased]
 
+### Added
+
+- Self-service account deletion for the Apple clients: `DELETE /api/account/self`
+  revokes the caller's membership, invites, device tokens, and per-member state
+  (IPTV favorites and history, API key, passkeys, policy, feedback, watchlist,
+  media-core watch state), refuses the last remaining administrator with
+  `409 last_admin`, and is advertised through `accountDeletionEnabled` on
+  `/api/limits` (App Store Guideline 5.1.1(v)).
+- media-core `DELETE /api/media/watch` erases the acting user's watch rows.
+- The hosted privacy policy (`/privacy`) is republished from the app's canonical
+  `docs/PRIVACY.md`, dated September 1, 2026: account deletion, the diagnostics
+  upload switch, hosted email/Google sign-in, and YouTube's embedded player.
+
 ### Security
 
+- Native Sign in with Apple now binds each device-pair sign-in to a
+  server-issued, single-use nonce (`GET /api/auth/apple/nonce`); the server
+  compares SHA-256 of the raw value with the token's claim and burns it, so a
+  captured identity token cannot be replayed to mint a second device token.
+  Browser sign-ins are unchanged.
 - Closed an admin-name escalation: the `ADMINS` display-name match now applies
   only to `plex:` and bare-numeric subs, so a WorkOS member could no longer
   self-promote to admin by setting their first name to an allowlisted value
