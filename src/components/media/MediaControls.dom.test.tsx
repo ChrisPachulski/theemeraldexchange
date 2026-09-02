@@ -205,3 +205,72 @@ describe('MediaControls subtitle toggle', () => {
     )
   })
 })
+
+// Keyboard operability of the custom control path: the app-drawn bar replaces
+// the native controls, so the conventional player keys must work while the
+// player is mounted, without stealing keys from form fields or buttons.
+describe('MediaControls keyboard shortcuts', () => {
+  function makeKeyVideo(): HTMLVideoElement {
+    const video = makeVideo()
+    Object.defineProperty(video, 'pause', { value: vi.fn() })
+    Object.defineProperty(video, 'requestFullscreen', {
+      value: vi.fn(() => Promise.resolve()),
+    })
+    return video
+  }
+
+  it('Space and k toggle play/pause', () => {
+    const video = makeKeyVideo()
+    render(
+      <MediaControls video={video} offsetSecs={0} totalDurationSecs={100} onSeekBelowOffset={() => undefined} />,
+    )
+    fireEvent.keyDown(document, { key: ' ' })
+    expect(video.play).toHaveBeenCalledTimes(1)
+    Object.defineProperty(video, 'paused', { value: false, configurable: true })
+    fireEvent.keyDown(document, { key: 'k' })
+    expect(video.pause).toHaveBeenCalledTimes(1)
+  })
+
+  it('ArrowRight/ArrowLeft seek 10s in absolute title time (re-grants below the session floor)', () => {
+    const video = makeKeyVideo()
+    video.currentTime = 42
+    const onSeekBelowOffset = vi.fn()
+    render(
+      <MediaControls video={video} offsetSecs={600} totalDurationSecs={7200} onSeekBelowOffset={onSeekBelowOffset} />,
+    )
+    fireEvent.keyDown(document, { key: 'ArrowRight' })
+    expect(video.currentTime).toBe(52)
+    video.currentTime = 5
+    fireEvent.keyDown(document, { key: 'ArrowLeft' })
+    expect(onSeekBelowOffset).toHaveBeenCalledExactlyOnceWith(595)
+  })
+
+  it('m mutes, f requests fullscreen, ArrowUp/ArrowDown step the volume', () => {
+    const video = makeKeyVideo()
+    render(
+      <MediaControls video={video} offsetSecs={0} totalDurationSecs={100} onSeekBelowOffset={() => undefined} />,
+    )
+    fireEvent.keyDown(document, { key: 'm' })
+    expect(video.muted).toBe(true)
+    fireEvent.keyDown(document, { key: 'ArrowDown' })
+    expect(video.volume).toBeCloseTo(0.9)
+    fireEvent.keyDown(document, { key: 'ArrowUp' })
+    expect(video.volume).toBeCloseTo(1)
+    fireEvent.keyDown(document, { key: 'f' })
+    expect(video.requestFullscreen).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves keys typed into form fields and pressed on buttons alone', () => {
+    const video = makeKeyVideo()
+    render(
+      <div>
+        <input aria-label="Search" />
+        <MediaControls video={video} offsetSecs={0} totalDurationSecs={100} onSeekBelowOffset={() => undefined} />
+      </div>,
+    )
+    fireEvent.keyDown(screen.getByLabelText('Search'), { key: ' ' })
+    fireEvent.keyDown(screen.getByLabelText('Mute'), { key: ' ' })
+    expect(video.play).not.toHaveBeenCalled()
+    expect(video.muted).toBe(false)
+  })
+})

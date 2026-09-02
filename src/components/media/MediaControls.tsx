@@ -99,6 +99,9 @@ function SubtitlesIcon() {
 // still an element seek — the encoder is about to reach it, so a brief buffer
 // wait beats tearing down and re-granting the whole session.
 const SEEK_REGRANT_EPSILON_SECS = 5
+// Keyboard steps: ArrowLeft/ArrowRight seek, ArrowUp/ArrowDown volume.
+const SEEK_STEP_SECS = 10
+const VOLUME_STEP = 0.1
 
 export function resolveSeekTarget(args: {
   targetSecs: number
@@ -347,6 +350,55 @@ export function MediaControls({
   }
 
   const shownSecs = dragSecs ?? positionSecs
+
+  // Conventional player keys while the bar is mounted (Space/k, arrows, m, f).
+  // The document listener subscribes once; the latest handlers and offset live
+  // in a ref refreshed after every render. Keys typed into form fields, or
+  // Space/Enter on a focused button (which already clicks it), are left alone.
+  const keysRef = useRef({ togglePlay, toggleMute, toggleFullscreen, commitSeek, offsetSecs })
+  useEffect(() => {
+    keysRef.current = { togglePlay, toggleMute, toggleFullscreen, commitSeek, offsetSecs }
+  })
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return
+      const target = e.target instanceof HTMLElement ? e.target : null
+      if (target?.closest('input, textarea, select, [contenteditable="true"]')) return
+      if (target?.tagName === 'BUTTON' && (e.key === ' ' || e.key === 'Enter')) return
+      const keys = keysRef.current
+      const el = videoElRef.current
+      const absoluteSecs = keys.offsetSecs + el.currentTime
+      switch (e.key) {
+        case ' ':
+        case 'k':
+          keys.togglePlay()
+          break
+        case 'ArrowRight':
+          keys.commitSeek(absoluteSecs + SEEK_STEP_SECS)
+          break
+        case 'ArrowLeft':
+          keys.commitSeek(Math.max(0, absoluteSecs - SEEK_STEP_SECS))
+          break
+        case 'ArrowUp':
+          el.volume = Math.min(1, el.volume + VOLUME_STEP)
+          break
+        case 'ArrowDown':
+          el.volume = Math.max(0, el.volume - VOLUME_STEP)
+          break
+        case 'm':
+          keys.toggleMute()
+          break
+        case 'f':
+          keys.toggleFullscreen()
+          break
+        default:
+          return
+      }
+      e.preventDefault()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => document.removeEventListener('keydown', onKeyDown)
+  }, [])
   // Drives the scrubber's emerald fill (left of the thumb) via a CSS variable —
   // a controlled <input type=range> can't paint its own progress in WebKit, so
   // the track gradient reads --progress.
