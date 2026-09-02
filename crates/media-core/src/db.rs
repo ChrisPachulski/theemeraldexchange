@@ -72,6 +72,11 @@ pub const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0013_probe_negcache",
         include_str!("../migrations/0013_probe_negcache.sql"),
     ),
+    (
+        14,
+        "0014_podcast_owner",
+        include_str!("../migrations/0014_podcast_owner.sql"),
+    ),
 ];
 
 #[derive(Clone)]

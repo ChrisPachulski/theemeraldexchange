@@ -60,10 +60,41 @@ pub(super) async fn list_podcasts(State(state): State<AppState>) -> AppResult<Js
     Ok(Json(json!({ "items": items })))
 }
 
+/// Subscriptions are shared for reading; mutations are owner-or-admin. A
+/// legacy row with no recorded owner is admin-only. `Off` mode (local dev) has
+/// no auth boundary and `require_admin` admits everyone there.
+async fn authorize_podcast_mutation(
+    state: &AppState,
+    claims: &Option<InternalClaims>,
+    query_sub: Option<String>,
+    id: i64,
+) -> AppResult<()> {
+    if require_admin(claims, &state.config.principal_mode).is_ok() {
+        return Ok(());
+    }
+    let caller = acting_sub(claims, query_sub, &state.config.principal_mode)?;
+    let owner: Option<Option<String>> =
+        sqlx::query_scalar("SELECT owner_sub FROM podcasts WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db.pool)
+            .await?;
+    match owner {
+        None => Err(AppError::NotFound),
+        Some(Some(o)) if o == caller => Ok(()),
+        Some(_) => Err(AppError::Forbidden(
+            "only the subscriber or an admin may change this podcast".into(),
+        )),
+    }
+}
+
 pub(super) async fn add_podcast(
     State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Query(q): Query<WatchQuery>,
     Json(body): Json<PodcastAddBody>,
 ) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    let owner_sub = acting_sub(&claims, q.sub, &state.config.principal_mode)?;
     let feed_url = body.feed_url.trim().to_string();
     if !(feed_url.starts_with("http://") || feed_url.starts_with("https://")) {
         return Err(AppError::BadRequest("feed_url must be http(s)".into()));
@@ -73,14 +104,17 @@ pub(super) async fn add_podcast(
         .await
         .map_err(AppError::BadRequest)?;
 
-    let id = sqlx::query("INSERT INTO podcasts (feed_url, title, added_at) VALUES (?, ?, ?)")
-        .bind(&feed_url)
-        .bind(&feed.title)
-        .bind(chrono::Utc::now().to_rfc3339())
-        .execute(&state.db.pool)
-        .await
-        .map_err(|e| unique_to_bad_request(e, "already subscribed to that feed"))?
-        .last_insert_rowid();
+    let id = sqlx::query(
+        "INSERT INTO podcasts (feed_url, title, added_at, owner_sub) VALUES (?, ?, ?, ?)",
+    )
+    .bind(&feed_url)
+    .bind(&feed.title)
+    .bind(chrono::Utc::now().to_rfc3339())
+    .bind(&owner_sub)
+    .execute(&state.db.pool)
+    .await
+    .map_err(|e| unique_to_bad_request(e, "already subscribed to that feed"))?
+    .last_insert_rowid();
     let episodes = crate::podcasts::store_feed(&state.db, id, &feed).await?;
 
     Ok(Json(json!({
@@ -92,16 +126,24 @@ pub(super) async fn add_podcast(
 
 pub(super) async fn refresh_podcast_route(
     State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Query(q): Query<WatchQuery>,
     Path(id): Path<i64>,
 ) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    authorize_podcast_mutation(&state, &claims, q.sub, id).await?;
     let episodes = crate::podcasts::refresh_podcast(&state.db, id).await?;
     Ok(Json(json!({ "ok": true, "episodes": episodes })))
 }
 
 pub(super) async fn delete_podcast(
     State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
+    Query(q): Query<WatchQuery>,
     Path(id): Path<i64>,
 ) -> AppResult<Json<Value>> {
+    let claims = claims.map(|Extension(c)| c);
+    authorize_podcast_mutation(&state, &claims, q.sub, id).await?;
     // Episodes cascade via their FK (foreign_keys is ON for this pool).
     let affected = sqlx::query("DELETE FROM podcasts WHERE id = ?")
         .bind(id)
@@ -207,6 +249,61 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(del.status(), StatusCode::NOT_FOUND);
+    }
+
+    /// Subscriptions are shared for reading, but only the member who added one
+    /// (or an admin) may delete or refresh it; legacy rows with no recorded
+    /// owner are admin-only.
+    #[tokio::test]
+    async fn podcast_mutation_is_owner_or_admin_scoped() {
+        let secret = "s3cret-s3cret-s3cret-s3cret-s3cret-s3cret";
+        let state = test_state_enforce(secret).await;
+        for (id, owner) in [(1_i64, Some("plex:1")), (2_i64, None)] {
+            sqlx::query(
+                "INSERT INTO podcasts (id, feed_url, title, added_at, owner_sub) \
+                 VALUES (?, ?, 'T', '2026-01-01', ?)",
+            )
+            .bind(id)
+            .bind(format!("https://feeds.example/{id}"))
+            .bind(owner)
+            .execute(&state.db.pool)
+            .await
+            .unwrap();
+        }
+        let app = crate::build_router(state);
+        let other = signed_principal_for(secret, "user", "plex:2");
+        let owner = signed_principal_for(secret, "user", "plex:1");
+        let admin = signed_principal_for(secret, "admin", "plex:9");
+        let status = |m: &'static str, uri: &'static str, tok: String| {
+            let app = app.clone();
+            async move {
+                app.oneshot(bearer_req(m, uri, &tok))
+                    .await
+                    .unwrap()
+                    .status()
+            }
+        };
+        assert_eq!(
+            status("DELETE", "/api/media/podcasts/1", other.clone()).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status("POST", "/api/media/podcasts/1/refresh", other.clone()).await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status("DELETE", "/api/media/podcasts/2", other).await,
+            StatusCode::FORBIDDEN,
+            "legacy row without an owner is admin-only"
+        );
+        assert_eq!(
+            status("DELETE", "/api/media/podcasts/1", owner).await,
+            StatusCode::OK
+        );
+        assert_eq!(
+            status("DELETE", "/api/media/podcasts/2", admin).await,
+            StatusCode::OK
+        );
     }
 
     /// SSRF: `feed_url` is typed in by any household member, so an internal

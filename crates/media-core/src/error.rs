@@ -9,6 +9,9 @@ pub enum AppError {
     NotFound,
     #[error("unauthorized: {0}")]
     Unauthorized(String),
+    /// Authenticated, but not allowed to act on this resource (wrong owner).
+    #[error("forbidden: {0}")]
+    Forbidden(String),
     #[error("bad request: {0}")]
     BadRequest(String),
     #[error("transcoder required")]
@@ -36,6 +39,7 @@ impl IntoResponse for AppError {
         let (status, msg) = match &self {
             AppError::NotFound => (StatusCode::NOT_FOUND, self.to_string()),
             AppError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, self.to_string()),
+            AppError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
             AppError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             // M3-only deployments have no transcoder: a file that needs one
             // is 503 per §3.5, telling the client to back off (M4 offline).

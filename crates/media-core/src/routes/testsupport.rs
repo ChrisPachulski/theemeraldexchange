@@ -77,6 +77,22 @@ pub(super) async fn test_state_enforce(secret: &str) -> AppState {
 /// `principal_layer` accepts it and inserts the claims into request
 /// extensions for the admin gate to inspect.
 pub(super) fn signed_principal(secret: &str, role: &str) -> String {
+    signed_principal_for(secret, role, "plex:caller")
+}
+
+/// Bearer request carrying an internal principal.
+pub(super) fn bearer_req(method: &str, uri: impl AsRef<str>, token: &str) -> HttpRequest<Body> {
+    HttpRequest::builder()
+        .method(method)
+        .uri(uri.as_ref())
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap()
+}
+
+/// Like [`signed_principal`] but for an explicit `sub`, so owner-scoping tests
+/// can act as two different members.
+pub(super) fn signed_principal_for(secret: &str, role: &str, sub: &str) -> String {
     use emerald_contracts::derive_key;
     use emerald_contracts::hkdf::INFO_INTERNAL_PRINCIPAL;
     use emerald_contracts::internal_principal::{
@@ -85,7 +101,7 @@ pub(super) fn signed_principal(secret: &str, role: &str) -> String {
     let now = chrono::Utc::now().timestamp();
     let claims = InternalClaims {
         iss: "eex".into(),
-        sub: "plex:caller".into(),
+        sub: sub.into(),
         role: role.into(),
         auth_mode: "plex".into(),
         server_id: "srv-test".into(),
