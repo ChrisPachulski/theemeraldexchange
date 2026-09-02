@@ -33,6 +33,8 @@
 #   --allow-dirty   Deploy even when tracked files have uncommitted changes.
 #                   LOUD WARNING: those changes are NOT shipped — the payload
 #                   is git archive HEAD. Commit first unless you know better.
+#   --skip-ci-gate  Ship HEAD without waiting for a green GitHub Actions
+#                   verdict (scripts/ci-gate.sh). Same as SKIP_CI_GATE=1.
 #
 # First-time setup: see DEPLOY.md.
 
@@ -45,9 +47,11 @@ LOCAL_ENV="${LOCAL_ENV:-.env.production}"
 SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 
 ALLOW_DIRTY=0
+SKIP_CI_GATE="${SKIP_CI_GATE:-0}"
 for arg in "$@"; do
   case "$arg" in
     --allow-dirty) ALLOW_DIRTY=1 ;;
+    --skip-ci-gate) SKIP_CI_GATE=1 ;;
     -h|--help)
       # Print the header comment block (everything up to the first non-comment
       # line) as the help text, so the docs above never drift from --help.
@@ -55,7 +59,7 @@ for arg in "$@"; do
       exit 0
       ;;
     *)
-      echo "ERROR: unknown argument: $arg (supported: --allow-dirty, --help)" >&2
+      echo "ERROR: unknown argument: $arg (supported: --allow-dirty, --skip-ci-gate, --help)" >&2
       exit 1
       ;;
   esac
@@ -106,6 +110,20 @@ if git rev-parse --verify origin/main >/dev/null 2>&1; then
 else
   echo "[deploy] WARN: origin/main not found locally; skipping branch-drift check." >&2
 fi
+
+# ── CI gate ──────────────────────────────────────────────────────────────────
+# HEAD must be on origin and every GitHub Actions check on it must have passed.
+# Before this gate a red main deployed exactly like a green one, so CI gated
+# nothing. scripts/ci-gate.sh waits for in-flight checks (25 min max).
+if [[ "$SKIP_CI_GATE" != "1" ]]; then
+  git fetch -q origin
+  if ! git branch -r --contains "$DEPLOY_SHA" | grep -q .; then
+    echo "ERROR: HEAD ($DEPLOY_SHA_SHORT) is not on origin — push it first so CI can run." >&2
+    echo "       (--skip-ci-gate ships an unpushed HEAD anyway.)" >&2
+    exit 1
+  fi
+fi
+SKIP_CI_GATE="$SKIP_CI_GATE" "$SCRIPT_DIR/ci-gate.sh" "$DEPLOY_SHA"
 
 if [[ ! -f "$LOCAL_ENV" ]]; then
   echo "ERROR: $LOCAL_ENV not found at $(pwd)/$LOCAL_ENV" >&2

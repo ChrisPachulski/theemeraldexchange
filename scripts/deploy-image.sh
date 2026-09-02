@@ -19,6 +19,8 @@
 #   NAS_HOST (theemeraldexchange.local)  NAS_USER (root)
 #   APPDATA  (/mnt/user/appdata/exchange-backend)
 #   SKIP_BUILD=1   ship + roll already-built local images as-is
+#   SKIP_CI_GATE=1 ship HEAD without a green GitHub Actions verdict
+#                  (scripts/ci-gate.sh); the default refuses red or unpushed
 #   EEX_RELEASE    release id baked into the backend image (defaults to the
 #                  short HEAD sha so /api/version reflects what's deployed)
 #
@@ -49,6 +51,15 @@ say() { printf '[deploy-image] %s\n' "$*"; }
 cd "$REPO_ROOT"
 EEX_RELEASE="${EEX_RELEASE:-$(git rev-parse --short HEAD)}"
 export EEX_RELEASE
+
+# CI gate: same rule as deploy-nas.sh — HEAD on origin, every check green.
+HEAD_SHA="$(git rev-parse HEAD)"
+if [ "${SKIP_CI_GATE:-0}" != "1" ]; then
+  git fetch -q origin
+  git branch -r --contains "$HEAD_SHA" | grep -q . \
+    || { say "ERR: HEAD ${HEAD_SHA:0:7} is not on origin — push first so CI can run (SKIP_CI_GATE=1 overrides)"; exit 5; }
+fi
+"$REPO_ROOT/scripts/ci-gate.sh" "$HEAD_SHA" || exit 5
 ROLLBACK_TS="$(date -u +%Y%m%d-%H%M%S)"
 ROLLBACK_TAG="deploy-image-rollback-${ROLLBACK_TS}"
 SERVICES="$*"

@@ -284,19 +284,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      # Format check first — fastest signal.
+      # Format check first — fastest signal. Hard gate: run `cargo fmt --all`
+      # before pushing. Output is tee'd (as are clippy and test below) so the
+      # failure step can surface the offending file as an annotation — job
+      # logs need a login, annotations are public.
       - name: cargo fmt --check
-        run: cargo fmt --all -- --check
-        # Hard gate: the workspace is fmt-clean, so a fmt drift is now a real
-        # failure (no more advisory soft-fail). Run `cargo fmt --all` locally
-        # before pushing.
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fmt --all -- --check 2>&1 | tee fmt.log
 
       - name: cargo clippy
-        # Gating: removed continue-on-error. emerald-contracts is the canonical
-        # cross-language crypto crate (token/JWE/HMAC/HKDF) where clippy catches
-        # real soundness issues; an advisory lint never enforces the
-        # deny-warnings intent. fmt above is now a hard gate too.
-        run: cargo clippy --all-targets --workspace -- -D warnings
+        # Gating (-D warnings): emerald-contracts is the canonical cross-language
+        # crypto crate (token/JWE/HMAC/HKDF) where clippy catches real
+        # soundness issues; an advisory lint never enforces that intent.
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --all-targets --workspace -- -D warnings 2>&1 | tee clippy.log
 
       # emerald-contracts-pyo3 uses pyo3's extension-module feature,
       # which can't be linked by plain `cargo build` — it requires the
@@ -323,10 +328,13 @@ jobs:
           set -o pipefail
           cargo test --workspace --exclude emerald-contracts-pyo3 --all-targets 2>&1 | tee cargo-test.log
 
-      - name: Surface failing tests as annotations
+      - name: Surface fmt / clippy / test failures as annotations
         if: failure()
+        # First 10 hits only: GitHub shows at most 10 error annotations per step.
         run: |
-          grep -E "^test .* FAILED|panicked at|^error: test failed" cargo-test.log | sort -u | sed 's/^/::error::/' || true
+          cat fmt.log clippy.log cargo-test.log 2>/dev/null \
+            | grep -E "^Diff in |^error(\[E[0-9]+\])?: |^ +--> |^test .* FAILED|panicked at" \
+            | head -10 | sed 's/^/::error::/' || true
 
   audit:
     # Dependency vulnerability gate (production-readiness MEDIUM #7/#23).
@@ -374,8 +382,25 @@ jobs:
         # exception must be explicit, vulnerability-specific, and time-bounded.
         run: npm audit --audit-level=moderate --omit=dev
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+      # cargo-audit and cargo-deny were compiled from source on every run (the
+      # cargo cache above holds crates, not binaries) — ~6 min of a job whose
+      # actual audits take seconds. Install into a private root and cache the
+      # binaries, keyed on the pinned versions.
+      - name: Cache cargo-audit + cargo-deny binaries
+        id: cargo-tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo-tools/bin
+          key: ${{ runner.os }}-cargo-tools-cargo-audit-0.22.2-cargo-deny-0.20.2
+
+      - name: Install cargo-audit + cargo-deny (cache miss only)
+        if: steps.cargo-tools.outputs.cache-hit != 'true'
+        run: |
+          cargo install --locked --root ~/.cargo-tools cargo-audit@0.22.2
+          cargo install --locked --root ~/.cargo-tools cargo-deny@0.20.2
+
+      - name: Put the cached tools on PATH
+        run: echo "$HOME/.cargo-tools/bin" >> "$GITHUB_PATH"
 
       - name: cargo audit
         run: cargo audit
@@ -411,9 +436,6 @@ jobs:
       # in THIRD-PARTY-LICENSES.md with a written source offer — never linked,
       # so it cannot contaminate first-party code. cargo-deny reads Cargo.lock
       # (no compile); license-checker scans the production JS tree.
-      - name: Install cargo-deny
-        run: cargo install cargo-deny --locked
-
       - name: cargo deny check licenses (Rust)
         run: cargo deny check licenses
 

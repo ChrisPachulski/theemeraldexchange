@@ -101,7 +101,10 @@ pub fn router(state: AppState) -> Router {
         .route("/music/albums/{id}/art", get(album_art))
         .route("/music/tracks", get(list_tracks))
         .route("/play/{kind}/{id}/grant", post(play_grant))
-        .route("/watch", get(get_watch).post(post_watch).delete(delete_watch))
+        .route(
+            "/watch",
+            get(get_watch).post(post_watch).delete(delete_watch),
+        )
         .route("/playlists", get(list_playlists).post(create_playlist))
         .route(
             "/playlists/{id}",

@@ -156,7 +156,9 @@ pub(super) async fn delete_watch(
         .bind(&sub)
         .execute(&state.db.pool)
         .await?;
-    Ok(Json(json!({ "ok": true, "deleted": result.rows_affected() })))
+    Ok(Json(
+        json!({ "ok": true, "deleted": result.rows_affected() }),
+    ))
 }
 
 #[cfg(test)]

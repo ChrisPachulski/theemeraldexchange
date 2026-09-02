@@ -49,6 +49,16 @@ per-feature release; the current package version is 0.9.0.
 - Added SECURITY.md and untracked internal planning documents that had leaked
   into the public repository (016d97e).
 
+### Changed
+
+- Deploys are gated on CI: `scripts/ci-gate.sh` (called by `deploy-nas.sh`
+  and `deploy-image.sh`) refuses an unpushed HEAD, waits for in-flight GitHub
+  Actions checks, and aborts on a red or cancelled one; `--skip-ci-gate` /
+  `SKIP_CI_GATE=1` overrides loudly. The `rust` CI job now surfaces the
+  offending fmt/clippy/test lines as public annotations, and the `audit` job
+  caches its `cargo-audit`/`cargo-deny` binaries instead of compiling them
+  from source on every run.
+
 ## 2026-09
 
 Two commits landed in September before this document was written; see

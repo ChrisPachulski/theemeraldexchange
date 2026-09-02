@@ -231,6 +231,14 @@ The deploy payload is `git archive HEAD` — **commit first**, then deploy. An
 uncommitted edit never ships (the script refuses a dirty tree for exactly this
 reason).
 
+**CI gates the deploy.** Both `deploy-nas.sh` and `deploy-image.sh` call
+`scripts/ci-gate.sh`, which refuses an unpushed HEAD and waits (up to 25 min,
+polling GitHub once a minute) for every Actions check on HEAD to finish; a
+red or cancelled check aborts the deploy naming the job. So the working loop
+is `git push && ./scripts/deploy-nas.sh` — the script idles until CI is
+green. `--skip-ci-gate` (or `SKIP_CI_GATE=1` for either script) ships anyway,
+with a warning; use it for a hotfix soak, never as the default.
+
 | What changed | Command | Effect |
 |---|---|---|
 | SPA only (anything in `src/`) | `git push` | Netlify auto-builds and deploys. ~30s. |
