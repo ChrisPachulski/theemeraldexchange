@@ -266,16 +266,16 @@ async function checkMembership(token: string): Promise<CheckStatus> {
       if (probe.status === 401 || probe.status === 403) return 'auth_revoked'
       // 4xx other than auth, or 5xx — treat as transient. Don't lock
       // the user out on a plex.tv hiccup; we'll re-check next TTL.
-      console.warn('[sessionGate] plex membership probe HTTP', probe.status)
+      authLog.warn('plex membership probe HTTP', { event: 'plex_probe', status: probe.status })
       return 'unknown'
     }
     // network_error
     return 'unknown'
   } catch (e) {
-    console.error(
-      '[sessionGate] plex membership probe threw:',
-      e instanceof Error ? e.message : String(e),
-    )
+    authLog.error('plex membership probe threw', {
+      event: 'plex_probe',
+      message: e instanceof Error ? e.message : String(e),
+    })
     return 'unknown'
   } finally {
     clearTimeout(timer)

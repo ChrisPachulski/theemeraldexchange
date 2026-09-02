@@ -3,6 +3,7 @@
 // back to a default and log when the configured value doesn't parse.
 
 import cron from 'node-cron'
+import { createLogger } from './logger.js'
 
 export function resolveCronExpr(
   label: string,
@@ -11,6 +12,6 @@ export function resolveCronExpr(
   defaultExpr: string,
 ): string {
   if (cron.validate(cronExpr)) return cronExpr
-  console.error(`[${label}] invalid ${envVar} ${JSON.stringify(cronExpr)}; using ${defaultExpr}`)
+  createLogger(label).error(`invalid ${envVar} ${JSON.stringify(cronExpr)}; using ${defaultExpr}`)
   return defaultExpr
 }

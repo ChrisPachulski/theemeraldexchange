@@ -29,6 +29,9 @@ import { promises as fs } from 'fs'
 import { dirname } from 'path'
 import { env } from '../env.js'
 import { sanitizeTitle, normalizeIdTitleList } from './sanitize.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('rejections')
 
 export type RejectionsKind = 'movie' | 'tv'
 export type RejectionEntry = { id: number; title: string }
@@ -157,7 +160,7 @@ export function addRejection(
   // this op rejects. Do NOT return this — return `op` below so the
   // caller's `await` sees real failures.
   writeQueue = op.catch((err) => {
-    console.error('[rejections] write failed:', err)
+    log.error('write failed', { error: err })
   })
   return op
 }
@@ -190,7 +193,7 @@ export function updateRejectionTitleIfPresent(
     cached = next
   })
   writeQueue = op.catch((err) => {
-    console.error('[rejections] title-only update failed:', err)
+    log.error('title-only update failed', { error: err })
   })
   return op
 }
@@ -205,7 +208,7 @@ export function removeRejection(kind: RejectionsKind, tmdbId: number): Promise<v
     cached = next
   })
   writeQueue = op.catch((err) => {
-    console.error('[rejections] write failed:', err)
+    log.error('write failed', { error: err })
   })
   return op
 }

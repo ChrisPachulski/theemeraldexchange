@@ -66,7 +66,7 @@ describe('applyMigrations', () => {
 
   // 1. Fresh bootstrap.
   it('bootstraps schema_migrations, applies the migration, and records a hex checksum', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     writeMigration(dir, '0001_init.sql', 'CREATE TABLE foo (id INTEGER);')
 
@@ -84,7 +84,7 @@ describe('applyMigrations', () => {
 
   // 2. Idempotency — re-run is a no-op (no IF NOT EXISTS, so re-exec would throw).
   it('is idempotent: a second call does not re-execute the migration', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     writeMigration(dir, '0001_init.sql', 'CREATE TABLE foo (id INTEGER);')
 
@@ -95,7 +95,7 @@ describe('applyMigrations', () => {
 
   // 3. Checksum match on already-applied — no mismatch warn.
   it('does not warn when re-running with identical file content', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     writeMigration(dir, '0001_init.sql', 'CREATE TABLE foo (id INTEGER);')
@@ -109,7 +109,7 @@ describe('applyMigrations', () => {
 
   // 4. Checksum MISMATCH warning when file edited after apply.
   it('warns on checksum mismatch and does not re-execute the migration', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     const file = path.join(dir, '0001_init.sql')
@@ -129,7 +129,7 @@ describe('applyMigrations', () => {
 
   // 5. CRLF normalization — checksum is line-ending-agnostic.
   it('produces an identical checksum for CRLF and LF variants of the same SQL', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const lfSql = 'CREATE TABLE foo (\n  id INTEGER\n);\n'
     const crlfSql = lfSql.replace(/\n/g, '\r\n')
 
@@ -151,7 +151,7 @@ describe('applyMigrations', () => {
 
   // 6. DESTRUCTIVE safeguard — DROP TABLE without marker is REFUSED.
   it('refuses a DROP TABLE migration that lacks the -- DESTRUCTIVE marker', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     writeMigration(dir, '0001_drop.sql', 'DROP TABLE foo;')
 
@@ -164,7 +164,7 @@ describe('applyMigrations', () => {
 
   // 7. DESTRUCTIVE with marker but NO serverDb handle.
   it('refuses a DESTRUCTIVE migration when no serverDb handle is provided', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     // Pre-create the table so the SQL would otherwise be valid.
     db.exec('CREATE TABLE foo (id INTEGER);')
@@ -176,7 +176,7 @@ describe('applyMigrations', () => {
 
   // 8. DESTRUCTIVE with serverDb but server_state table missing.
   it('refuses a DESTRUCTIVE migration when server_state table does not exist', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     db.exec('CREATE TABLE foo (id INTEGER);')
     writeMigration(dir, '0001_drop.sql', '-- DESTRUCTIVE\nDROP TABLE foo;')
@@ -190,7 +190,7 @@ describe('applyMigrations', () => {
 
   // 9. DESTRUCTIVE with server_state present but NO last_backup_at row.
   it('refuses a DESTRUCTIVE migration when no backup has been taken', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     db.exec('CREATE TABLE foo (id INTEGER);')
     writeMigration(dir, '0001_drop.sql', '-- DESTRUCTIVE\nDROP TABLE foo;')
@@ -205,7 +205,7 @@ describe('applyMigrations', () => {
 
   // 10. DESTRUCTIVE with stale backup.
   it('refuses a DESTRUCTIVE migration when the last backup is older than 10 minutes', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     db.exec('CREATE TABLE foo (id INTEGER);')
     writeMigration(dir, '0001_drop.sql', '-- DESTRUCTIVE\nDROP TABLE foo;')
@@ -222,7 +222,7 @@ describe('applyMigrations', () => {
 
   // 11. DESTRUCTIVE with FRESH backup — happy path.
   it('applies a DESTRUCTIVE migration when a fresh backup exists', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     db.exec('CREATE TABLE foo (id INTEGER);')
     writeMigration(dir, '0001_drop.sql', '-- DESTRUCTIVE\nDROP TABLE foo;')
@@ -240,7 +240,7 @@ describe('applyMigrations', () => {
 
   // 12. Invalid last_backup_at date.
   it('refuses a DESTRUCTIVE migration when last_backup_at is not a valid date', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     db.exec('CREATE TABLE foo (id INTEGER);')
     writeMigration(dir, '0001_drop.sql', '-- DESTRUCTIVE\nDROP TABLE foo;')
@@ -256,7 +256,7 @@ describe('applyMigrations', () => {
 
   // 13. Legacy _migrations upgrade path with backfill from file content.
   it('upgrades a legacy _migrations table and backfills the file checksum', () => {
-    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const info = vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     const sql = 'CREATE TABLE foo (id INTEGER);'
     writeMigration(dir, '0001_init.sql', sql)
@@ -283,7 +283,7 @@ describe('applyMigrations', () => {
 
   // 14. Legacy backfill when file is missing on disk.
   it('records (file-not-found) for a legacy row whose file is missing, and treats it as a non-mismatch later', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { db, dir } = freshSetup()
 
@@ -309,7 +309,7 @@ describe('applyMigrations', () => {
 
   // 15. Legacy row with non-numeric id prefix is skipped.
   it('skips a legacy row whose id has a non-numeric prefix', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { db, dir } = freshSetup()
 
@@ -326,7 +326,7 @@ describe('applyMigrations', () => {
 
   // 16. schema_migrations exists with a non-canonical first column — do not corrupt it.
   it('warns and leaves a non-canonical schema_migrations table intact', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     db.exec('CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);')
@@ -345,7 +345,7 @@ describe('applyMigrations', () => {
 
   // 17. Forward-compat / downgrade warning — version recorded but no .sql file.
   it('warns about a recorded version with no matching .sql file but still applies others', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     // Canonical table pre-populated with a future version 99 that has no file.
@@ -368,7 +368,7 @@ describe('applyMigrations', () => {
     )
     expect(downgradeCalls.length).toBeGreaterThan(0)
     // The downgrade warn references version 99.
-    expect(downgradeCalls.some(c => c.includes(99))).toBe(true)
+    expect(downgradeCalls.some(c => String(c[0]).includes('99'))).toBe(true)
 
     expect(tableExists(db, 'foo')).toBe(true)
     expect(migrationRows(db).map(r => r.version).sort((a, b) => a - b)).toEqual([1, 99])
@@ -376,7 +376,7 @@ describe('applyMigrations', () => {
 
   // 18. versionFromFilename non-numeric prefix at apply time.
   it('throws when an enumerated migration file has a non-numeric prefix', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     writeMigration(dir, 'abc_init.sql', 'CREATE TABLE foo (id INTEGER);')
 
@@ -385,7 +385,7 @@ describe('applyMigrations', () => {
 
   // 19. Rollback on migration failure.
   it('rolls back the transaction and records no row when a migration errors mid-exec', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     writeMigration(dir, '0001_bad.sql', 'CREATE TABLE ok (id INTEGER); INVALID SQL HERE;')
 
@@ -396,7 +396,7 @@ describe('applyMigrations', () => {
 
   // 20. Multiple migrations apply in sorted version order.
   it('applies migrations in sorted version order regardless of enumeration order', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const { db, dir } = freshSetup()
     // Written out of order; 0002 ALTERs the table 0001 created — proves ordering.
     writeMigration(dir, '0002_add_col.sql', 'ALTER TABLE foo ADD COLUMN name TEXT;')
@@ -410,7 +410,7 @@ describe('applyMigrations', () => {
   })
 
   it('upgrades the real members schema for Google without losing the recovery snapshot', () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {})
+    vi.spyOn(console, 'log').mockImplementation(() => {})
     const db = memDb()
     const dir = freshDir()
     const realDir = path.resolve(__dirname, '..', 'migrations', 'server')

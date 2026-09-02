@@ -16,6 +16,7 @@
 
 import { appendGrabEvent } from './grabLog.js'
 import { env } from '../env.js'
+import { createLogger } from './logger.js'
 
 export type ArrApp = 'sonarr' | 'radarr'
 
@@ -40,9 +41,10 @@ export type ArrGrabEvent = Omit<GrabEventInput, 'app'>
 /** Best-effort grab-log append with the app injected — the grab pipelines
  *  must never fail a user-facing add because the audit log write failed. */
 export function createGrabEventRecorder(app: ArrApp): (event: ArrGrabEvent) => Promise<void> {
+  const log = createLogger(app)
   return (event) =>
     appendGrabEvent({ app, ...event }).catch((err) => {
-      console.error(`[${app}] grab log write failed:`, err)
+      log.error('grab log write failed', { error: err })
     })
 }
 
@@ -87,6 +89,7 @@ const RESERVATION_TTL_MS = 15 * 60 * 1000
 export function createReservationLedger(app: ArrApp | 'arr' = 'arr'): ReservationLedger {
   type Entry = { bytes: number; expiresAt: number }
   const pending = new Map<string, Entry[]>()
+  const log = createLogger(app)
 
   // Drop expired reservations on every read/write, returning the live set.
   // A pruned entry almost always means a grab skipped its release — log it
@@ -102,11 +105,11 @@ export function createReservationLedger(app: ArrApp | 'arr' = 'arr'): Reservatio
       else prunedBytes += e.bytes
     }
     if (prunedBytes > 0) {
-      console.warn(
-        `[${app}] pruned ${(prunedBytes / 1024 ** 3).toFixed(2)}GB of stale disk reservation ` +
-          `on ${path} (held >${RESERVATION_TTL_MS / 60000}m) — a cap grab likely missed its ` +
-          `release; self-healing the free-space gate.`,
-      )
+      log.warn('pruned stale disk reservation — a cap grab likely missed its release; self-healing the free-space gate', {
+        prunedGb: Number((prunedBytes / 1024 ** 3).toFixed(2)),
+        path,
+        heldOverMinutes: RESERVATION_TTL_MS / 60000,
+      })
     }
     if (kept.length) pending.set(path, kept)
     else pending.delete(path)

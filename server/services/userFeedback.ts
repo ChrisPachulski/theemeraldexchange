@@ -30,6 +30,9 @@ import { promises as fs } from 'fs'
 import { dirname } from 'path'
 import { env } from '../env.js'
 import { sanitizeTitle, normalizeIdTitleList } from './sanitize.js'
+import { createLogger } from './logger.js'
+
+const log = createLogger('userFeedback')
 
 export type FeedbackKind = 'movie' | 'tv'
 export type FeedbackSignal = 'like' | 'dislike'
@@ -104,11 +107,11 @@ async function migrateNamespaceKeys(file: FeedbackFile): Promise<FeedbackFile> {
 
   try {
     await persistSnapshot(migrated)
-    console.info('[userFeedback] migrated %d legacy sub key(s) to namespaced form', legacyKeys.length)
+    log.info('migrated legacy sub key(s) to namespaced form', { count: legacyKeys.length })
   } catch (err) {
     // Non-fatal: the in-memory state is correct; the next successful
     // write will persist the namespaced keys.
-    console.warn('[userFeedback] namespace migration persist failed (will retry on next write):', err)
+    log.warn('namespace migration persist failed (will retry on next write)', { error: err })
   }
 
   return migrated
@@ -233,7 +236,7 @@ function mutate(
   // this op rejects. Do NOT return this — return `op` below so the
   // caller's `await` sees real failures.
   writeQueue = op.catch((err) => {
-    console.error('[userFeedback] write failed:', err)
+    log.error('write failed', { error: err })
   })
   return op
 }
@@ -289,7 +292,7 @@ export function updateLikedTitleIfPresent(
     cached = snapshot
   })
   writeQueue = op.catch((err) => {
-    console.error('[userFeedback] title-only update failed:', err)
+    log.error('title-only update failed', { error: err })
   })
   return op
 }

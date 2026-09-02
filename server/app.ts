@@ -13,6 +13,7 @@ import { requestId } from 'hono/request-id'
 import { env } from './env.js'
 import { NotConfiguredError } from './services/upstream.js'
 import { serverDb } from './services/serverDb.js'
+import { createLogger } from './services/logger.js'
 import { requireSafeOrigin } from './middleware/csrf.js'
 import { readSession } from './session.js'
 import { auth, me } from './auth.js'
@@ -47,6 +48,9 @@ import { version } from './routes/version.js'
 
 export const app = new Hono()
 
+const log = createLogger('app')
+const healthLog = createLogger('health')
+
 // §15 telemetry (finding 14-0): @sentry/node v9 + Hono does NOT auto-instrument
 // route handlers — an exception thrown in any /api/* handler would otherwise
 // become Hono's default 500 and never reach Glitchtip. Capture every handler
@@ -63,7 +67,10 @@ app.onError((err, c) => {
   // LOW-29: tag the exception with the request id so a Glitchtip event can be
   // tied back to the matching `[<id>]` log line (and the client's X-Request-Id).
   Sentry.captureException(err, { tags: { request_id: c.get('requestId') } })
-  console.error('[app] unhandled error:', err instanceof Error ? err.stack ?? err.message : err)
+  log.error('unhandled error', {
+    requestId: c.get('requestId'),
+    detail: err instanceof Error ? err.stack ?? err.message : String(err),
+  })
   return c.json({ error: 'internal' }, 500)
 })
 
@@ -113,9 +120,9 @@ app.use('*', async (c, next) => {
   const path = redactRequestSecrets(url.pathname + url.search)
   const rid = c.get('requestId')
   const start = Date.now()
-  console.log(`<-- ${c.req.method} ${path} [${rid}]`)
+  log.info(`<-- ${c.req.method} ${path} [${rid}]`)
   await next()
-  console.log(`--> ${c.req.method} ${path} ${c.res.status} ${Date.now() - start}ms [${rid}]`)
+  log.info(`--> ${c.req.method} ${path} ${c.res.status} ${Date.now() - start}ms [${rid}]`)
 })
 
 // CORS — only matters in prod, where SPA is on a different origin.
@@ -164,7 +171,9 @@ app.get('/api/health', (c) => {
     serverDb().raw.prepare('SELECT 1').get()
     return c.json({ ok: true })
   } catch (e) {
-    console.error('[health] server.db probe failed:', e instanceof Error ? e.message : e)
+    healthLog.error('server.db probe failed', {
+      message: e instanceof Error ? e.message : String(e),
+    })
     return c.json({ ok: false, reason: 'db_unavailable' }, 503)
   }
 })
