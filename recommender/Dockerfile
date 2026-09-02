@@ -117,7 +117,8 @@ ENV RECOMMENDER_DB_PATH=/data/exchange.db \
     RECOMMENDER_MIGRATIONS_DIR=/srv/migrations \
     RECOMMENDER_HOST=0.0.0.0 \
     RECOMMENDER_PORT=8000 \
-    HF_HOME=/data/hf-cache
+    HF_HOME=/data/hf-cache \
+    EEX_REQUIRE_BINDING=1
 
 EXPOSE 8000
 

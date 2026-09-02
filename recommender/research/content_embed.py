@@ -72,7 +72,7 @@ def embed_catalog(conn, kind: str, ids: list[int], *, model_name: str = DEFAULT_
     tag = model_name.replace("/", "_")
     npz = CACHE / f"content_emb_{tag}_{kind}_{len(ids)}.npz"
     if npz.exists():
-        d = np.load(npz, allow_pickle=True)
+        d = np.load(npz)
         return list(d["ids"]), d["mat"]
 
     import torch

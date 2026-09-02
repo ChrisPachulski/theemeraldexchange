@@ -109,13 +109,17 @@ def get_db() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _secret_matches(candidate: str | None) -> bool:
+    expected = CONFIG.event_secret
+    return bool(expected) and candidate is not None and hmac.compare_digest(candidate, expected)
+
+
 def require_event_secret(
     x_recommender_secret: str | None = Header(default=None),
 ) -> None:
-    expected = CONFIG.event_secret
-    if not expected:
+    if not CONFIG.event_secret:
         raise HTTPException(status_code=503, detail="event secret is not configured")
-    if x_recommender_secret is None or not hmac.compare_digest(x_recommender_secret, expected):
+    if not _secret_matches(x_recommender_secret):
         raise HTTPException(status_code=401, detail="invalid event secret")
 
 
@@ -141,29 +145,41 @@ def authoritative_sub(principal: InternalPrincipal | None, body_sub: str) -> str
 
 
 @app.get("/health", response_model=HealthResponse)
-def health(conn: sqlite3.Connection = Depends(get_db)) -> HealthResponse:
+def health(
+    conn: sqlite3.Connection = Depends(get_db),
+    x_recommender_secret: str | None = Header(default=None),
+) -> HealthResponse:
+    """Liveness probe. Unauthenticated — the compose healthcheck hits this
+    with no header — so only ``ok``/``titles``/``title_vectors``/
+    ``active_model_version`` are always populated. ``db_path``,
+    ``internal_principal_mode``, and ``optimizer`` disclose internal
+    topology/config, so they're gated behind the same event secret the
+    /events and /score routes require (reusing `_secret_matches` without
+    making the secret mandatory for liveness)."""
     titles = conn.execute("SELECT COUNT(*) AS c FROM titles").fetchone()["c"]
     vecs = conn.execute("SELECT COUNT(*) AS c FROM title_vec").fetchone()["c"]
     cfg_row = conn.execute(
         "SELECT version FROM model_config WHERE active = 1 LIMIT 1"
     ).fetchone()
-    # Surface the caller-identity enforcement mode + optimizer holdout status so
-    # operators can detect an identity-unauthenticated ("off") or record-only
-    # deployment at a glance.
-    optimizer_status: dict[str, Any]
-    try:
-        from workers import optimizer
+    authenticated = _secret_matches(x_recommender_secret)
+    optimizer_status: dict[str, Any] | None = None
+    if authenticated:
+        # Surface the caller-identity enforcement mode + optimizer holdout
+        # status so operators can detect an identity-unauthenticated ("off")
+        # or record-only deployment at a glance.
+        try:
+            from workers import optimizer
 
-        optimizer_status = optimizer.holdout_status()
-    except Exception:  # noqa: BLE001 - /health must never 500 on an optional probe
-        optimizer_status = {"mode": "unknown"}
+            optimizer_status = optimizer.holdout_status()
+        except Exception:  # noqa: BLE001 - /health must never 500 on an optional probe
+            optimizer_status = {"mode": "unknown"}
     return HealthResponse(
         ok=True,
-        db_path=str(CONFIG.db_path),
+        db_path=str(CONFIG.db_path) if authenticated else None,
         titles=titles,
         title_vectors=vecs,
         active_model_version=cfg_row["version"] if cfg_row else None,
-        internal_principal_mode=CONFIG.internal_principal_mode,
+        internal_principal_mode=CONFIG.internal_principal_mode if authenticated else None,
         optimizer=optimizer_status,
     )
 

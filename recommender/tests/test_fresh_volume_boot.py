@@ -38,15 +38,20 @@ from app import db as db_module
 from app import main as main_module
 
 
+HEALTH_SECRET = "s" * 32
+
+
 def _point_config_at(monkeypatch: pytest.MonkeyPatch, db_path: Path) -> None:
     """Repoint every module-level CONFIG reference at a cold volume's db_path.
 
     db.py, main.py and config.py each bound ``CONFIG`` at import time, so a
     single monkeypatch on one of them would leave the others pointing at the
     real ./data/exchange.db. migrations_dir stays the REAL one so the boot
-    applies the production migration set.
+    applies the production migration set. event_secret is set so the test can
+    authenticate to /health for the db_path assertion below (see main.py:health
+    — db_path is gated behind X-Recommender-Secret).
     """
-    cold = replace(config_module.CONFIG, db_path=db_path)
+    cold = replace(config_module.CONFIG, db_path=db_path, event_secret=HEALTH_SECRET)
     monkeypatch.setattr(config_module, "CONFIG", cold)
     monkeypatch.setattr(db_module, "CONFIG", cold)
     monkeypatch.setattr(main_module, "CONFIG", cold)
@@ -72,7 +77,7 @@ def test_fresh_volume_boot_serves_health(
     # the context-manager form the lifespan never runs (that's why the existing
     # /health test can hand-seed an in-memory DB).
     with TestClient(main_module.app) as client:
-        resp = client.get("/health")
+        resp = client.get("/health", headers={"X-Recommender-Secret": HEALTH_SECRET})
 
     assert resp.status_code == 200, resp.text
     body = resp.json()

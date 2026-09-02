@@ -135,12 +135,13 @@ class RejectionEventRequest(BaseModel):
 
 class HealthResponse(BaseModel):
     ok: bool
-    db_path: str
+    # db_path, internal_principal_mode, and optimizer are internal-topology
+    # detail, not liveness — /health is unauthenticated (the compose
+    # healthcheck hits it with no header), so these three are None unless the
+    # request carries a valid X-Recommender-Secret. See app/main.py:health.
+    db_path: str | None
     titles: int
     title_vectors: int
     active_model_version: str | None
-    # Caller-identity enforcement mode (off/log/enforce) so operators can detect
-    # an identity-unauthenticated deployment. Optional for back-compat.
     internal_principal_mode: str | None = None
-    # Optimizer holdout health: {"mode": "active"|"record-only"|"unknown", ...}.
     optimizer: dict[str, Any] | None = None

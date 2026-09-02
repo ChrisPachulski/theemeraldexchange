@@ -79,11 +79,15 @@ def _seeded_conn() -> sqlite3.Connection:
     return conn
 
 
-def test_health_surfaces_principal_mode(monkeypatch):
-    _set_mode(monkeypatch, "off")
+def _set_mode_and_secret(monkeypatch: pytest.MonkeyPatch, mode: str, secret: str) -> None:
+    new = replace(config_module.CONFIG, internal_principal_mode=mode, event_secret=secret)
+    monkeypatch.setattr(config_module, "CONFIG", new)
+    monkeypatch.setattr(main_module, "CONFIG", new)
+
+
+def test_health_omits_sensitive_fields_when_unauthenticated(monkeypatch):
+    _set_mode_and_secret(monkeypatch, "off", "s" * 32)
     conn = _seeded_conn()
-    # Override the per-request DB dependency so /health doesn't need a real
-    # on-disk migrated database for this introspection assertion.
     main_module.app.dependency_overrides[main_module.get_db] = lambda: conn
     try:
         client = TestClient(main_module.app)
@@ -92,8 +96,44 @@ def test_health_surfaces_principal_mode(monkeypatch):
         main_module.app.dependency_overrides.pop(main_module.get_db, None)
         conn.close()
     assert body["ok"] is True
+    assert body["db_path"] is None
+    assert body["internal_principal_mode"] is None
+    assert body["optimizer"] is None
+
+
+def test_health_surfaces_principal_mode(monkeypatch):
+    secret = "s" * 32
+    _set_mode_and_secret(monkeypatch, "off", secret)
+    conn = _seeded_conn()
+    # Override the per-request DB dependency so /health doesn't need a real
+    # on-disk migrated database for this introspection assertion.
+    main_module.app.dependency_overrides[main_module.get_db] = lambda: conn
+    try:
+        client = TestClient(main_module.app)
+        body = client.get("/health", headers={"X-Recommender-Secret": secret}).json()
+    finally:
+        main_module.app.dependency_overrides.pop(main_module.get_db, None)
+        conn.close()
+    assert body["ok"] is True
+    assert body["db_path"] == str(config_module.CONFIG.db_path)
     assert body["internal_principal_mode"] == "off"
     assert body["optimizer"]["mode"] in {"active", "record-only", "unknown"}
+
+
+def test_health_wrong_secret_is_treated_as_unauthenticated(monkeypatch):
+    _set_mode_and_secret(monkeypatch, "off", "s" * 32)
+    conn = _seeded_conn()
+    main_module.app.dependency_overrides[main_module.get_db] = lambda: conn
+    try:
+        client = TestClient(main_module.app)
+        body = client.get("/health", headers={"X-Recommender-Secret": "wrong"}).json()
+    finally:
+        main_module.app.dependency_overrides.pop(main_module.get_db, None)
+        conn.close()
+    assert body["ok"] is True
+    assert body["db_path"] is None
+    assert body["internal_principal_mode"] is None
+    assert body["optimizer"] is None
 
 
 def test_score_enforce_rejects_body_sub_mismatch(monkeypatch):
