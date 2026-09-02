@@ -311,6 +311,10 @@ jobs:
       # If this fails, Rust and TS have diverged on a wire-level format
       # and Apple/M3/M4 ports will silently break.
       - name: cargo test (workspace minus pyo3)
+        # The runner has the box to itself, so the scanner's 100-file wall-clock
+        # bound is asserted here (locally it only reports, see scanner.rs).
+        env:
+          EEX_PERF_ASSERT: '1'
         run: cargo test --workspace --exclude emerald-contracts-pyo3 --all-targets
 
   audit:
