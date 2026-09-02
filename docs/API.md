@@ -160,7 +160,7 @@ native PIN flow of their own.
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/api/admin/invites` | admin | List outstanding invites (redacted, never the plaintext code). (`adminInvites.ts:41`) |
-| POST | `/api/admin/invites` | admin | Issue a new invite; returns the plaintext code exactly once. (`adminInvites.ts:47`) |
+| POST | `/api/admin/invites` | admin | Issue a new invite; returns the plaintext code exactly once. Body `{ label?, expiresInDays?, maxUses?, role? }`; `role: 'admin'` mints an owner invite whose redeemer becomes an admin (for members whose sub is not known ahead of time). (`adminInvites.ts:47`) |
 | DELETE | `/api/admin/invites/:prefix` | admin | Revoke an invite by its code-hash prefix. (`adminInvites.ts:92`) |
 | GET | `/api/admin/members` | admin | List members (active + revoked), including synthesized rows for `ADMIN_SUBS` owners who never redeemed an invite. (`adminInvites.ts:116`) |
 | DELETE | `/api/admin/members/:sub` | admin | Revoke a member; cascades to device-token and IPTV-playlist-token revocation. (`adminInvites.ts:143`) |

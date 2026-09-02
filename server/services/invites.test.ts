@@ -93,6 +93,25 @@ describe('invites service', () => {
     expect(row.invited_by).toBe(ADMIN)
   })
 
+  it('an owner invite (role admin) makes the redeemer an admin; the default stays user', () => {
+    const owner = issueInvite(ADMIN, { role: 'admin', label: 'reviewer' })
+    expect(owner.role).toBe('admin')
+    expect(redeemInvite(owner.code, ALICE, 'Alice', 'apple')).toEqual({ ok: true, created: true })
+    expect(isMember(ALICE)?.role).toBe('admin')
+
+    const plain = issueInvite(ADMIN)
+    expect(plain.role).toBe('user')
+    expect(listInvites().find((i) => i.code_hash_prefix === owner.code_hash_prefix)?.role).toBe('admin')
+    expect(listInvites().find((i) => i.code_hash_prefix === plain.code_hash_prefix)?.role).toBe('user')
+  })
+
+  it('re-granting a revoked member through an owner invite restores them as an admin', () => {
+    expect(redeemInvite(issueInvite(ADMIN).code, ALICE, 'Alice', 'apple').ok).toBe(true)
+    serverDb().raw.prepare(`UPDATE members SET revoked_at = ? WHERE sub = ?`).run(new Date().toISOString(), ALICE)
+    expect(redeemInvite(issueInvite(ADMIN, { role: 'admin' }).code, ALICE, 'Alice', 'apple')).toEqual({ ok: true, created: true })
+    expect(isMember(ALICE)?.role).toBe('admin')
+  })
+
   it('redeems an invite for a Google identity with its role and issuer intact', () => {
     const { code } = issueInvite(ADMIN)
     expect(redeemInvite(code, GABRIEL, 'Gabriel', 'google')).toEqual({

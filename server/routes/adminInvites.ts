@@ -47,7 +47,7 @@ adminInvites.get('/', (c) => {
 adminInvites.post('/', async (c) => {
   const session = c.get('session')
   const body = (await c.req.json().catch(() => null)) as
-    | { label?: unknown; expiresInDays?: unknown; maxUses?: unknown }
+    | { label?: unknown; expiresInDays?: unknown; maxUses?: unknown; role?: unknown }
     | null
 
   // All fields optional; validate the ones supplied. A bad type fails the
@@ -83,9 +83,20 @@ adminInvites.post('/', async (c) => {
     }
   }
 
+  // role: 'admin' mints an owner invite (the redeemer becomes an admin), for
+  // members whose provider sub is not known ahead of time. Default 'user'.
+  let role: 'user' | 'admin' = 'user'
+  if (body?.role !== undefined) {
+    if (body.role === 'user' || body.role === 'admin') {
+      role = body.role
+    } else {
+      return c.json({ error: 'invalid_body', message: "role must be 'user' or 'admin'" }, 400)
+    }
+  }
+
   // issueInvite returns the plaintext code exactly once — this is the only
   // place it is ever surfaced. Shape matches the SPA CreatedInvite.
-  const created = issueInvite(session.sub, { label, expiresInDays, maxUses })
+  const created = issueInvite(session.sub, { label, expiresInDays, maxUses, role })
   return c.json(created, 201)
 })
 

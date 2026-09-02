@@ -17,6 +17,9 @@ per-feature release; the current package version is 0.9.0.
   `409 last_admin`, and is advertised through `accountDeletionEnabled` on
   `/api/limits` (App Store Guideline 5.1.1(v)).
 - media-core `DELETE /api/media/watch` erases the acting user's watch rows.
+- Owner invites: `POST /api/admin/invites` accepts `role: 'admin'`, and the
+  member who redeems that invite (or is re-granted by it) becomes an admin.
+  Migration 0012 adds `invites.role`.
 - The hosted privacy policy (`/privacy`) is republished from the app's canonical
   `docs/PRIVACY.md`, dated September 1, 2026: account deletion, the diagnostics
   upload switch, hosted email/Google sign-in, and YouTube's embedded player.

@@ -132,6 +132,7 @@ function revocationState(sub: string, deviceJti: string, playlistJti: string) {
 type InviteSummary = {
   code_hash_prefix: string
   label: string | null
+  role: 'admin' | 'user'
   status: 'active' | 'expired' | 'revoked' | 'exhausted'
   max_uses: number
   used_count: number
@@ -141,6 +142,7 @@ type CreatedInvite = {
   code: string
   code_hash_prefix: string
   label: string | null
+  role: 'admin' | 'user'
   max_uses: number
   expires_at: string | null
 }
@@ -289,6 +291,22 @@ describe('admin invites + members routes', () => {
       expect(created.label).toBe("Mom's iPad") // trimmed
       expect(created.max_uses).toBe(3)
       expect(created.expires_at).not.toBeNull()
+    })
+
+    it("role 'admin' → 201 owner invite; any other role value → 400 mentioning role", async () => {
+      const created = await issueViaRoute({ role: 'admin', label: 'App Review' })
+      expect(created.role).toBe('admin')
+      const list = await listInvitesViaRoute()
+      expect(list.find((i) => i.code_hash_prefix === created.code_hash_prefix)?.role).toBe('admin')
+      const plain = await issueViaRoute({})
+      expect(plain.role).toBe('user')
+      const r = await appUnderTest().request('/invites', {
+        method: 'POST',
+        headers: { Cookie: await adminCookie(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: 'owner' }),
+      })
+      expect(r.status).toBe(400)
+      expect(((await r.json()) as { message: string }).message).toMatch(/role/)
     })
 
     it('non-string label → 400 invalid_body mentioning label', async () => {

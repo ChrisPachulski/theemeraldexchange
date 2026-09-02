@@ -36,6 +36,8 @@ export interface Invite {
   code_hash: string
   issued_by: string
   label: string | null
+  /** Role the redeeming member receives: 'user' (default) or 'admin' (owner invite). */
+  role: 'user' | 'admin'
   expires_at: string | null
   max_uses: number
   used_count: number
@@ -51,6 +53,7 @@ export interface InviteSummary {
   code_hash_prefix: string
   issued_by: string
   label: string | null
+  role: 'user' | 'admin'
   expires_at: string | null
   max_uses: number
   used_count: number
@@ -64,6 +67,7 @@ export interface IssueInviteResult {
   code: string
   code_hash_prefix: string
   label: string | null
+  role: 'user' | 'admin'
   expires_at: string | null
   max_uses: number
 }
@@ -91,11 +95,12 @@ function hashPrefix(codeHash: string): string {
  */
 export function issueInvite(
   adminSub: string,
-  opts: { label?: string | null; expiresInDays?: number | null; maxUses?: number } = {},
+  opts: { label?: string | null; expiresInDays?: number | null; maxUses?: number; role?: 'user' | 'admin' } = {},
 ): IssueInviteResult {
   parseSub(adminSub) // fail closed on a malformed issuer sub
 
   const label = opts.label ?? null
+  const role: 'user' | 'admin' = opts.role === 'admin' ? 'admin' : 'user'
   const maxUses = Math.max(1, Math.floor(opts.maxUses ?? DEFAULT_MAX_USES))
   // expiresInDays: a finite number sets an expiry that many days out (a
   // negative value yields an already-past expiry — a legitimate pre-expired
@@ -116,15 +121,16 @@ export function issueInvite(
 
   serverDb()
     .raw.prepare(
-      `INSERT INTO invites (code_hash, issued_by, label, expires_at, max_uses, used_count, created_at, revoked_at)
-       VALUES (?, ?, ?, ?, ?, 0, ?, NULL)`,
+      `INSERT INTO invites (code_hash, issued_by, label, role, expires_at, max_uses, used_count, created_at, revoked_at)
+       VALUES (?, ?, ?, ?, ?, ?, 0, ?, NULL)`,
     )
-    .run(codeHash, adminSub, label, expiresAt, maxUses, now.toISOString())
+    .run(codeHash, adminSub, label, role, expiresAt, maxUses, now.toISOString())
 
   return {
     code,
     code_hash_prefix: hashPrefix(codeHash),
     label,
+    role,
     expires_at: expiresAt,
     max_uses: maxUses,
   }
@@ -160,12 +166,12 @@ export function redeemInvite(
   const tx = db.raw.transaction((): RedeemResult => {
     const invite = db.raw
       .prepare(
-        `SELECT code_hash, issued_by, expires_at, max_uses, used_count, revoked_at
+        `SELECT code_hash, issued_by, role, expires_at, max_uses, used_count, revoked_at
            FROM invites
           WHERE code_hash = ?`,
       )
       .get(codeHash) as
-      | Pick<Invite, 'code_hash' | 'issued_by' | 'expires_at' | 'max_uses' | 'used_count' | 'revoked_at'>
+      | Pick<Invite, 'code_hash' | 'issued_by' | 'role' | 'expires_at' | 'max_uses' | 'used_count' | 'revoked_at'>
       | undefined
 
     if (!invite) return { ok: false, reason: 'invalid' }
@@ -206,18 +212,19 @@ export function redeemInvite(
               SET revoked_at = NULL,
                   joined_at = ?,
                   display_name = ?,
+                  role = ?,
                   auth_mode = ?,
                   invited_by = ?
             WHERE sub = ?`,
         )
-        .run(nowIso, displayName, authMode, invite.issued_by, sub)
+        .run(nowIso, displayName, invite.role, authMode, invite.issued_by, sub)
     } else {
       db.raw
         .prepare(
           `INSERT INTO members (sub, display_name, role, auth_mode, invited_by, joined_at, revoked_at)
-           VALUES (?, ?, 'user', ?, ?, ?, NULL)`,
+           VALUES (?, ?, ?, ?, ?, ?, NULL)`,
         )
-        .run(sub, displayName, authMode, invite.issued_by, nowIso)
+        .run(sub, displayName, invite.role, authMode, invite.issued_by, nowIso)
     }
 
     // Burn one use, guarded so a concurrent redeem cannot over-spend.
@@ -255,7 +262,7 @@ class ExhaustedRace extends Error {}
 export function listInvites(): InviteSummary[] {
   const rows = serverDb()
     .raw.prepare(
-      `SELECT code_hash, issued_by, label, expires_at, max_uses, used_count, created_at, revoked_at
+      `SELECT code_hash, issued_by, label, role, expires_at, max_uses, used_count, created_at, revoked_at
          FROM invites
         ORDER BY created_at DESC`,
     )
@@ -266,6 +273,7 @@ export function listInvites(): InviteSummary[] {
     code_hash_prefix: hashPrefix(r.code_hash),
     issued_by: r.issued_by,
     label: r.label,
+    role: r.role,
     expires_at: r.expires_at,
     max_uses: r.max_uses,
     used_count: r.used_count,
