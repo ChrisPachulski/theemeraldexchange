@@ -329,3 +329,18 @@ mod tests {
         reset_jobs_for_tests();
     }
 }
+
+/// Hard ceiling on a downloaded subtitle body. A feature-length `.srt` is tens
+/// of KiB; 5 MiB is orders of magnitude past any real one, so it only ever
+/// trips on a hostile or compromised OpenSubtitles response trying to exhaust
+/// memory. Enforced by a streamed byte-counter (see `routes.rs`), not by
+/// trusting `Content-Length`.
+pub const MAX_SUBTITLE_BYTES: usize = 5 * 1024 * 1024;
+
+/// Hard ceiling on the two OpenSubtitles API JSON hops (search results,
+/// download-link lookup) that precede the `.srt` fetch above. A real response
+/// is a few KiB; 1 MiB is orders of magnitude past that, so it only trips on
+/// a hostile/compromised API response trying to exhaust memory via `.json()`,
+/// which buffers to EOF with no bound of its own. Enforced the same way as
+/// `MAX_SUBTITLE_BYTES`: a streamed byte-counter, not trust in `Content-Length`.
+pub const MAX_SUBTITLE_API_JSON_BYTES: usize = 1024 * 1024;
