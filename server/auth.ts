@@ -114,6 +114,44 @@ const AUTH_CHECK_MAX_BODY_BYTES = 1024
 // for the Plex pinId body is too small. Allow 8KB for the apple route to
 // cover the token + nonce + inviteCode while still bounding the read.
 const AUTH_APPLE_MAX_BODY_BYTES = 8192
+// Server-issued Sign in with Apple nonces for the native device-pair flow.
+// The app fetches one (GET /apple/nonce), gives Apple its SHA-256 hex as
+// request.nonce, and returns the raw value beside the identity token; POST
+// /apple consumes it and compares SHA-256(raw) with the token's nonce claim.
+// Single-use and short-lived, so a captured identity token cannot be replayed
+// to mint a second device token. In-memory on purpose: one process serves an
+// install, and a restart costs an in-flight login exactly one retry.
+const APPLE_NONCE_TTL_MS = 5 * 60_000
+const APPLE_NONCE_MAX_OUTSTANDING = 10_000
+const appleNonces = new Map<string, number>()
+
+function issueAppleNonce(now = Date.now()): string {
+  for (const [nonce, expiresAt] of appleNonces) {
+    if (expiresAt <= now) appleNonces.delete(nonce)
+  }
+  // ponytail: FIFO eviction under a flood; the apple rate-limit bucket keeps
+  // this branch unreachable in practice.
+  while (appleNonces.size >= APPLE_NONCE_MAX_OUTSTANDING) {
+    const oldest = appleNonces.keys().next().value
+    if (oldest === undefined) break
+    appleNonces.delete(oldest)
+  }
+  const nonce = randomBytes(32).toString('base64url')
+  appleNonces.set(nonce, now + APPLE_NONCE_TTL_MS)
+  return nonce
+}
+
+/** Burn a server-issued nonce. False when unknown, already used, or expired. */
+function consumeAppleNonce(nonce: string, now = Date.now()): boolean {
+  const expiresAt = appleNonces.get(nonce)
+  if (expiresAt === undefined) return false
+  appleNonces.delete(nonce)
+  return expiresAt > now
+}
+
+export function _resetAppleNoncesForTests(): void {
+  appleNonces.clear()
+}
 const authRateLimitBuckets = new Map<string, AuthRateLimitBucket>()
 let authRateLimitLastSweep = 0
 
@@ -556,6 +594,20 @@ auth.post('/plex/check', (c) => withAuthOutcome(c, 'plex', 'check', async (authO
   })
 }))
 
+// GET /api/auth/apple/nonce — a single-use nonce for the native Sign in with
+// Apple flow (see APPLE_NONCE_TTL_MS). Public; shares the apple rate-limit
+// bucket so a login costs two hits. 503 when SIWA is not configured so the
+// app never starts a ceremony the server cannot finish.
+auth.get('/apple/nonce', (c) => withAuthOutcome(c, 'apple', 'check', async (authOutcome) => {
+  const limited = enforceAuthRateLimit(c, 'apple', undefined, authOutcome)
+  if (limited) return limited
+  if (!isAppleConfigured()) {
+    authOutcome.record('transient', 'not_configured')
+    return c.json({ error: 'apple_not_configured' }, 503)
+  }
+  return c.json({ nonce: issueAppleNonce(), expires_in: APPLE_NONCE_TTL_MS / 1000 })
+}))
+
 // POST /api/auth/apple — Sign in with Apple. The parallel of /plex/check:
 // it proves identity via the SIWA identity token (verified against
 // Apple's JWKS, never trusting a client-sent sub) and then converges on
@@ -579,7 +631,7 @@ auth.post('/apple', (c) => withAuthOutcome(c, 'apple', 'identity_verify', async 
     return c.json({ error: 'body_too_large' }, 413)
   }
   const body = parsed.body as
-    | { identityToken?: unknown; nonce?: unknown; inviteCode?: unknown }
+    | { identityToken?: unknown; nonce?: unknown; inviteCode?: unknown; device_id?: unknown }
     | null
   const identityToken = typeof body?.identityToken === 'string' ? body.identityToken : undefined
   if (!identityToken) {
@@ -599,11 +651,26 @@ auth.post('/apple', (c) => withAuthOutcome(c, 'apple', 'identity_verify', async 
   const nonce = typeof body?.nonce === 'string' ? body.nonce : undefined
   const inviteCode = typeof body?.inviteCode === 'string' ? body.inviteCode : undefined
 
+  // Native device-pair requests must present a server-issued nonce (see
+  // APPLE_NONCE_TTL_MS): the raw value is burned here, whatever the verifier
+  // says next, and its SHA-256 hex is what Apple echoed into the claim.
+  // Browser sign-ins keep the client-chosen nonce Apple's JS SDK binds to its
+  // own session, compared as sent.
+  const isDevicePair = typeof body?.device_id === 'string' && body.device_id.trim() !== ''
+  let expectedNonce = nonce
+  if (isDevicePair) {
+    if (!nonce || !consumeAppleNonce(nonce)) {
+      authOutcome.record('invalid', 'invalid_request')
+      return c.json({ error: 'invalid_nonce' }, 400)
+    }
+    expectedNonce = createHash('sha256').update(nonce).digest('hex')
+  }
+
   // authN: verify the Apple identity token. The only sub we ever trust
   // comes from the signature-verified payload (parseSub-validated apple
   // pattern inside the verifier). nonce is compared constant-time when
   // supplied.
-  const verified = await verifyAppleIdentityToken(identityToken, { expectedNonce: nonce })
+  const verified = await verifyAppleIdentityToken(identityToken, { expectedNonce })
   if (!verified.ok) {
     // jwks_unavailable is OUR problem (transient Apple outage) — surface
     // 503 so a login isn't reported to the user as "your token is bad."

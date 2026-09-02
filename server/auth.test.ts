@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
+import { createHash } from 'node:crypto'
 import { requestId } from 'hono/request-id'
 
 // ---------------------------------------------------------------------------
@@ -112,7 +113,7 @@ vi.mock('./services/googleAuth.js', () => ({
     googleVerifyImpl.fn(idToken, opts),
 }))
 
-import { auth, me, _resetAuthRateLimitsForTests } from './auth.js'
+import { auth, me, _resetAuthRateLimitsForTests, _resetAppleNoncesForTests } from './auth.js'
 import { env, isAppleConfigured } from './env.js'
 import { createSession } from './session.js'
 import {
@@ -1491,5 +1492,109 @@ describe('GET /me + POST /auth/logout', () => {
     } finally {
       ;(env as Record<string, unknown>).admins = adminsBefore
     }
+  })
+})
+
+describe('GET /auth/apple/nonce — server-issued nonce for the native device-pair flow', () => {
+  async function withApple<T>(fn: () => Promise<T>): Promise<T> {
+    const before = (env as Record<string, unknown>).appleClientId
+    ;(env as Record<string, unknown>).appleClientId = 'com.example.eex'
+    try {
+      return await fn()
+    } finally {
+      ;(env as Record<string, unknown>).appleClientId = before
+    }
+  }
+  const DEVICE = {
+    device_id: '01HABCDEFGHJKMNPQRSTVWXYZ0',
+    device_name: 'Living Room Apple TV',
+    device_platform: 'tvos',
+  }
+  const headers = { 'Content-Type': 'application/json' }
+  const sha256 = (s: string) => createHash('sha256').update(s).digest('hex')
+  let seenNonces: Array<string | undefined>
+
+  beforeEach(() => {
+    _resetAuthRateLimitsForTests()
+    _resetAppleNoncesForTests()
+    seenNonces = []
+    // Capture what the verifier is asked to match, then fail closed so the
+    // device-pair path never reaches the members/device-token tables here.
+    appleVerifyImpl.fn = async (_idToken, opts) => {
+      seenNonces.push(opts.expectedNonce)
+      return { ok: false, error: 'invalid_signature' }
+    }
+  })
+
+  async function issue(): Promise<string> {
+    const r = await app().request('/auth/apple/nonce')
+    expect(r.status).toBe(200)
+    const body = (await r.json()) as { nonce: string; expires_in: number }
+    expect(body.expires_in).toBe(300)
+    return body.nonce
+  }
+
+  it('503s when SIWA is not configured', async () => {
+    const r = await app().request('/auth/apple/nonce')
+    expect(r.status).toBe(503)
+    expect(await r.json()).toEqual({ error: 'apple_not_configured' })
+  })
+
+  it('issues a fresh single-use nonce per call', async () => {
+    await withApple(async () => {
+      const a = await issue()
+      const b = await issue()
+      expect(a).not.toBe(b)
+      expect(a.length).toBeGreaterThanOrEqual(43)
+    })
+  })
+
+  it('400s a device-pair sign-in that carries no server-issued nonce', async () => {
+    await withApple(async () => {
+      for (const nonce of [undefined, 'made-up-by-the-client']) {
+        const r = await app().request('/auth/apple', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ identityToken: 'valid-apple-token', nonce, ...DEVICE }),
+        })
+        expect(r.status).toBe(400)
+        expect(await r.json()).toEqual({ error: 'invalid_nonce' })
+      }
+      expect(seenNonces).toEqual([])
+    })
+  })
+
+  it('compares SHA-256(raw nonce) with the claim and burns the nonce on first use', async () => {
+    await withApple(async () => {
+      const nonce = await issue()
+      const first = await app().request('/auth/apple', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ identityToken: 'valid-apple-token', nonce, ...DEVICE }),
+      })
+      expect(first.status).toBe(401)
+      expect(seenNonces).toEqual([sha256(nonce)])
+
+      const replay = await app().request('/auth/apple', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ identityToken: 'valid-apple-token', nonce, ...DEVICE }),
+      })
+      expect(replay.status).toBe(400)
+      expect(await replay.json()).toEqual({ error: 'invalid_nonce' })
+      expect(seenNonces).toHaveLength(1)
+    })
+  })
+
+  it('leaves the browser flow on the client-chosen nonce, compared as sent', async () => {
+    await withApple(async () => {
+      const r = await app().request('/auth/apple', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ identityToken: 'valid-apple-token', nonce: 'sdk-nonce' }),
+      })
+      expect(r.status).toBe(401)
+      expect(seenNonces).toEqual(['sdk-nonce'])
+    })
   })
 })
