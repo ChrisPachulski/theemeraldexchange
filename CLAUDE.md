@@ -34,7 +34,7 @@ Exit code 0 is not done. After every step in stateful/deploy work, verify the ac
 ## NAS Build Safety (it also runs Plex, 6-thread CPU)
 
 1. Never run a raw compile against the NAS (`docker compose build`/`up --build`, `docker build`, `cargo build` over SSH). A PreToolUse hook (`~/.claude/hooks/guard-nas-build.sh`) blocks these — don't rely on the block.
-2. Use `scripts/nas-safe-build.sh <service> [critical-container]` instead — caps compile threads to spare cores, runs detached, auto-aborts if Plex/load degrades. Full playbook: `scripts/nas-safe-build.sh:1-53`.
+2. `scripts/deploy-nas.sh` pulls the CI-built images (`ghcr.io ...:sha-<commit>`), so a normal deploy compiles nothing on the NAS. Only if GHCR is unreachable: `scripts/nas-safe-build.sh <service> [critical-container]` (or `deploy-nas.sh --build-on-nas`) — caps compile threads to spare cores, runs detached, auto-aborts if Plex/load degrades. Playbook: `scripts/nas-safe-build.sh:1-53`.
 3. Swap a built image in with `docker compose up -d --no-build <service>` (seconds, no compile) — always safe.
 4. Keep BuildKit cache mounts (`target/` + cargo registry) on compiled services; any new compiled service needs the same mounts plus `CARGO_BUILD_JOBS`. Do not remove them.
 5. Watch via `https://api.theemeraldexchange.com/api/health`, not SSH — a 502/530 means the box is wedged. Never tight-poll SSH on a loaded box.

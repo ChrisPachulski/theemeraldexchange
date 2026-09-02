@@ -332,7 +332,10 @@ jobs:
         if: failure()
         # First 10 hits only: GitHub shows at most 10 error annotations per step.
         run: |
+          # dtolnay/rust-toolchain exports CARGO_TERM_COLOR=always, so every line
+          # starts with an ANSI escape — strip them or nothing matches.
           cat fmt.log clippy.log cargo-test.log 2>/dev/null \
+            | sed 's/\x1b\[[0-9;]*m//g' \
             | grep -E "^Diff in |^error(\[E[0-9]+\])?: |^ +--> |^test .* FAILED|panicked at" \
             | head -10 | sed 's/^/::error::/' || true
 
@@ -447,15 +450,20 @@ jobs:
 
   docker-build:
     # Every other job runs on the host runner via npm/cargo/pytest — nothing
-    # builds the multi-stage Dockerfiles that actually ship. Their fragile logic
-    # (cross-stage NAPI .node staging, static-ffmpeg COPY, better-sqlite3 source
-    # compile) only fails at `docker compose up --build` on the NAS, not in CI.
-    # Validate compose interpolation on every run and build the backend image so
-    # image-build regressions are caught pre-deploy. The heavy sidecar images
-    # (recommender torch, media-core/transcoder Rust) build only on the deploy
-    # branch to keep PR feedback fast.
+    # else builds the multi-stage Dockerfiles that actually ship. Validate
+    # compose interpolation on every run and build the backend image so
+    # image-build regressions are caught pre-deploy. On main the four images
+    # are also PUSHED to GHCR as :main and :sha-<commit>: scripts/deploy-nas.sh
+    # pulls exactly the :sha- image CI tested, so the NAS never compiles (its
+    # on-box compiles wedged it three times — see scripts/deploy-image.sh).
+    # The heavy sidecar images build only on main to keep PR feedback fast.
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUSH: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -482,35 +490,88 @@ jobs:
 
       - name: Stage eex-ytresolve placeholder
         # The Dockerfile COPYs bin/eex-ytresolve (the prebuilt Rust YouTube
-        # resolver). That binary is .gitignored — scripts/deploy-nas.sh fetches
-        # the real release asset at deploy time, so a clean CI checkout lacks it
-        # and the COPY fails. This job only VALIDATES the image build (push/load
-        # false), not the resolver itself, so an executable placeholder at the
-        # expected path is sufficient to exercise the rest of the Dockerfile.
+        # resolver). Its repo is private, so CI can only ship an exec-fail stub
+        # (the backend falls back to yt-dlp). The owner deploy bind-mounts the
+        # real binary over this path (docker-compose.yml backend volumes), so
+        # the pushed image is still the production image.
         run: |
           mkdir -p bin
-          printf '#!/bin/sh\nexit 0\n' > bin/eex-ytresolve
+          printf '#!/bin/sh\nexit 1\n' > bin/eex-ytresolve
           chmod +x bin/eex-ytresolve
 
-      - name: Build backend image
+      - name: Image base + release id
+        id: rel
+        # EEX_RELEASE must be the same short sha deploy-nas.sh computes locally:
+        # its post-deploy drift check compares /api/version against it.
+        run: |
+          echo "base=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/theemeraldexchange" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "sha=sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: env.PUSH == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build backend image (push on main)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: ./Dockerfile
-          push: false
-          load: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          push: ${{ env.PUSH == 'true' }}
+          build-args: |
+            EEX_RELEASE=${{ steps.rel.outputs.short }}
+          tags: |
+            ${{ steps.rel.outputs.base }}-backend:main
+            ${{ steps.rel.outputs.base }}-backend:${{ steps.rel.outputs.sha }}
+          cache-from: type=gha,scope=ci-backend
+          cache-to: type=gha,mode=max,scope=ci-backend
 
-      - name: Build sidecar images (deploy branch only)
-        if: github.ref == 'refs/heads/main'
-        run: |
-          docker build -t theemeraldexchange-recommender:ci -f ./recommender/Dockerfile .
-          docker build -f ./crates/media-core/Dockerfile .
-          docker build -f ./crates/transcoder/Dockerfile .
+      - name: Build + push media-core image (main only)
+        if: env.PUSH == 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./crates/media-core/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.rel.outputs.base }}-media-core:main
+            ${{ steps.rel.outputs.base }}-media-core:${{ steps.rel.outputs.sha }}
+          cache-from: type=gha,scope=ci-media-core
+          cache-to: type=gha,mode=max,scope=ci-media-core
+
+      - name: Build + push transcoder image (main only)
+        if: env.PUSH == 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./crates/transcoder/Dockerfile
+          push: true
+          tags: |
+            ${{ steps.rel.outputs.base }}-transcoder:main
+            ${{ steps.rel.outputs.base }}-transcoder:${{ steps.rel.outputs.sha }}
+          cache-from: type=gha,scope=ci-transcoder
+          cache-to: type=gha,mode=max,scope=ci-transcoder
+
+      - name: Build recommender image (main only; loaded for the embedding check)
+        if: env.PUSH == 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./recommender/Dockerfile
+          load: true
+          tags: |
+            theemeraldexchange-recommender:ci
+            ${{ steps.rel.outputs.base }}-recommender:main
+            ${{ steps.rel.outputs.base }}-recommender:${{ steps.rel.outputs.sha }}
+          cache-from: type=gha,scope=ci-recommender
+          cache-to: type=gha,mode=max,scope=ci-recommender
 
       - name: Verify recommender image embedding compatibility
-        if: github.ref == 'refs/heads/main'
+        if: env.PUSH == 'true'
         run: |
           docker run --rm \
             --user 10001:10001 \
@@ -520,6 +581,12 @@ jobs:
             --entrypoint python \
             theemeraldexchange-recommender:ci \
             /ci/verify_embedding_runtime.py /ci/baseline.json
+
+      - name: Push recommender image (main only, after the embedding check)
+        if: env.PUSH == 'true'
+        run: |
+          docker push "${{ steps.rel.outputs.base }}-recommender:main"
+          docker push "${{ steps.rel.outputs.base }}-recommender:${{ steps.rel.outputs.sha }}"
 
   shellcheck:
     # The ~500-line deploy script (scripts/deploy-nas.sh) snapshots, rsyncs,

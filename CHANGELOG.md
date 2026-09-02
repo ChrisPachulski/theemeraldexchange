@@ -58,6 +58,13 @@ per-feature release; the current package version is 0.9.0.
   offending fmt/clippy/test lines as public annotations, and the `audit` job
   caches its `cargo-audit`/`cargo-deny` binaries instead of compiling them
   from source on every run.
+- CI builds what ships: on main the `docker-build` job pushes the backend,
+  media-core, transcoder, and recommender images to GHCR as `:main` and
+  `:sha-<commit>`; `deploy-nas.sh` pulls the `:sha-` images for HEAD instead
+  of compiling on the NAS (`--build-on-nas` keeps the old path). The owner
+  deploy bind-mounts the private YouTube resolver binary over the image's stub.
+- A tracked pre-push hook (`npm run hooks:install`) runs rustfmt/clippy and
+  tsc/eslint on what the push touches.
 
 ## 2026-09
 

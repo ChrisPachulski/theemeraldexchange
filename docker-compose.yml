@@ -63,6 +63,11 @@ services:
     ports:
       - "127.0.0.1:3001:3001"
     volumes:
+      # The CI-built image carries an exec-fail stub at this path (the resolver's
+      # repo is private); the owner deploy rsyncs the real x86_64 binary to
+      # ./bin and mounts it over the stub. Self-host installs keep the stub and
+      # fall back to yt-dlp for trailers.
+      - ./bin/eex-ytresolve:/usr/local/bin/eex-ytresolve:ro
       # Grab-event log lives here so it survives container rebuilds and
       # admin can tail it directly on the NAS if the dashboard is down.
       - "/mnt/user/appdata/exchange-backend/data:/app/data"

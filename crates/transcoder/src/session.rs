@@ -1776,7 +1776,7 @@ impl SessionManager {
                             .map(std::path::Path::to_path_buf);
                         parent
                             .and_then(|pp| hot.iter().position(|h| *h == pp))
-                            .map_or(usize::MAX, |idx| idx)
+                            .unwrap_or(usize::MAX)
                     });
                 }
             }

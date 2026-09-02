@@ -231,20 +231,30 @@ The deploy payload is `git archive HEAD` — **commit first**, then deploy. An
 uncommitted edit never ships (the script refuses a dirty tree for exactly this
 reason).
 
-**CI gates the deploy.** Both `deploy-nas.sh` and `deploy-image.sh` call
-`scripts/ci-gate.sh`, which refuses an unpushed HEAD and waits (up to 25 min,
-polling GitHub once a minute) for every Actions check on HEAD to finish; a
-red or cancelled check aborts the deploy naming the job. So the working loop
-is `git push && ./scripts/deploy-nas.sh` — the script idles until CI is
-green. `--skip-ci-gate` (or `SKIP_CI_GATE=1` for either script) ships anyway,
-with a warning; use it for a hotfix soak, never as the default.
+**CI gates the deploy, and CI builds what ships.** Both `deploy-nas.sh` and
+`deploy-image.sh` call `scripts/ci-gate.sh`, which refuses an unpushed HEAD
+and waits (up to 25 min, polling GitHub once a minute) for every Actions
+check on HEAD to finish; a red or cancelled check aborts the deploy naming the
+job. On main the CI `docker-build` job pushes the four images to GHCR as
+`:main` and `:sha-<commit>`, and `deploy-nas.sh` pulls the `:sha-` images for
+HEAD and retags them to the compose names — the NAS never compiles. So the
+working loop is `git push && ./scripts/deploy-nas.sh`: the script idles until
+CI is green, then pulls, rolls, and health-gates. `--skip-ci-gate` (or
+`SKIP_CI_GATE=1` for either script) ships anyway, with a warning; use it for
+a hotfix soak, never as the default. `--build-on-nas` is the legacy on-box
+compile for when GHCR is unreachable. The `sha-*` tags accumulate one set per
+main push; prune old ones in the GHCR package settings when it matters.
+
+**Before you push**, run `npm run hooks:install` once per clone: the pre-push
+hook runs rustfmt/clippy and tsc/eslint on what the push touches, so the
+cheap failure classes never reach main. `SKIP_PREPUSH=1 git push` bypasses.
 
 | What changed | Command | Effect |
 |---|---|---|
 | SPA only (anything in `src/`) | `git push` | Netlify auto-builds and deploys. ~30s. |
-| Backend (anything in `server/`) | `./scripts/deploy-nas.sh` | NAS rebuild + restart of the backend image. ~30–60s. |
-| Rust sidecars (anything in `crates/`, root `Cargo.toml`/`Cargo.lock`) | `./scripts/deploy-nas.sh` | NAS deploy too — `crates/` feeds the media-core + transcoder images AND the backend's napi / recommender's pyo3 contract bindings. Rust release rebuilds take minutes, not seconds. |
-| Recommender (anything in `recommender/`) | `./scripts/deploy-nas.sh` | NAS rebuild of the recommender image. |
+| Backend (anything in `server/`) | `git push && ./scripts/deploy-nas.sh` | Waits for green CI, pulls the CI-built backend image, restarts. |
+| Rust sidecars (anything in `crates/`, root `Cargo.toml`/`Cargo.lock`) | `git push && ./scripts/deploy-nas.sh` | Same path — `crates/` feeds the media-core + transcoder images AND the backend's napi / recommender's pyo3 contract bindings. CI compiles them, not the NAS. |
+| Recommender (anything in `recommender/`) | `git push && ./scripts/deploy-nas.sh` | Same path; pulls the CI-built recommender image. |
 | Both SPA + NAS | `git push && ./scripts/deploy-nas.sh` | Deploy the **frontend before the backend** when a change spans both (the SPA is the consumer). |
 | Env var change in `.env.production` | `./scripts/deploy-nas.sh` | Same script; new `.env` ships and containers restart. |
 | `VITE_API_BASE_URL` change | Netlify UI → trigger redeploy | Vite bakes env vars at build time, so a redeploy is required. |

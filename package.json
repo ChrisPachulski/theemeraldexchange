@@ -25,7 +25,8 @@
     "test:e2e:playback": "PW_INTEGRATION=1 playwright test --project=playback-chrome",
     "test:e2e:all": "npm run test:e2e && npm run test:e2e:integration && npm run test:e2e:playback",
     "eval:recs": "vitest run --config vitest.eval.config.ts",
-    "build:napi": "npm --prefix crates/emerald-contracts-napi run build"
+    "build:napi": "npm --prefix crates/emerald-contracts-napi run build",
+    "hooks:install": "chmod +x scripts/git-hooks/pre-push && ln -sf ../../scripts/git-hooks/pre-push .git/hooks/pre-push"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "0.120.0",

@@ -219,7 +219,7 @@ mod tests {
                 .clone()
                 .oneshot(json_req(
                     "POST",
-                    &format!("/api/media/watch?sub={sub}"),
+                    format!("/api/media/watch?sub={sub}"),
                     json!({ "media_kind": "movie", "media_id": movie_id, "position_secs": 10 })
                         .to_string(),
                 ))

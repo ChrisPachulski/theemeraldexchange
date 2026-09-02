@@ -19,9 +19,11 @@
 #      server/, recommender/, crates/ FROM THAT STAGE — never the working
 #      tree — to /mnt/user/appdata/exchange-backend/ on the NAS.
 #   4. Ships .env.production → NAS as .env (consumed by docker compose).
-#   5. Tags every currently-deployed image as :rollback, builds each project
-#      service through nas-safe-build.sh's Plex/load/memory watchdogs, then
-#      recreates the stack with `docker compose up -d --no-build`.
+#   5. Tags every currently-deployed image as :rollback, pulls the four
+#      CI-built images for HEAD (ghcr.io ...:sha-<commit>, pushed by the CI
+#      docker-build job — so a green CI gate means they exist) and retags
+#      them to the compose names, then recreates the stack with
+#      `docker compose up -d --no-build`. The NAS never compiles.
 #   6. Health-gates backend + recommender + media-core + transcoder; on
 #      failure rolls back to the :rollback images and prints the manual
 #      rollback commands for every image.
@@ -35,6 +37,10 @@
 #                   is git archive HEAD. Commit first unless you know better.
 #   --skip-ci-gate  Ship HEAD without waiting for a green GitHub Actions
 #                   verdict (scripts/ci-gate.sh). Same as SKIP_CI_GATE=1.
+#   --build-on-nas  Legacy path: compile each service on the NAS through
+#                   nas-safe-build.sh instead of pulling the CI images. Only
+#                   for when GHCR is unreachable; it is slow and has wedged
+#                   the box before.
 #
 # First-time setup: see DEPLOY.md.
 
@@ -48,10 +54,13 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd)
 
 ALLOW_DIRTY=0
 SKIP_CI_GATE="${SKIP_CI_GATE:-0}"
+BUILD_ON_NAS="${BUILD_ON_NAS:-0}"
+IMAGE_BASE="${IMAGE_BASE:-ghcr.io/chrispachulski/theemeraldexchange}"
 for arg in "$@"; do
   case "$arg" in
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --skip-ci-gate) SKIP_CI_GATE=1 ;;
+    --build-on-nas) BUILD_ON_NAS=1 ;;
     -h|--help)
       # Print the header comment block (everything up to the first non-comment
       # line) as the help text, so the docs above never drift from --help.
@@ -59,7 +68,7 @@ for arg in "$@"; do
       exit 0
       ;;
     *)
-      echo "ERROR: unknown argument: $arg (supported: --allow-dirty, --skip-ci-gate, --help)" >&2
+      echo "ERROR: unknown argument: $arg (supported: --allow-dirty, --skip-ci-gate, --build-on-nas, --help)" >&2
       exit 1
       ;;
   esac
@@ -402,14 +411,28 @@ ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && docker compose version >/dev/nul
 # build has twice overwhelmed this NAS and starved Plex/SSH; a fixed jobs cap
 # alone does not protect memory or I/O. Build sequentially, then recreate from
 # the completed images without allowing Compose to start another build.
-for service in backend recommender media-core transcoder; do
-  echo "→ Guarded NAS build: ${service}"
-  EEX_RELEASE="${DEPLOY_SHA_SHORT}" \
-    NAS_HOST="${NAS_HOST}" \
-    NAS_USER="${NAS_USER}" \
-    APPDATA="${APPDATA}" \
-    "${SCRIPT_DIR}/nas-safe-build.sh" "${service}"
-done
+if [[ "$BUILD_ON_NAS" == "1" ]]; then
+  for service in backend recommender media-core transcoder; do
+    echo "→ Guarded NAS build: ${service}"
+    EEX_RELEASE="${DEPLOY_SHA_SHORT}" \
+      NAS_HOST="${NAS_HOST}" \
+      NAS_USER="${NAS_USER}" \
+      APPDATA="${APPDATA}" \
+      "${SCRIPT_DIR}/nas-safe-build.sh" "${service}"
+  done
+else
+  # The CI docker-build job pushed these for exactly this commit (EEX_RELEASE
+  # baked to the same short sha). Retagging to the compose image names keeps
+  # compose, the :rollback-* generations, and --build-on-nas interchangeable.
+  echo "→ Pulling CI-built images for ${DEPLOY_SHA_SHORT} from ${IMAGE_BASE}"
+  ssh "${NAS_USER}@${NAS_HOST}" "set -e
+    for svc in backend recommender media-core transcoder; do
+      src=${IMAGE_BASE}-\$svc:sha-${DEPLOY_SHA}
+      docker pull -q \"\$src\" >/dev/null || { echo \"ERROR: cannot pull \$src — was CI green for this commit? (--build-on-nas compiles locally)\" >&2; exit 1; }
+      docker tag \"\$src\" \"theemeraldexchange-\$svc:latest\"
+      echo \"[deploy] \$svc <- \$src\"
+    done"
+fi
 
 echo "→ Recreating containers from guarded-build images (--no-build)"
 ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \

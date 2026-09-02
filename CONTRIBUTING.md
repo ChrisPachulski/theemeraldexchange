@@ -36,6 +36,7 @@ From the repository root (Node 26, see `package.json` → `engines.node`):
 
 ```bash
 npm install
+npm run hooks:install   # pre-push: rustfmt/clippy + tsc/eslint on what you push
 npm run lint              # eslint .
 npm run build             # tsc -b && vite build && tsc -p server/tsconfig.json
 npm test                  # vitest run

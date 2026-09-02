@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# pre-push — run the cheap CI gates locally so a push cannot turn main red.
+#
+# main went red twice on 2026-09-02 for things that take seconds to check
+# (rustfmt drift, a clippy lint). This runs exactly the gates the CI rust and
+# test jobs would fail, scoped to what the push actually touches:
+#   crates/ or Cargo.*      -> cargo fmt --check, cargo clippy -D warnings
+#   *.ts/*.tsx/package.json -> tsc (SPA + server), eslint
+# Install once per clone: npm run hooks:install (symlinks into .git/hooks; the
+# global claude-sync hooksPath shim delegates to it). SKIP_PREPUSH=1 bypasses.
+set -euo pipefail
+[[ "${SKIP_PREPUSH:-0}" == "1" ]] && exit 0
+cd "$(git rev-parse --show-toplevel)"
+command -v cargo >/dev/null 2>&1 || export PATH="$HOME/.cargo/bin:$PATH"
+
+# stdin: <local ref> <local sha> <remote ref> <remote sha> per pushed ref.
+range=""
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [[ "$local_sha" =~ ^0+$ ]] && continue                    # ref deletion
+  if [[ "$remote_sha" =~ ^0+$ ]]; then                       # new remote branch
+    base=$(git merge-base "$local_sha" origin/main 2>/dev/null || true)
+  else
+    base="$remote_sha"
+  fi
+  range="${base:+$base..}$local_sha"
+done
+[[ -n "$range" ]] || exit 0
+files=$(git diff --name-only "$range" 2>/dev/null || git show --name-only --format= "$range")
+
+if grep -qE '^(crates/|Cargo\.(toml|lock)$|rust-toolchain)' <<<"$files"; then
+  echo "[pre-push] Rust changed: cargo fmt --check + clippy -D warnings"
+  cargo fmt --all -- --check
+  cargo clippy --all-targets --workspace -- -D warnings
+fi
+if grep -qE '\.(ts|tsx|mts|js|mjs|cjs)$|^package(-lock)?\.json$|^tsconfig|^server/tsconfig|^eslint\.config' <<<"$files"; then
+  echo "[pre-push] TypeScript changed: tsc (SPA + server) + eslint"
+  npx tsc --noEmit
+  npx tsc -p server/tsconfig.json
+  npm run lint
+fi
+echo "[pre-push] ok"
