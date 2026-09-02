@@ -311,11 +311,22 @@ jobs:
       # If this fails, Rust and TS have diverged on a wire-level format
       # and Apple/M3/M4 ports will silently break.
       - name: cargo test (workspace minus pyo3)
-        # The runner has the box to itself, so the scanner's 100-file wall-clock
-        # bound is asserted here (locally it only reports, see scanner.rs).
+        # The scanner's 100-file wall-clock guard asserts only when
+        # EEX_PERF_ASSERT names a budget in seconds; the runner is a shared
+        # 2-4 vCPU box, so it gets 3x the 5s reference bar (see scanner.rs).
+        # Output is tee'd so the failure step below can surface test names as
+        # annotations (job logs need a login; annotations are public).
+        shell: bash
         env:
-          EEX_PERF_ASSERT: '1'
-        run: cargo test --workspace --exclude emerald-contracts-pyo3 --all-targets
+          EEX_PERF_ASSERT: '15'
+        run: |
+          set -o pipefail
+          cargo test --workspace --exclude emerald-contracts-pyo3 --all-targets 2>&1 | tee cargo-test.log
+
+      - name: Surface failing tests as annotations
+        if: failure()
+        run: |
+          grep -E "^test .* FAILED|panicked at|^error: test failed" cargo-test.log | sort -u | sed 's/^/::error::/' || true
 
   audit:
     # Dependency vulnerability gate (production-readiness MEDIUM #7/#23).
