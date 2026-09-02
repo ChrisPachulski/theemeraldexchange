@@ -571,6 +571,12 @@ export const env = {
   // kid flag. Shares the bind-mount with the other per-user data files.
   userPoliciesPath: process.env.USER_POLICIES_PATH ?? './data/user-policies.json',
 
+  // Anthropic model backing /api/suggestions. Haiku is the deliberate
+  // default (the strip is a cheap, high-volume call), but a model id is
+  // an operational knob — a deprecation or a taste experiment shouldn't
+  // need a code change and a redeploy of the image.
+  suggestionsModel: opt('SUGGESTIONS_MODEL') ?? 'claude-haiku-4-5',
+
   // Per-Claude-call usage log. JSONL like the grab log; one row per
   // Anthropic call with token counts + estimated cost, keyed by user
   // for the per-user usage view and the admin dashboard.

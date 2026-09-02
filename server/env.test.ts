@@ -49,6 +49,7 @@ const PRESERVED_KEYS = [
   'ENABLE_GOOGLE_SIGN_IN',
   'ADMIN_SUBS',
   'TRUST_CLIENT_IP_HEADERS',
+  'SUGGESTIONS_MODEL',
 ] as const
 
 let snapshot: Record<string, string | undefined> = {}
@@ -88,6 +89,7 @@ function setBaselineEnv() {
   delete process.env.ENABLE_GOOGLE_SIGN_IN
   delete process.env.ADMIN_SUBS
   delete process.env.TRUST_CLIENT_IP_HEADERS
+  delete process.env.SUGGESTIONS_MODEL
 }
 
 async function loadEnv(): Promise<typeof import('./env.js')['env']> {
@@ -751,5 +753,28 @@ describe('env — fail-closed on missing/misconfigured token secrets (audit 17-5
     process.env.SESSION_SECRET = 'shared-secret-YYYYYYYYYYYYYYYYYYYYYYYYYYYY'
     process.env.INTERNAL_PRINCIPAL_SECRET = 'shared-secret-YYYYYYYYYYYYYYYYYYYYYYYYYYYY'
     await expect(loadEnv()).rejects.toThrow()
+  })
+})
+
+describe('env — SUGGESTIONS_MODEL', () => {
+  it('unset falls back to the pinned Haiku default', async () => {
+    setBaselineEnv()
+    delete process.env.SUGGESTIONS_MODEL
+    const env = await loadEnv()
+    expect(env.suggestionsModel).toBe('claude-haiku-4-5')
+  })
+
+  it('blank (the compose ${VAR:-} expansion) also falls back', async () => {
+    setBaselineEnv()
+    process.env.SUGGESTIONS_MODEL = '   '
+    const env = await loadEnv()
+    expect(env.suggestionsModel).toBe('claude-haiku-4-5')
+  })
+
+  it('set overrides the default and is trimmed', async () => {
+    setBaselineEnv()
+    process.env.SUGGESTIONS_MODEL = ' claude-sonnet-4-5 '
+    const env = await loadEnv()
+    expect(env.suggestionsModel).toBe('claude-sonnet-4-5')
   })
 })
