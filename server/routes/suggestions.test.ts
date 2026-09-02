@@ -669,12 +669,12 @@ describe('suggestions route — Anthropic transient error retry', () => {
   // and the warn log should record the retry attempt.
   // Full timing verification is gated on live soak (V16).
 
-  it('withAnthropicRetry is exported-accessible via route test (unit proxy via warn log)', async () => {
-    // The withAnthropicRetry wrapper is private to the module; we verify
-    // its contract by checking that a deliberately mis-shaped fakeResponse
-    // (wrong shape → no tool_use → 0 picks) causes the route to fall back
-    // gracefully to trending. This confirms the error handling chain around
-    // Claude calls is robust without needing to inject a real 529.
+  it('a Claude reply with no tool_use block falls back to trending, which 503s when TMDB is unconfigured', async () => {
+    // Nothing here touches withAnthropicRetry — no error is thrown, so the
+    // retry wrapper never engages. What is pinned is the DEGRADED path: a
+    // mis-shaped Claude response yields 0 picks, the route falls back to
+    // trending, and with no TMDB key that fallback surfaces a clean
+    // tmdb_not_configured 503 rather than an empty 200 or a 500.
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: unknown) => {

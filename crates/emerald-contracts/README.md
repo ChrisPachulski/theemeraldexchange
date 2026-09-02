@@ -54,8 +54,11 @@ cargo test -p emerald-contracts   # vectors resolve from the repo root, not the 
 npm run build:napi                # rebuild the N-API binding (package.json:28)
 ```
 
-The §-numbered contract cited above (§3, §5, §8.1, §15.3) is
-`docs/superpowers/specs/2026-05-25-cross-service-contract.md` — local-only, gitignored
-(`.gitignore:41`), so it does not ship to clones.
+The `§N` markers in the sources (§3 device tokens, §5 stream tokens, §8 `sub`
+namespaces, §15.3 telemetry scrub) index a cross-service contract that is not
+tracked in this repo. Its governing decision: the wire formats are fixed once
+and shared, never renegotiated per runtime — so the frozen table above plus
+`tests/vectors/` are that contract in executable form, and a change is a vector
+change CI gates across Rust, TS and Python, not a per-language tweak.
 
 <!-- seed:gap — author: when the untracked §-contract and this crate disagree, which wins? `device_token.rs:22-23` says "contract wins" over design.md; `sub.rs:4-5` says the regex literals here are the contract. State the tiebreaker. -->

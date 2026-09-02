@@ -36,7 +36,14 @@ import {
 } from '../services/arrAdvanced.js'
 import { postFeedback } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
+import { createLogger } from '../services/logger.js'
 import { env } from '../env.js'
+
+// One logger per historical `[tag]` prefix, so the tags docker logs / journalctl
+// users already grep for survive the move off bare console.*.
+const log = createLogger('sonarr')
+const capLog = createLogger('tv-cap')
+const monitorLog = createLogger('tv-monitor')
 
 export const sonarr = new Hono<Env>()
 
@@ -71,7 +78,7 @@ async function loadSonarrRootFolders(): Promise<
   try {
     return { ok: true, folders: await sonarrRootFolders() }
   } catch (err) {
-    console.error('[sonarr] rootfolder lookup failed:', err)
+    log.error('rootfolder lookup failed', { err })
     const message = err instanceof Error ? err.message : String(err)
     const status = /\b50[34]\b/.test(message) ? 503 : 502
     return {
@@ -150,9 +157,11 @@ sonarr.post('/api/v3/queue/clear-stuck', requireAdmin, sonarrMutateLimit, async 
 })
 
 // ===========================================================================
-// Advanced options (admin-only power-user actions). Contract: S1–S7 in
-// docs/superpowers/specs/2026-06-22-arr-advanced-options-design.md. The web
-// SPA and the Apple client are thin consumers of these handlers.
+// Advanced options (admin-only power-user actions), S1–S7 below. The design
+// rule: never blanket-proxy Sonarr — each action is a separately numbered,
+// allowlisted endpoint whose request fields and response shape this backend
+// owns, so the web SPA and the Apple client stay thin consumers of one
+// contract instead of two divergent Sonarr wrappers.
 // ===========================================================================
 
 // S1 allowlist. RefreshSeries/SeriesSearch operate on the series as a whole;
@@ -432,7 +441,7 @@ async function grabTvUnderCap(
     const url = `/api/v3/release?seriesId=${seriesId}&seasonNumber=${seasonNumber}`
     const res = await sonarrFetch(url, { method: 'GET' })
     if (!res.ok) {
-      console.error(`[tv-cap] release search ${res.status} S${seasonNumber} series=${seriesId}`)
+      capLog.error('release search failed', { status: res.status, seasonNumber, seriesId })
       await recordSonarrGrabEvent({ ...base, type: 'search_failed', status: res.status })
       continue
     }
@@ -491,10 +500,13 @@ async function grabTvUnderCap(
   }
 
   if (bestByChunk.size === 0) {
-    console.log(
-      `[tv-cap] no releases ≤ ${env.maxTvGbPerEpisode}GB/ep for series ${seriesId} ` +
-        `(${all.length} scanned, ${within.length} cap-eligible, ${accepted.length} accepted)`,
-    )
+    capLog.info('no releases within the per-episode cap', {
+      capGbPerEpisode: env.maxTvGbPerEpisode,
+      seriesId,
+      scanned: all.length,
+      capEligible: within.length,
+      accepted: accepted.length,
+    })
     await recordSonarrGrabEvent({
       ...base,
       type: all.length === 0 ? 'no_releases' : 'all_rejected_by_cap',
@@ -572,11 +584,14 @@ async function grabTvUnderCap(
         body: JSON.stringify({ guid: pick.guid, indexerId: pick.indexerId }),
       })
       const ec = effectiveEpisodeCount(pick) ?? 1
-      console.log(
-        `[tv-cap] grab "${pick.title.slice(0, 80)}" ${(pick.size / 1024 ** 3).toFixed(2)}GB ` +
-          `(~${(pick.size / ec / 1024 ** 3).toFixed(2)}GB/ep, ${ec} ep) ` +
-          `series=${seriesId} → ${grabRes.status}`,
-      )
+      capLog.info('grab', {
+        title: pick.title.slice(0, 80),
+        sizeGb: Number((pick.size / 1024 ** 3).toFixed(2)),
+        sizeGbPerEpisode: Number((pick.size / ec / 1024 ** 3).toFixed(2)),
+        episodeCount: ec,
+        seriesId,
+        status: grabRes.status,
+      })
       await recordSonarrGrabEvent({
         ...base,
         type: grabRes.ok ? 'grab_succeeded' : 'grab_failed',
@@ -894,10 +909,7 @@ async function resolveMonitoredSeasons(body: SonarrAddBody, created: CreatedSeri
           .map((s) => s.seasonNumber)
       }
     } catch (e) {
-      console.warn(
-        `[tv-monitor] re-read series ${id} for monitored seasons failed: ` +
-          (e instanceof Error ? e.message : String(e)),
-      )
+      monitorLog.warn('re-read series for monitored seasons failed', { seriesId: id, err: e })
     }
   }
   return monitored
@@ -928,10 +940,7 @@ async function reconcileExplicitSeasonPick(
         }
       }
     } catch (e) {
-      console.warn(
-        `[tv-monitor] re-read series ${id} for season reconciliation failed: ` +
-          (e instanceof Error ? e.message : String(e)),
-      )
+      monitorLog.warn('re-read series for season reconciliation failed', { seriesId: id, err: e })
     }
   }
   if (seriesForPatch.seasons && seriesForPatch.seasons.length > 0) {
@@ -950,7 +959,7 @@ async function reconcileExplicitSeasonPick(
       body: JSON.stringify(patched),
     })
     if (!putRes.ok) {
-      console.error(`[tv-monitor] PUT series ${id} failed: ${putRes.status}`)
+      monitorLog.error('PUT series failed', { seriesId: id, status: putRes.status })
     }
   }
 }
@@ -976,7 +985,7 @@ function spawnCappedTvGrab(opts: {
 }): void {
   const { itemId, monitored, title, folder, sub } = opts
   void grabTvUnderCap(itemId, monitored, title, folder, sub).catch((e) => {
-    console.error('[tv-cap] grab failed:', e)
+    capLog.error('grab failed', { err: e })
     void recordSonarrGrabEvent({
       itemId,
       title,

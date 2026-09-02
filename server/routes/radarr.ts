@@ -36,7 +36,14 @@ import {
 } from '../services/arrAdvanced.js'
 import { postFeedback } from '../services/recommender.js'
 import { recommenderCallerFromSession } from '../services/recommenderCaller.js'
+import { createLogger } from '../services/logger.js'
 import { env } from '../env.js'
+
+// One logger per historical `[tag]` prefix, so the tags docker logs / journalctl
+// users already grep for survive the move off bare console.*.
+const log = createLogger('radarr')
+const capLog = createLogger('movie-cap')
+const upgradeLog = createLogger('movie-upgrade')
 
 export const radarr = new Hono<Env>()
 
@@ -74,7 +81,7 @@ async function validateRadarrRootFolderSpace(rootFolderPath?: string): Promise<
   try {
     folders = await radarrRootFolders()
   } catch (err) {
-    console.error('[radarr] rootfolder lookup failed:', err)
+    log.error('rootfolder lookup failed', { err })
     return { ok: false, failure: { status: 502, body: { error: 'rootfolder_unreachable' } } }
   }
   return gateRootFolderSpace({ rootFolderPath, folders, ledger: radarrReservations })
@@ -146,9 +153,11 @@ radarr.post('/api/v3/queue/clear-stuck', requireAdmin, radarrMutateLimit, async 
 })
 
 // ===========================================================================
-// Advanced options (admin-only power-user actions). Contract: R1–R6 in
-// docs/superpowers/specs/2026-06-22-arr-advanced-options-design.md. Mirrors
-// the Sonarr S1–S7 surface (no episode/monitor — movies have no episodes).
+// Advanced options (admin-only power-user actions), R1–R6 below. The design
+// rule: never blanket-proxy Radarr — each action is a separately numbered,
+// allowlisted endpoint whose request fields and response shape this backend
+// owns. Mirrors the Sonarr S1–S7 surface minus the episode-monitor action
+// (movies have no episodes), so both clients code against one contract.
 // ===========================================================================
 
 // R1 allowlist. RefreshMovie/MoviesSearch operate on movie ids; RenameMovie
@@ -333,7 +342,7 @@ async function grabBestUnderCap(
     method: 'GET',
   })
   if (!releaseRes.ok) {
-    console.error(`[movie-cap] release search ${releaseRes.status} for movie ${movieId}`)
+    capLog.error('release search failed', { status: releaseRes.status, movieId })
     await recordRadarrGrabEvent({ ...base, type: 'search_failed', status: releaseRes.status })
     return { status: 'search_failed', upstreamStatus: releaseRes.status }
   }
@@ -371,10 +380,13 @@ async function grabBestUnderCap(
         : radarrAccepted.length === 0
           ? 'no_matching_releases'
           : 'all_rejected_by_cap'
-    console.log(
-      `[movie-cap] ${status} for movie ${movieId} ` +
-        `(${all.length} scanned, ${radarrAccepted.length} matched, 0 ≤ ${env.maxMovieGb}GB)`,
-    )
+    capLog.info(status, {
+      movieId,
+      scanned: all.length,
+      matched: radarrAccepted.length,
+      accepted: 0,
+      capGb: env.maxMovieGb,
+    })
     await recordRadarrGrabEvent({
       ...base,
       type: status,
@@ -416,10 +428,12 @@ async function grabBestUnderCap(
   // them), and on failure nothing landed. Holding the reservation past this
   // point would leak headroom until restart.
   radarrReservations.release(rootFolder, best.size)
-  console.log(
-    `[movie-cap] grab "${best.title}" ${(best.size / 1024 ** 3).toFixed(2)}GB ` +
-      `for movie ${movieId} → ${grabRes.status}`,
-  )
+  capLog.info('grab', {
+    title: best.title,
+    sizeGb: Number((best.size / 1024 ** 3).toFixed(2)),
+    movieId,
+    status: grabRes.status,
+  })
   await recordRadarrGrabEvent({
     ...base,
     type: grabRes.ok ? 'grab_succeeded' : 'grab_failed',
@@ -485,7 +499,7 @@ async function deleteCreatedMovie(movie: CreatedRadarrMovie): Promise<{ ok: true
   if (!movie.id) return { ok: false, status: 0 }
   const res = await radarrFetch(`/api/v3/movie/${movie.id}`, { method: 'DELETE' })
   if (!res.ok) {
-    console.error(`[movie-cap] failed to roll back movie ${movie.id}: ${res.status}`)
+    capLog.error('failed to roll back movie', { movieId: movie.id, status: res.status })
     return { ok: false, status: res.status }
   }
   return { ok: true }
@@ -508,7 +522,7 @@ async function setMovieMonitored(
     body: JSON.stringify({ ...movie, monitored }),
   })
   if (!res.ok) {
-    console.error(`[movie-cap] failed to set monitored on movie ${movie.id}: ${res.status}`)
+    capLog.error('failed to set monitored on movie', { movieId: movie.id, status: res.status })
   }
   return { ok: res.ok, status: res.status }
 }
@@ -528,7 +542,7 @@ async function lookupMovieByTmdbId(tmdbId: unknown): Promise<CreatedRadarrMovie 
     const movie = Array.isArray(list) ? list[0] : undefined
     return movie?.id ? movie : null
   } catch (err) {
-    console.error('[movie-cap] tmdbId recovery lookup failed:', err)
+    capLog.error('tmdbId recovery lookup failed', { err })
     return null
   }
 }
@@ -864,7 +878,7 @@ async function settleCappedMovieGrab(
       )
     }
   } catch (e) {
-    console.error('[movie-cap] grab failed:', e)
+    capLog.error('grab failed', { err: e })
     await recordRadarrGrabEvent({
       itemId,
       title: itemTitle,
@@ -971,10 +985,11 @@ radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, radarrMutateLimit, async 
   if (!grabRes.ok) {
     return c.json({ error: 'grab_failed', status: grabRes.status }, 502)
   }
-  console.log(
-    `[movie-upgrade] grabbed "${best.title}" ${(best.size / 1024 ** 3).toFixed(2)}GB ` +
-      `for movie ${id}`,
-  )
+  upgradeLog.info('grabbed', {
+    title: best.title,
+    sizeGb: Number((best.size / 1024 ** 3).toFixed(2)),
+    movieId: id,
+  })
   return c.json({
     status: 'grabbing',
     title: best.title,

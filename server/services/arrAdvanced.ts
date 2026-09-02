@@ -1,9 +1,11 @@
 // Shared machinery for the Sonarr/Radarr "Advanced options" routes
 // (interactive search + grab, command allowlist, history mapping, PUT
 // field-allowlist merge). Both routes/{sonarr,radarr}.ts surface the same
-// admin-only power-user actions; the client-observable contract is the
-// single source of truth in
-// docs/superpowers/specs/2026-06-22-arr-advanced-options-design.md.
+// admin-only power-user actions under one numbered contract — the S#/R#
+// pairs in the section headers below. The design rule that produced this
+// file: the backend owns every request field and response shape rather
+// than proxying upstream wholesale, and the two apps behave identically
+// wherever an action means the same thing.
 //
 // App-specific bits (which command names are allowed, how the per-release
 // cap is computed for TV vs movies) are injected as small callbacks so the
