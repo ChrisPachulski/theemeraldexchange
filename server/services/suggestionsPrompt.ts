@@ -8,10 +8,17 @@
 // callClaudeRetry.
 
 import Anthropic from '@anthropic-ai/sdk'
+import { env } from '../env.js'
+import { createLogger } from './logger.js'
 import { sanitizeTitle } from './sanitize.js'
 import type { ClaudePick, SuggestionItem } from './suggestionsShared.js'
 
-export const MODEL = 'claude-haiku-4-5'
+// Keeps the `[suggestions]` prefix these lines have always carried.
+const log = createLogger('suggestions')
+
+// SUGGESTIONS_MODEL, defaulting to Haiku (see env.ts). Operator-settable so a
+// model deprecation or a quality experiment is an env flip, not a redeploy.
+export const MODEL = env.suggestionsModel
 
 // Headroom for post-validation drops. With TARGET_COUNT=20 we need
 // enough surplus that the routine library/lookup/dedupe shedding still
@@ -310,12 +317,10 @@ function readToolUse(response: Anthropic.Messages.Message): ClaudeResponse {
     (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use',
   )
   if (!tu) {
-    console.error(
-      '[suggestions] Claude returned no tool_use block; content types:',
-      response.content.map((b) => b.type).join(','),
-      'stop_reason:',
-      response.stop_reason,
-    )
+    log.error('Claude returned no tool_use block', {
+      contentTypes: response.content.map((b) => b.type).join(','),
+      stopReason: response.stop_reason,
+    })
     return { toolUse: null, picks: [], usage }
   }
   // When max_tokens cuts off mid-tool-use, the SDK still returns the
@@ -324,8 +329,8 @@ function readToolUse(response: Anthropic.Messages.Message): ClaudeResponse {
   // the truncated flag so _diag exposes it to the UI.
   const truncated = response.stop_reason === 'max_tokens'
   if (truncated) {
-    console.error(
-      '[suggestions] tool_use truncated by max_tokens — picks list will be incomplete or empty; raise max_tokens or shrink CLAUDE_OVERFETCH',
+    log.error(
+      'tool_use truncated by max_tokens — picks list will be incomplete or empty; raise max_tokens or shrink CLAUDE_OVERFETCH',
     )
   }
   const input = tu.input as { picks?: unknown }
@@ -343,11 +348,10 @@ function readToolUse(response: Anthropic.Messages.Message): ClaudeResponse {
         (p as ClaudePick).title.trim().length > 0,
     )
   if (rawPicks.length > 0 && picks.length < rawPicks.length) {
-    console.warn(
-      '[suggestions] readToolUse: filtered',
-      rawPicks.length - picks.length,
-      'malformed picks (missing/non-string title)',
-    )
+    log.warn('readToolUse dropped malformed picks (missing/non-string title)', {
+      filtered: rawPicks.length - picks.length,
+      received: rawPicks.length,
+    })
   }
   return {
     toolUse: { type: 'tool_use', id: tu.id, name: tu.name, input: input as { picks?: ClaudePick[] } },
@@ -499,7 +503,7 @@ async function withAnthropicRetry<T>(fn: () => Promise<T>): Promise<T> {
           ? (e as { status: number }).status
           : undefined
       if (status !== undefined && ANTHROPIC_RETRY_STATUSES.has(status) && attempt < ANTHROPIC_RETRY_MAX - 1) {
-        console.warn('[suggestions] Anthropic transient error', status, '— retrying after', ANTHROPIC_RETRY_DELAY_MS, 'ms')
+        log.warn('Anthropic transient error — retrying', { status, retryDelayMs: ANTHROPIC_RETRY_DELAY_MS })
         await new Promise((res) => setTimeout(res, ANTHROPIC_RETRY_DELAY_MS))
         continue
       }
