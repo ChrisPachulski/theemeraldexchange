@@ -32,6 +32,7 @@ import {
   scrubXtreamCreds,
   channelNeedsReencode,
   channelIsDeadFeed,
+  TS_STORM_LINES,
   _clearDeadFeedMemoryForTests,
   _clearDrainingForTests,
 } from './iptvRemux.js'
@@ -144,6 +145,24 @@ describe('iptv remux session', () => {
     expect(proc.kill).toHaveBeenCalledWith('SIGKILL')
   })
 
+  it('a timestamp-discontinuity storm SIGKILLs ffmpeg so the respawn re-bases (prod 2026-09-19)', () => {
+    // After a provider clock jump ffmpeg "corrects" every audio packet by -170ms
+    // forever and writes incoherent A/V timestamps AVPlayer stalls on. A fresh
+    // dial is clean. Background rate is ~2 lines / 10s; a storm is ~60.
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    startRemuxSession({ streamId: '61', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+    proc.stderr.emit('data', Buffer.from('Output #0, hls, to \'/tmp/x/index.m3u8\':\n'))
+    const line = '[aist#0:1/aac @ 0x1] timestamp discontinuity (stream id=257): -170333, new offset= -92290242500\n'
+    proc.stderr.emit('data', Buffer.from(line.repeat(TS_STORM_LINES - 1)))
+    expect(proc.kill).not.toHaveBeenCalled()
+    proc.stderr.emit('data', Buffer.from(line))
+    expect(proc.kill).toHaveBeenCalledWith('SIGKILL')
+    // Our kill, not a provider EOF: never a dead-feed strike.
+    proc.emit('exit', null, 'SIGKILL')
+    expect(channelIsDeadFeed('61')).toBe(false)
+  })
+
   it('a copy session whose INPUT video IS H.264 leaves the channel on the copy path', () => {
     const proc = fakeProcess()
     spawnMock.mockReturnValueOnce(proc)
@@ -226,6 +245,20 @@ describe('iptv remux session', () => {
     proc.emit('exit', null, 'SIGKILL')
 
     expect(channelIsDeadFeed('72')).toBe(false)
+  })
+
+  it('does NOT count a graceful code-0 exit from our own SIGTERM as a strike (prod 2026-09-19)', () => {
+    // ffmpeg traps SIGTERM, finalizes the HLS muxer and exits (0, null) — the
+    // same shape as a provider clean EOF. Two quick client re-tunes used to tag
+    // a healthy channel dead for 10 minutes.
+    for (let i = 0; i < 2; i++) {
+      const proc = fakeProcess()
+      spawnMock.mockReturnValueOnce(proc)
+      const started = startRemuxSession({ streamId: '75', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
+      stopRemuxSession(started!.sessionId, 'forget')
+      proc.emit('exit', 0, null)
+    }
+    expect(channelIsDeadFeed('75')).toBe(false)
   })
 
   it('does NOT tag a code-0 exit AFTER a long healthy run as a dead feed', () => {
