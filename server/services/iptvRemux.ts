@@ -144,6 +144,12 @@ function markChannelNeedsReencode(streamId: string): void {
 // dead channel is simply re-probed 10 min later instead of 60s later, which is
 // harmless (a live sibling keeps its session alive regardless of dead-TTLs).
 const DEAD_FEED_MAX_LIFETIME_MS = 60_000
+
+/** Discontinuity lines inside TS_STORM_WINDOW_MS that mean the remux is writing garbage. */
+export const TS_STORM_LINES = 30
+const TS_STORM_WINDOW_MS = 10_000
+/** A dial younger than this that storms is not relaunched in place; the session ends. */
+const TS_STORM_RELAUNCH_FLOOR_MS = 20_000
 const DEAD_FEED_MEMORY_MS = 10 * 60_000
 const deadFeed = new Map<string, number>() // streamId -> expiresAt (ms)
 
@@ -406,6 +412,8 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
         '-vf', `scale=-2:min(${env.IPTV_REENCODE_MAX_HEIGHT}\\,ih)`,
       ]
     : ['-c:v', 'copy']
+  let startedAt = 0
+  const launch = (resume: boolean): ChildProcess => {
   const args = [
     '-hide_banner',
     // info (+ -nostats) so ffmpeg prints the input stream's codec, which the
@@ -444,6 +452,9 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
     // socket makes ffmpeg exit, letting the existing dead-feed/sibling failover and
     // the client's reconnect actually re-dial a fresh connection.
     '-rw_timeout', '15000000',
+    // The provider 503s ffmpeg's default "Lavf/…" User-Agent (2026-09-12). Same
+    // UA the raw .ts proxy already sends (routes/iptv/streamLive.ts).
+    '-user_agent', 'IPTVSmarters',
     '-i', opts.upstreamUrl,
     // Video is copied losslessly. Audio is RE-ENCODED to AAC-LC even though the
     // provider already sends AAC: the provider's profile is HE-AAC (AAC+SBR),
@@ -476,15 +487,29 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
     // realtime-but-bursty production never starves it. Disk ≈ 40 × ~2.4 MB per
     // session on a 3.8 GB tmpfs, bounded by the upstream-connection cap.
     '-hls_list_size', '40',
-    '-hls_flags', 'delete_segments+append_list+omit_endlist',
+    // discont_start on an in-place relaunch (see the storm detector): the first
+    // new segment gets #EXT-X-DISCONTINUITY so the player accepts the timestamp
+    // reset (-avoid_negative_ts make_zero) as a seam rather than an error.
+    '-hls_flags', resume ? 'delete_segments+append_list+omit_endlist+discont_start' : 'delete_segments+append_list+omit_endlist',
     '-hls_segment_filename', 'seg_%05d.ts',
     manifestPath,
   ]
   const spawnedAt = Date.now()
+  if (!resume) startedAt = spawnedAt
   const proc = spawn('ffmpeg', args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'] })
 
   let sawOutput = false
   let codecDecided = false
+  // Timestamp-discontinuity storm detector (prod 2026-09-19, NHL Network): ~4 min
+  // into a healthy session the provider's PTS jumped ~25.6h. ffmpeg's per-input
+  // discontinuity correction then re-corrected EVERY audio packet by -170ms
+  // (~6/s, forever) and wrote non-monotonic A/V timestamps into the segments;
+  // AVPlayer stalled on them, the app died recovering. A fresh dial re-bases
+  // cleanly, so a storm is answered by SIGKILL (not a dead-feed strike) and the
+  // manifest poll's respawn. Background rate on this provider is ~2 lines/10s.
+  let stormCount = 0
+  let stormWindowStart = 0
+  let relaunch = false
   proc.stderr?.on('data', (chunk: Buffer) => {
     const text = scrubXtreamCreds(chunk.toString())
     for (const raw of text.split('\n')) {
@@ -511,6 +536,29 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
           }
         }
       }
+      if (line.includes('timestamp discontinuity')) {
+        const now = Date.now()
+        if (now - stormWindowStart > TS_STORM_WINDOW_MS) {
+          stormWindowStart = now
+          stormCount = 0
+        }
+        if (++stormCount >= TS_STORM_LINES) {
+          // Relaunch in place only once this dial proved itself (produced output
+          // and ran past the floor); a storm on a young dial means the fresh
+          // connection is itself bad, and relaunching would just churn provider
+          // connections — let the session end and the reconnect throttle apply.
+          relaunch = sawOutput && Date.now() - spawnedAt >= TS_STORM_RELAUNCH_FLOOR_MS
+          log.warn('timestamp-discontinuity storm — ' + (relaunch ? 'relaunching ffmpeg in place to re-base timestamps' : 'ending the session'), {
+            sessionId,
+            streamId: opts.streamId,
+            lines: stormCount,
+            windowMs: TS_STORM_WINDOW_MS,
+            livedMs: Date.now() - spawnedAt,
+          })
+          proc.kill('SIGKILL')
+          return
+        }
+      }
       log.warn(line, { sessionId })
     }
   })
@@ -525,9 +573,15 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
     // is a dead-channel stub, not a real live feed — tag it so the next tune
     // fails over to a sibling and the manifest route can answer a terminal
     // channel_offline_upstream instead of an indistinguishable remux_warming.
-    // A corrupt feed (non-zero, e.g. 255) or our own teardown (SIGTERM/SIGKILL,
-    // code null) is NOT a dead feed and must not poison the failover path.
-    if (code === 0 && signal == null && livedMs < DEAD_FEED_MAX_LIFETIME_MS) {
+    // A corrupt feed (non-zero, e.g. 255) or our own teardown is NOT a dead feed
+    // and must not poison the failover path. Teardown is NOT reliably
+    // (null, SIGTERM): ffmpeg traps SIGTERM, finalizes the muxer and exits
+    // (0, null) — byte-identical to a provider EOF (prod 2026-09-19: two quick
+    // client re-tunes tagged a healthy channel dead for 10 min). `draining` holds
+    // exactly the children stopRemuxSession signalled, and its undrain listener is
+    // registered after this one, so the membership is still intact here.
+    const tornDownByUs = draining.has(proc)
+    if (code === 0 && signal == null && !tornDownByUs && livedMs < DEAD_FEED_MAX_LIFETIME_MS) {
       markChannelDeadFeed(opts.streamId)
       log.warn('clean EOF — tagging stream as a dead feed (fail over to a sibling)', {
         sessionId,
@@ -536,10 +590,19 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
       })
     }
     log.info('ffmpeg exited', { sessionId, code, signal: signal ?? '', livedMs })
+    const live = sessions.get(sessionId)
+    if (relaunch && live && live.proc === proc) {
+      // Storm relaunch: same dir + manifest, append_list continues the playlist.
+      live.proc = launch(true)
+      return
+    }
     sessions.delete(sessionId)
     removeDir(dir)
   })
+  return proc
+  }
 
+  const proc = launch(false)
   sessions.set(sessionId, {
     sessionId,
     streamId: opts.streamId,
@@ -547,8 +610,8 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
     dir,
     manifestPath,
     proc,
-    startedAt: spawnedAt,
-    lastSeen: spawnedAt,
+    startedAt,
+    lastSeen: startedAt,
   })
   return { sessionId, dir, manifestPath }
 }

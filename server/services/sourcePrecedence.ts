@@ -53,10 +53,41 @@ export type ItemRef = {
 // replies with a non-5xx response to a lightweight account-info probe.
 // A 4xx from the panel (e.g. bad credentials) is treated as unavailable
 // — the stream can't be started regardless.
+//
+// The probe runs on EVERY grant, ahead of the concurrency slot and the ffmpeg
+// dial, so its latency is dead air on every channel change. The panel is slow
+// (prod 2026-09-19: 1.9s alone, ~6s when five tunes raced it), so an UP result
+// is remembered briefly and concurrent tunes share one in-flight probe. A DOWN
+// result is never remembered: the next tune re-probes, so recovery is immediate,
+// and a panel that dies inside the window still surfaces through the remux
+// dead-feed / channel_offline_upstream path.
+const IPTV_PROBE_OK_TTL_MS = 60_000
+let iptvProbeOkUntil = 0
+let iptvProbeInFlight: Promise<boolean> | null = null
+
+/** Test seam: forget the remembered panel probe. */
+export function _clearIptvProbeCacheForTests(): void {
+  iptvProbeOkUntil = 0
+  iptvProbeInFlight = null
+}
+
 async function probeIptv(): Promise<boolean> {
   if (!env.XTREAM_HOST || !env.XTREAM_USERNAME || !env.XTREAM_PASSWORD) {
     return false
   }
+  if (Date.now() < iptvProbeOkUntil) return true
+  iptvProbeInFlight ??= probeIptvUncached()
+    .then((ok) => {
+      if (ok) iptvProbeOkUntil = Date.now() + IPTV_PROBE_OK_TTL_MS
+      return ok
+    })
+    .finally(() => {
+      iptvProbeInFlight = null
+    })
+  return iptvProbeInFlight
+}
+
+async function probeIptvUncached(): Promise<boolean> {
   const host = env.XTREAM_HOST.replace(/\/+$/, '')
   const url =
     `${host}/player_api.php` +

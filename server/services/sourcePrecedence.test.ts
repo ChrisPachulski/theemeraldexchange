@@ -16,7 +16,7 @@ vi.mock('./upstream.js', () => ({
 }))
 vi.mock('../env.js', () => ({ env: envState }))
 
-import { resolveSourcePrecedence } from './sourcePrecedence.js'
+import { resolveSourcePrecedence, _clearIptvProbeCacheForTests } from './sourcePrecedence.js'
 import { fetchWithTimeout } from './upstream.js'
 
 const mockFetch = vi.mocked(fetchWithTimeout)
@@ -37,6 +37,7 @@ const probedPlex = () =>
 describe('resolveSourcePrecedence', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    _clearIptvProbeCacheForTests()
     envState.XTREAM_HOST = 'https://panel.example.com'
     envState.XTREAM_USERNAME = 'u'
     envState.XTREAM_PASSWORD = 'p'
@@ -54,6 +55,22 @@ describe('resolveSourcePrecedence', () => {
     // Short-circuit in buildCandidates: Plex must not be probed.
     expect(probedIptv()).toBe(true)
     expect(probedPlex()).toBe(false)
+  })
+
+  it('a channel tune does not re-probe the panel: concurrent + repeat grants share one probe', async () => {
+    // Prod 2026-09-19: every grant blocked on its own player_api.php round trip
+    // (1.9s alone, ~6s when five tunes raced) before ffmpeg could even dial.
+    mockFetch.mockImplementation(async () => fakeRes(true))
+    await Promise.all([resolveSourcePrecedence(item), resolveSourcePrecedence(item)])
+    await resolveSourcePrecedence(item)
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('never caches a DOWN panel: the next tune re-probes so recovery is immediate', async () => {
+    mockFetch.mockImplementation(async () => fakeRes(false))
+    await resolveSourcePrecedence(item)
+    mockFetch.mockImplementation(async () => fakeRes(true))
+    expect(await resolveSourcePrecedence(item)).toEqual({ resolved: { source: 'iptv', kind: 'live', id: '123' } })
   })
 
   it('falls through without probing IPTV when creds are absent', async () => {
