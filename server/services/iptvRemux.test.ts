@@ -145,22 +145,54 @@ describe('iptv remux session', () => {
     expect(proc.kill).toHaveBeenCalledWith('SIGKILL')
   })
 
-  it('a timestamp-discontinuity storm SIGKILLs ffmpeg so the respawn re-bases (prod 2026-09-19)', () => {
+  it('a timestamp-discontinuity storm relaunches ffmpeg IN PLACE with a discontinuity tag (prod 2026-09-19)', () => {
     // After a provider clock jump ffmpeg "corrects" every audio packet by -170ms
     // forever and writes incoherent A/V timestamps AVPlayer stalls on. A fresh
-    // dial is clean. Background rate is ~2 lines / 10s; a storm is ~60.
-    const proc = fakeProcess()
-    spawnMock.mockReturnValueOnce(proc)
-    startRemuxSession({ streamId: '61', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })
-    proc.stderr.emit('data', Buffer.from('Output #0, hls, to \'/tmp/x/index.m3u8\':\n'))
+    // dial is clean. Background rate is ~2 lines / 10s; a storm is ~60. The
+    // session (dir, manifest, id) survives: append_list continues the playlist
+    // and discont_start marks the seam, so the player rebuffers instead of erroring.
+    const first = fakeProcess()
+    const second = fakeProcess()
+    spawnMock.mockReturnValueOnce(first).mockReturnValueOnce(second)
+    const s = startRemuxSession({ streamId: '61', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })!
+    first.stderr.emit('data', Buffer.from('Output #0, hls, to \'/tmp/x/index.m3u8\':\n'))
+    // Past the relaunch floor: this dial has proved itself.
+    vi.useFakeTimers({ now: Date.now() + 25_000, toFake: ['Date'] })
     const line = '[aist#0:1/aac @ 0x1] timestamp discontinuity (stream id=257): -170333, new offset= -92290242500\n'
-    proc.stderr.emit('data', Buffer.from(line.repeat(TS_STORM_LINES - 1)))
-    expect(proc.kill).not.toHaveBeenCalled()
-    proc.stderr.emit('data', Buffer.from(line))
-    expect(proc.kill).toHaveBeenCalledWith('SIGKILL')
-    // Our kill, not a provider EOF: never a dead-feed strike.
-    proc.emit('exit', null, 'SIGKILL')
+    first.stderr.emit('data', Buffer.from(line.repeat(TS_STORM_LINES - 1)))
+    expect(first.kill).not.toHaveBeenCalled()
+    first.stderr.emit('data', Buffer.from(line))
+    expect(first.kill).toHaveBeenCalledWith('SIGKILL')
+
+    first.emit('exit', null, 'SIGKILL')
+    // Our kill, not a provider EOF: never a dead-feed strike, session still live.
     expect(channelIsDeadFeed('61')).toBe(false)
+    expect(listRemuxSessions().map((x) => x.sessionId)).toEqual([s.sessionId])
+    expect(fs.existsSync(s.dir)).toBe(true)
+    expect(spawnMock).toHaveBeenCalledTimes(2)
+    const args = spawnMock.mock.calls[1][1] as string[]
+    expect(args[args.indexOf('-hls_flags') + 1]).toBe('delete_segments+append_list+omit_endlist+discont_start')
+    expect(args[args.length - 1]).toBe(s.manifestPath)
+    expect(spawnMock.mock.calls[1][2]).toEqual(expect.objectContaining({ cwd: s.dir }))
+
+    // The relaunched child is the session's child now: a stop reaches IT.
+    stopRemuxSession(s.sessionId)
+    expect(second.kill).toHaveBeenCalledWith('SIGTERM')
+    vi.useRealTimers()
+  })
+
+  it('a storm on a dial younger than the relaunch floor ends the session instead of looping', () => {
+    const first = fakeProcess()
+    spawnMock.mockReturnValueOnce(first)
+    const s = startRemuxSession({ streamId: '62', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })!
+    const line = '[aist#0:1/aac @ 0x1] timestamp discontinuity (stream id=257): -170333, new offset= -1\n'
+    // No Output line yet = ffmpeg is still probing; a storm this early means the
+    // fresh dial is itself bad. Relaunching would just burn provider connections.
+    first.stderr.emit('data', Buffer.from(line.repeat(TS_STORM_LINES)))
+    expect(first.kill).toHaveBeenCalledWith('SIGKILL')
+    first.emit('exit', null, 'SIGKILL')
+    expect(listRemuxSessions().map((x) => x.sessionId)).not.toContain(s.sessionId)
+    expect(spawnMock).toHaveBeenCalledTimes(1)
   })
 
   it('a copy session whose INPUT video IS H.264 leaves the channel on the copy path', () => {
