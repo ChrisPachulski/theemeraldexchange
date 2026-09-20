@@ -32,7 +32,10 @@ name: transcoder-ffmpeg
 # bump (Cargo.lock / root Cargo.toml) can change the produced ffmpeg argv or
 # the binary's behavior without touching crates/transcoder/** at all.
 on:
+  # main only: a branch push is already covered by its pull_request run. With no
+  # branch filter every Rust PR commit ran this job twice (seen 2026-09-19/20).
   push:
+    branches: [main]
     paths:
       - "crates/transcoder/**"
       - "crates/media-core/**"
@@ -49,6 +52,11 @@ on:
       - "Cargo.lock"
       - ".github/workflows/transcoder-ffmpeg.yml"
   workflow_dispatch: {}
+
+# Same idiom as ci.yml: a newer commit on the ref supersedes the run in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 # Least-privilege token: the job checks out code, compiles, and runs tests —
 # it never writes to the repo, packages, or PRs.
