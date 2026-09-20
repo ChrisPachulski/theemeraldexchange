@@ -1,10 +1,17 @@
 # Dependency bump policy (audit DEP-003; merge governance refreshed 2026-06-13).
 #
-# Dependabot opens weekly PRs across every ecosystem so the digest pins added in
+# Dependabot opens monthly PRs across every ecosystem so the digest pins added in
 # 9-11 / 11-8 (Dockerfile FROM + compose images) and the npm / cargo / pip
 # dependency sets get INTENTIONAL bump PRs instead of drifting. Bumps are GROUPED
-# (see the `groups:` blocks below) to keep a week to a small handful of PRs
+# (see the `groups:` blocks below) to keep a batch to a small handful of PRs
 # rather than one branch per package.
+#
+# Cadence is MONTHLY, not weekly (owner decision, 2026-09-20): nine weekly
+# ecosystems cost ~100-150 Actions minutes a week (each PR runs the full 7-check
+# ci.yml, and each auto-merge re-runs it on main with docker-build), about a
+# quarter of the 2,000-minute plan. This schedule governs VERSION updates only.
+# Dependabot SECURITY updates are driven by advisories, not by this interval, and
+# still open immediately; the audit job still blocks moderate+ advisories.
 #
 # Merge posture is no longer "report-only": the `main` ruleset hard-gates every
 # PR on the 7 ci.yml checks, and `.github/workflows/dependabot-auto-merge.yml`
@@ -23,7 +30,7 @@ updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 5
     ignore:
       # typescript-eslint 8.65.0 (its LATEST) declares `peer typescript
@@ -67,14 +74,14 @@ updates:
   - package-ecosystem: "npm"
     directory: "/crates/emerald-contracts-napi"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 3
 
   # Rust workspace (emerald-contracts crypto crate + media-core/transcoder).
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 5
     groups:
       # PATCH-only grouping. Deliberately NOT minor: for 0.x crates a minor
@@ -91,36 +98,36 @@ updates:
   - package-ecosystem: "pip"
     directory: "/recommender"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 5
 
   # Container base images — keeps the 9-11 / 11-8 digest pins moving via PRs.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 5
 
   # Container base images for the sidecar service Dockerfiles.
   - package-ecosystem: "docker"
     directory: "/recommender"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 3
   - package-ecosystem: "docker"
     directory: "/crates/media-core"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 3
   - package-ecosystem: "docker"
     directory: "/crates/transcoder"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 3
 
   # Keep the CI workflow's own actions current.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "weekly"
+      interval: "monthly"
     open-pull-requests-limit: 3
