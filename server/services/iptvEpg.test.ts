@@ -4,6 +4,13 @@ import { SsrfBlockedError, __setSsrfLookupForTests } from './ssrfGuard.js'
 import { Readable } from 'node:stream'
 
 describe('xmltv helpers', () => {
+  it('preserves CDATA titles and descriptions in programme metadata', async () => {
+    const xml = '<tv><programme start="20260524103000 +0000" stop="20260524110000 +0000" channel="espn.us"><title><![CDATA[Live Baseball]]></title><desc><![CDATA[Yankees game]]></desc></programme></tv>'
+    const rows: EpgProgrammeRow[] = []
+    await streamXmltv(Readable.from(Buffer.from(xml)), row => rows.push(row))
+    expect(rows[0]?.title).toBe('Live Baseball')
+    expect(rows[0]?.description).toBe('Yankees game')
+  })
   it('parses xmltv UTC offset times', () => {
     expect(xmltvTimeToIso('20260524103000 +0000')).toBe('2026-05-24T10:30:00.000Z')
     expect(xmltvTimeToIso('20260524103000 -0400')).toBe('2026-05-24T14:30:00.000Z')

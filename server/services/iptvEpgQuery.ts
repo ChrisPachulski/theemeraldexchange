@@ -57,20 +57,20 @@ export function epgNow(db: IptvDb, channelStreamIds: number[], at: Date = new Da
   const programmeStmt = db.raw.prepare(`
     SELECT channel_id, start_utc, stop_utc, title, description
     FROM epg_programs
-    WHERE channel_id = ? AND stop_utc > ?
-    ORDER BY start_utc ASC
-    LIMIT 2
+    WHERE channel_id = ? AND start_utc <= ? AND stop_utc > ?
+    ORDER BY start_utc DESC
+    LIMIT 1
   `)
 
+  const nextStmt = db.raw.prepare('SELECT channel_id, start_utc, stop_utc, title, description FROM epg_programs WHERE channel_id = ? AND start_utc > ? ORDER BY start_utc ASC LIMIT 1')
   return ids
     .map((streamId) => {
       const channel = channelByStreamId.get(streamId)
       if (!channel) return null
       if (!channel.epg_channel_id) return { channel_stream_id: streamId, current: null, next: null }
 
-      const programmes = programmeStmt.all(channel.epg_channel_id, iso) as EpgProgramme[]
-      const current = programmes.find((p) => p.start_utc <= iso && p.stop_utc > iso) ?? null
-      const next = programmes.find((p) => p.start_utc > iso) ?? null
+      const current = (programmeStmt.get(channel.epg_channel_id, iso, iso) as EpgProgramme | undefined) ?? null
+      const next = (nextStmt.get(channel.epg_channel_id, iso) as EpgProgramme | undefined) ?? null
       return { channel_stream_id: streamId, current, next }
     })
     .filter((row): row is EpgNowRow => row != null)
@@ -133,24 +133,6 @@ export function epgGrid(
   // a generous ceiling here does not pull in empty rows.
   const limit = Math.min(Math.max(opts.limit ?? 60000, 1), 60000)
 
-  // One pass over the programmes overlapping the window, grouped by channel_id.
-  // Cheaper than N+1 per-channel lookups when the grid spans hundreds of rows,
-  // and it yields the has-EPG set used to scope the channel query below. Both
-  // sides are stored lowercase (see 0005_lowercase_epg_id + parseLiveStreams),
-  // so this exact-id grouping joins correctly.
-  const progRows = db.raw.prepare(`
-    SELECT channel_id, start_utc, stop_utc, title, description
-    FROM epg_programs
-    WHERE start_utc < ? AND stop_utc > ?
-    ORDER BY channel_id, start_utc ASC
-  `).all(toIso, fromIso) as EpgProgramme[]
-  const byChannel = new Map<string, EpgProgramme[]>()
-  for (const row of progRows) {
-    const arr = byChannel.get(row.channel_id)
-    if (arr) arr.push(row)
-    else byChannel.set(row.channel_id, [row])
-  }
-
   const where: string[] = []
   const args: Array<string | number> = []
   if (opts.categoryIds && opts.categoryIds.length) {
@@ -161,26 +143,40 @@ export function epgGrid(
     args.push(opts.categoryId)
   }
   if (opts.q && opts.q.trim()) {
-    where.push('name LIKE ?')
-    args.push(`%${opts.q.trim()}%`)
+    where.push("name LIKE ? ESCAPE '\\'")
+    args.push(`%${escapeLike(opts.q.trim())}%`)
   }
   if (opts.hasEpgOnly) {
-    const ids = [...byChannel.keys()]
-    if (ids.length === 0) return []
-    where.push(`${EPG_JOIN_ID} IN (${ids.map(() => '?').join(',')})`)
-    args.push(...ids)
+    where.push(`EXISTS (SELECT 1 FROM epg_programs p WHERE p.channel_id = ${EPG_JOIN_ID} AND p.start_utc < ? AND p.stop_utc > ?)`)
+    args.push(toIso, fromIso)
   }
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
 
   // epg_channel_id here is the RESOLVED join id (name-matched or tvg), so the
   // programme lookup below joins the same id the hasEpgOnly filter used.
-  const channels = db.raw.prepare(`
+  const channelSql = `
     SELECT stream_id, COALESCE(num, 0) AS num, name, stream_icon, ${EPG_JOIN_ID} AS epg_channel_id, tv_archive, tv_archive_duration
     FROM channels
     ${whereSql}
-    ORDER BY num, name
+    ORDER BY num, name, stream_id
     LIMIT ?
-  `).all(...args, limit) as Array<Omit<EpgGridRow, 'programmes'>>
+  `
+  const channels = db.raw.prepare(channelSql).all(...args, limit) as Array<Omit<EpgGridRow, 'programmes'>>
+  if (channels.length === 0) return []
+  // Apply the channel/category cap before reading programmes. The SQL subquery
+  // also avoids one bind parameter per feed id in large libraries.
+  const progRows = db.raw.prepare(`
+    SELECT channel_id, start_utc, stop_utc, title, description FROM epg_programs
+    WHERE channel_id IN (SELECT epg_channel_id FROM (${channelSql}))
+      AND start_utc < ? AND stop_utc > ?
+    ORDER BY channel_id, start_utc
+  `).all(...args, limit, toIso, fromIso) as EpgProgramme[]
+  const byChannel = new Map<string, EpgProgramme[]>()
+  for (const row of progRows) {
+    const programmes = byChannel.get(row.channel_id) ?? []
+    programmes.push(row)
+    byChannel.set(row.channel_id, programmes)
+  }
 
   return channels.map((channel) => ({
     ...channel,
@@ -246,77 +242,39 @@ export function epgSearch(
   if (!term) return { hits: [], total: 0 }
   const limit = Math.min(Math.max(opts.limit ?? 100, 1), SEARCH_LIMIT_MAX)
 
-  // Push the case-insensitive "contains" into SQLite rather than materializing
-  // EVERY window-overlapping programme (hundreds of thousands of rows) into JS
-  // and substring-scanning there — a synchronous better-sqlite3 scan that blocks
-  // the event loop serving live segments. A window function still numbers each
-  // programme by its position in its channel's window-ordered list (so
-  // `programIndex` lines up with the grid's `row.programmes`), but the outer
-  // filter returns ONLY the matched rows, so JS materializes the match set, not
-  // the whole window. LIKE is ASCII case-insensitive by default (mirrors the
-  // client's localizedCaseInsensitiveContains for ASCII terms); metacharacters
-  // in the term are escaped so a literal % / _ can't widen the match. Both id
-  // sides are stored lowercase (0005), so the id grouping below still joins.
-  const likeArg = `%${escapeLike(term)}%`
-  const matchedRows = db.raw.prepare(`
-    SELECT channel_id, start_utc, stop_utc, title, description, program_index
-    FROM (
+  const categories = opts.categoryIds?.length ? opts.categoryIds : []
+  const categoryWhere = categories.length ? 'WHERE category_id IN (' + categories.map(() => '?').join(',') + ')' : ''
+  const likeArg = '%' + escapeLike(term) + '%'
+  // Scope before numbering programmes, then count matches in SQL before LIMIT.
+  // No whole-store id bind list or uncapped JS hit array is needed.
+  const rows = db.raw.prepare(`
+    WITH channel_scope AS (
+      SELECT stream_id, num, name, category_id, COALESCE(epg_resolved_id, epg_channel_id) AS epg_id
+      FROM channels ${categoryWhere}
+    ), programmes AS (
       SELECT channel_id, start_utc, stop_utc, title, description,
-        ROW_NUMBER() OVER (PARTITION BY channel_id ORDER BY start_utc ASC) - 1 AS program_index,
-        (COALESCE(title, '') LIKE @like ESCAPE '\\'
-          OR COALESCE(description, '') LIKE @like ESCAPE '\\') AS is_match
+        ROW_NUMBER() OVER (PARTITION BY channel_id ORDER BY start_utc) - 1 AS program_index
       FROM epg_programs
-      WHERE start_utc < @to AND stop_utc > @from
+      WHERE channel_id IN (SELECT epg_id FROM channel_scope)
+        AND start_utc < ? AND stop_utc > ?
     )
-    WHERE is_match
-    ORDER BY channel_id, program_index
-  `).all({ like: likeArg, to: toIso, from: fromIso }) as Array<EpgProgramme & { program_index: number }>
-
-  const matchesByChannel = new Map<string, Array<{ programme: EpgProgramme; programIndex: number }>>()
-  const matchedIds: string[] = []
-  for (const row of matchedRows) {
-    const { program_index, ...programme } = row
-    let matches = matchesByChannel.get(row.channel_id)
-    if (!matches) {
-      matches = []
-      matchesByChannel.set(row.channel_id, matches)
-      matchedIds.push(row.channel_id)
-    }
-    matches.push({ programme, programIndex: program_index })
+    SELECT c.stream_id AS streamId, c.name AS channelName, c.category_id AS categoryId,
+      p.*, COUNT(*) OVER () AS total
+    FROM channel_scope c JOIN programmes p ON p.channel_id = c.epg_id
+    WHERE COALESCE(p.title, '') LIKE ? ESCAPE '\\'
+       OR COALESCE(p.description, '') LIKE ? ESCAPE '\\'
+    ORDER BY c.num, c.name, c.stream_id, p.start_utc
+    LIMIT ?
+  `).all(...categories, toIso, fromIso, likeArg, likeArg, limit) as Array<EpgProgramme & {
+    streamId: number; channelName: string; categoryId: number | null; program_index: number; total: number
+  }>
+  return {
+    total: rows[0]?.total ?? 0,
+    hits: rows.map(row => ({
+      streamId: row.streamId, channelName: row.channelName, categoryId: row.categoryId,
+      programIndex: row.program_index,
+      programme: { channel_id: row.channel_id, start_utc: row.start_utc, stop_utc: row.stop_utc,
+        title: row.title, description: row.description },
+    })),
   }
-  if (matchedIds.length === 0) return { hits: [], total: 0 }
-
-  // Resolve the matched EPG ids back to channel rows (one EPG id can map to
-  // several duplicate feeds; each becomes its own hit). Optional category filter
-  // narrows the channel set exactly as the grid does.
-  const where: string[] = [`${EPG_JOIN_ID} IN (${matchedIds.map(() => '?').join(',')})`]
-  const args: Array<string | number> = [...matchedIds]
-  if (opts.categoryIds && opts.categoryIds.length) {
-    where.push(`category_id IN (${opts.categoryIds.map(() => '?').join(',')})`)
-    args.push(...opts.categoryIds)
-  }
-  const channels = db.raw.prepare(`
-    SELECT stream_id, name, category_id, ${EPG_JOIN_ID} AS epg_channel_id
-    FROM channels
-    WHERE ${where.join(' AND ')}
-    ORDER BY num, name
-  `).all(...args) as Array<{ stream_id: number; name: string; category_id: number | null; epg_channel_id: string | null }>
-
-  const allHits: EpgSearchHit[] = []
-  for (const channel of channels) {
-    if (!channel.epg_channel_id) continue
-    const matches = matchesByChannel.get(channel.epg_channel_id)
-    if (!matches) continue
-    for (const { programme, programIndex } of matches) {
-      allHits.push({
-        streamId: channel.stream_id,
-        channelName: channel.name,
-        categoryId: channel.category_id,
-        programme,
-        programIndex,
-      })
-    }
-  }
-
-  return { hits: allHits.slice(0, limit), total: allHits.length }
 }

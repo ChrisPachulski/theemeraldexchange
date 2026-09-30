@@ -47,6 +47,34 @@ describe('iptv concurrency tracker', () => {
     expect(t.size()).toBe(2)
   })
 
+  it('an atomic live switch uses its own replacement credit and preserves the other viewer', () => {
+    const t = createConcurrencyTracker({ cap: 2, idleMs: 30_000 })
+    t.tryAcquire({ ...baseOpts('u1', 'old'), kind: 'remux', resourceId: '10' })
+    t.tryAcquire({ ...baseOpts('u2', 'other'), kind: 'remux', resourceId: '11' })
+    const next = t.tryAcquire({ ...baseOpts('u1', 'next'), kind: 'remux', resourceId: '12',
+      replaceLive: true, kindCap: 2 })
+    expect(next.ok).toBe(true)
+    expect(t.list().map(s => s.sessionId).sort()).toEqual(['next', 'other'])
+  })
+
+  it('DVR and raw live reservations consume the same upstream budget as remux', () => {
+    const t = createConcurrencyTracker({ cap: 4, idleMs: 30_000 })
+    t.tryAcquire({ ...baseOpts('dvr:1', 'recording'), resourceId: '10' })
+    t.tryAcquire({ ...baseOpts('u1', 'viewer'), kind: 'remux', resourceId: '11', kindCap: 2 })
+    const denied = t.tryAcquire({ ...baseOpts('u2', 'surplus'), kind: 'remux', resourceId: '12', kindCap: 2 })
+    expect(denied.ok).toBe(false)
+    expect(t.list().map(s => s.sessionId).sort()).toEqual(['recording', 'viewer'])
+  })
+
+  it('a denied replacement preserves its old reservation', () => {
+    const t = createConcurrencyTracker({ cap: 4, idleMs: 30_000 })
+    t.tryAcquire({ ...baseOpts('u1', 'old'), kind: 'remux', resourceId: '10' })
+    t.tryAcquire({ ...baseOpts('u2', 'other'), kind: 'remux', resourceId: '11' })
+    const denied = t.tryAcquire({ ...baseOpts('u1', 'new'), kind: 'remux', resourceId: '10', kindCap: 1 })
+    expect(denied.ok).toBe(false)
+    expect(t.list().map(s => s.sessionId).sort()).toEqual(['old', 'other'])
+  })
+
   // ── kind-scoped cap: remux ↔ upstream-connection ceiling (S1 item 9) ───────
   it('kindCap 429s the surplus remux grant even when the global cap has room', () => {
     // Global cap 4, but remux is clamped to the upstream-connection cap (2). The
@@ -99,6 +127,18 @@ describe('iptv concurrency tracker', () => {
     vi.advanceTimersByTime(150)
     t.sweep()
     expect(t.tryAcquire(baseOpts('u2', 's2')).ok).toBe(true)
+  })
+
+  it('a remux reservation survives an eighty-second buffered fetch gap', () => {
+    const t = createConcurrencyTracker({ cap: 1, idleMs: 30_000 })
+    t.tryAcquire({ ...baseOpts('u1', 'watch'), kind: 'remux' })
+    vi.advanceTimersByTime(80_000)
+    t.sweep()
+    expect(t.list().map(s => s.sessionId)).toEqual(['watch'])
+    expect(t.tryAcquire({ ...baseOpts('u2', 'other'), kind: 'remux' }).ok).toBe(false)
+    vi.advanceTimersByTime(11_000)
+    t.sweep()
+    expect(t.size()).toBe(0)
   })
 
   it('heartbeat resets idle timer', () => {

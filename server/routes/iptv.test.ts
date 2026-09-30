@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, it, expect, vi } from 'vitest'
 import { Hono, type MiddlewareHandler } from 'hono'
-import type { AcquireResult } from '../services/iptvConcurrency.js'
+import { createConcurrencyTracker, type AcquireResult, type ConcurrencyTracker } from '../services/iptvConcurrency.js'
 import { promises as fsp } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -111,6 +111,7 @@ const concurrencyState = vi.hoisted(() => {
 
   return {
     sessions,
+    realTracker: null as ConcurrencyTracker | null,
     releasedByResource,
     heartbeatsByResource,
     tracker: {
@@ -138,6 +139,13 @@ const concurrencyState = vi.hoisted(() => {
       heartbeat: () => {},
       heartbeatByResource: (sub: string, kind: string, resourceId: string) => {
         heartbeatsByResource.push({ sub, kind, resourceId })
+        // A successful heartbeat means a reservation exists. Mirror that
+        // contract for direct remux fixtures; ownership regressions use the
+        // real tracker and never obtain an implicit fixture reservation.
+        if (kind === 'remux' && !sessions.some(s => s.sub === sub && s.kind === kind && s.resourceId === resourceId)) {
+          sessions.push({ sub, kind, resourceId, sessionId: 'fixture:' + sub + ':' + resourceId,
+            title: null, ip: null, startedAt: Date.now(), lastSeen: Date.now() })
+        }
         return true
       },
       release: (sessionId: string) => {
@@ -155,8 +163,9 @@ const concurrencyState = vi.hoisted(() => {
   }
 })
 
-vi.mock('../services/iptvConcurrency.js', () => ({
-  streamConcurrency: vi.fn(() => concurrencyState.tracker),
+vi.mock('../services/iptvConcurrency.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../services/iptvConcurrency.js')>(),
+  streamConcurrency: vi.fn(() => concurrencyState.realTracker ?? concurrencyState.tracker),
 }))
 
 // S9: mock sourcePrecedence so grant endpoints resolve without probing real upstreams
@@ -192,6 +201,7 @@ const remuxState = vi.hoisted(() => ({
 }))
 
 vi.mock('../services/iptvRemux.js', () => ({
+  liveUpstreamCount: (tracker: ConcurrencyTracker) => tracker.list().filter(s => s.kind === 'live').length,
   startRemuxSession: vi.fn((opts: { streamId: string; sub: string; upstreamUrl: string }) => {
     remuxState.startCalls.push(opts)
     const sessionId = 'sess-1'
@@ -267,6 +277,7 @@ beforeEach(() => {
   membersState.member = null
   tokenState.sub = 'plex:42'
   concurrencyState.sessions.length = 0
+  concurrencyState.realTracker = null
   concurrencyState.releasedByResource.length = 0
   concurrencyState.heartbeatsByResource.length = 0
   dbState.testDb?.raw.exec('DELETE FROM iptv_playlist_tokens;')
@@ -796,6 +807,163 @@ describe('guide preview intent + remux session teardown (finding 89)', () => {
     expect(res.status).toBe(200)
     expect(remuxState.activeSessions.has('sess-1')).toBe(true)
   }
+
+  describe('real reservation ownership', () => {
+    beforeEach(() => {
+      concurrencyState.realTracker = createConcurrencyTracker({ cap: 2, idleMs: 30_000 })
+    })
+
+    it('direct playlist byte requests acquire the upstream budget before opening a provider stream', async () => {
+      const requests = [new AbortController(), new AbortController(), new AbortController()]
+      const responses: Response[] = []
+      const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+        new Response(new ReadableStream<Uint8Array>({
+          start(controller) { controller.enqueue(new Uint8Array([0x47, 0x40])) },
+        }), { status: 200, headers: { 'content-type': 'video/mp2t' } }))
+      try {
+        for (let i = 0; i < 2; i++) {
+          tokenState.sub = 'plex:' + (42 + i)
+          const res = await app.request('/api/iptv/stream/live/' + (10 + i) + '.ts?t=' + fakeToken('live', String(10 + i)),
+            { signal: requests[i].signal })
+          responses.push(res)
+          expect(res.status).toBe(200)
+        }
+        expect(concurrencyState.realTracker!.size()).toBe(2)
+        tokenState.sub = 'plex:44'
+        const denied = await app.request('/api/iptv/stream/live/12.ts?t=' + fakeToken('live', '12'),
+          { signal: requests[2].signal })
+        expect(denied.status).toBe(429)
+        expect(upstream).toHaveBeenCalledTimes(2)
+      } finally {
+        for (const request of requests) request.abort()
+        for (const response of responses) await response.body?.cancel().catch(() => {})
+        upstream.mockRestore()
+      }
+    })
+
+    it('a late abort from a replaced raw request cannot release its newer byte stream', async () => {
+      const oldRequest = new AbortController()
+      const newRequest = new AbortController()
+      const signals: AbortSignal[] = []
+      const responses: Response[] = []
+      const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+        signals.push(init!.signal!)
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) { controller.enqueue(new Uint8Array([0x47, 0x40])) },
+        }), { status: 200, headers: { 'content-type': 'video/mp2t' } })
+      })
+      try {
+        const url = '/api/iptv/stream/live/10.ts?t=' + fakeToken('live', '10')
+        responses.push(await app.request(url, { signal: oldRequest.signal }))
+        const owner = concurrencyState.realTracker!.list()[0].sessionId
+        responses.push(await app.request(url, { signal: newRequest.signal }))
+        expect(signals[0].aborted).toBe(true)
+        oldRequest.abort()
+        expect(signals[1].aborted).toBe(false)
+        expect(concurrencyState.realTracker!.list().map(s => s.sessionId)).toEqual([owner])
+      } finally {
+        oldRequest.abort()
+        newRequest.abort()
+        for (const response of responses) await response.body?.cancel().catch(() => {})
+        upstream.mockRestore()
+      }
+    })
+
+    it('a full-cap switch replaces only the caller while preserving the other reservation', async () => {
+      await watchChannel10()
+      const tracker = concurrencyState.realTracker!
+      tracker.tryAcquire({ sub: 'plex:43', sessionId: 'other', kind: 'remux', resourceId: '11' })
+      const next = await app.request('/api/iptv/stream/live/20/grant?client=avplayer', { method: 'POST' })
+      expect(next.status).toBe(200)
+      expect(tracker.list().map(s => s.resourceId).sort()).toEqual(['11', '20'])
+      const calls = remuxState.startCalls.length
+      const stale = await app.request('/api/iptv/stream/live/10/remux/index.m3u8?t=' + fakeToken('remux', '10'))
+      expect(stale.status).toBe(410)
+      expect(remuxState.startCalls).toHaveLength(calls)
+    })
+
+    it('released manifest tokens cannot reopen an unreserved stream', async () => {
+      await watchChannel10()
+      const sid = concurrencyState.realTracker!.list()[0].sessionId
+      expect((await app.request('/api/iptv/sessions/' + encodeURIComponent(sid), { method: 'DELETE' })).status).toBe(200)
+      const calls = remuxState.startCalls.length
+      const stale = await app.request('/api/iptv/stream/live/10/remux/index.m3u8?t=' + fakeToken('remux', '10'))
+      expect(stale.status).toBe(410)
+      expect(remuxState.startCalls).toHaveLength(calls)
+    })
+
+    it('deleting a grant during manifest warming cannot respawn its child', async () => {
+      vi.useFakeTimers()
+      try {
+        const grant = await app.request('/api/iptv/stream/live/10/grant?client=avplayer', { method: 'POST' })
+        const sid = (await grant.json() as { sessionId: string }).sessionId
+        const warming = app.request('/api/iptv/stream/live/10/remux/index.m3u8?t=' + fakeToken('remux', '10'))
+        await vi.advanceTimersByTimeAsync(0)
+        expect(remuxState.startCalls).toHaveLength(1)
+        await app.request('/api/iptv/sessions/' + encodeURIComponent(sid), { method: 'DELETE' })
+        await vi.advanceTimersByTimeAsync(16_000)
+        expect((await warming).status).toBe(410)
+        expect(remuxState.startCalls).toHaveLength(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a raw provider body error immediately releases its reservation', async () => {
+      let failBody: () => void = () => {}
+      const upstream = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+        new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array([0x47, 0x40]))
+            failBody = () => controller.error(new Error('provider disconnected'))
+          },
+        }), { status: 200, headers: { 'content-type': 'video/mp2t' } }))
+      const request = new AbortController()
+      try {
+        const res = await app.request('/api/iptv/stream/live/10.ts?t=' + fakeToken('live', '10'),
+          { signal: request.signal })
+        const reader = res.body!.getReader()
+        await reader.read()
+        expect(concurrencyState.realTracker!.size()).toBe(1)
+        failBody()
+        await expect(reader.read()).rejects.toThrow('provider disconnected')
+        await new Promise(resolve => setTimeout(resolve, 0))
+        expect(concurrencyState.realTracker!.size()).toBe(0)
+      } finally {
+        request.abort()
+        upstream.mockRestore()
+      }
+    })
+
+    it('a same-channel preview borrows the watch without owning its teardown', async () => {
+      await watchChannel10()
+      const original = concurrencyState.realTracker!.list()[0].sessionId
+      const preview = await app.request('/api/iptv/stream/live/10/grant?client=avplayer&intent=preview', { method: 'POST' })
+      expect(preview.status).toBe(200)
+      expect((await preview.json() as { sessionId?: string }).sessionId).toBeUndefined()
+      expect(concurrencyState.realTracker!.list().map(s => s.sessionId)).toEqual([original])
+      expect(remuxState.activeSessions.has('sess-1')).toBe(true)
+    })
+
+    it('an already minted remux segment is refused after membership revocation', async () => {
+      await watchChannel10()
+      remuxState.files.set('/tmp/remux/sess-1/seg_00000.ts', '')
+      membershipState.status = 'revoked'
+      const res = await app.request('/api/iptv/stream/live/10/remux/seg?t=' + fakeToken('remux', 'sess-1/seg_00000.ts'))
+      expect(res.status).toBe(401)
+      expect(await res.json()).toEqual({ error: 'access_revoked' })
+    })
+
+    it.each(['avplayer', 'web'])('DVR plus a viewer exhaust the live upstream budget for %s', async (client) => {
+      const tracker = createConcurrencyTracker({ cap: 4, idleMs: 30_000 })
+      concurrencyState.realTracker = tracker
+      tracker.tryAcquire({ sub: 'dvr:1', sessionId: 'recording', kind: 'live', resourceId: '11' })
+      tracker.tryAcquire({ sub: 'plex:43', sessionId: 'other', kind: 'remux', resourceId: '12' })
+      const res = await app.request('/api/iptv/stream/live/10/grant?client=' + client, { method: 'POST' })
+      expect(res.status).toBe(429)
+      expect(tracker.list().map(s => s.sessionId).sort()).toEqual(['other', 'recording'])
+    })
+  })
 
   it('a preview-intent grant does NOT evict the account\'s active watch session', async () => {
     await watchChannel10()
@@ -2631,6 +2799,51 @@ describe('remux live delivery (AVPlayer)', () => {
     expect(res.status).toBe(404)
     const body = (await res.json()) as { error: string }
     expect(body.error).toBe('segment_gone')
+  })
+})
+
+describe('EPG time-window normalization', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  beforeEach(() => {
+    __resetRateLimitsForTests()
+    const db = dbState.testDb!
+    db.stmts.upsertChannel.run({
+      stream_id: 80001, num: 80001, name: 'Window test', stream_icon: null,
+      epg_channel_id: 'window.test', category_id: 999, is_adult: 0, tv_archive: 0,
+      tv_archive_duration: null, added_ts: null, fetched_at: '2026-05-24T12:00:00.000Z',
+    })
+    for (const [start, stop, title] of [['11', '12', 'Window past'], ['12', '13', 'Window current'], ['13', '14', 'Window future']]) {
+      db.stmts.upsertEpg.run({
+        channel_id: 'window.test', start_utc: '2026-05-24T' + start + ':00:00.000Z',
+        stop_utc: '2026-05-24T' + stop + ':00:00.000Z', title, description: null,
+      })
+    }
+  })
+  it.each([
+    ['2026-05-24T12:00:00Z', '2026-05-24T13:00:00Z'],
+    ['2026-05-24T12:00:00.000Z', '2026-05-24T13:00:00.000Z'],
+    ['2026-05-24T05:00:00-07:00', '2026-05-24T06:00:00-07:00'],
+  ])('channel, grid and search share a half-open window for %s', async (from, to) => {
+    const query = new URLSearchParams({ from, to }).toString()
+    const channel = await app.request('/api/iptv/epg/channel/80001?' + query)
+    expect(channel.status).toBe(200)
+    expect((await channel.json() as Array<{ title: string }>).map(row => row.title)).toEqual(['Window current'])
+    const grid = await app.request('/api/iptv/epg/grid?categoryId=999&limit=1&' + query)
+    expect(grid.status).toBe(200)
+    const rows = await grid.json() as Array<{ programmes: Array<{ title: string }> }>
+    expect(rows[0].programmes.map(row => row.title)).toEqual(['Window current'])
+    const search = await app.request('/api/iptv/epg/search?q=Window&categoryIds=999&' + query)
+    expect(search.status).toBe(200)
+    const hits = await search.json() as { hits: Array<{ programme: { title: string } }> }
+    expect(hits.hits.map(hit => hit.programme.title)).toEqual(['Window current'])
+  })
+  it.each(['invalid', '2026-05-24T13:00:00Z'])('rejects an invalid or empty window beginning %s', async (from) => {
+    const query = new URLSearchParams({ from, to: '2026-05-24T13:00:00Z' }).toString()
+    for (const route of ['/epg/channel/80001?', '/epg/grid?', '/epg/search?q=Window&']) {
+      const res = await app.request('/api/iptv' + route + query)
+      expect(res.status).toBe(400)
+      expect(await res.json()).toEqual({ error: 'invalid_window' })
+    }
   })
 })
 

@@ -74,18 +74,27 @@ iptv.get('/epg/now', requireAuth, requireSection('live'), (c) => {
   return c.json(epgNow(iptvDb(), ids))
 })
 
+function epgWindow(c: Context<Env>, hours: number): { from: string; to: string } | null {
+  const from = new Date(c.req.query('from') ?? Date.now())
+  const to = new Date(c.req.query('to') ?? Date.now() + hours * 3600_000)
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || to <= from) return null
+  return { from: from.toISOString(), to: to.toISOString() }
+}
+
 iptv.get('/epg/channel/:channelId', requireAuth, requireSection('live'), (c) => {
   const channelId = Number(c.req.param('channelId'))
   if (!Number.isInteger(channelId) || channelId <= 0) return c.json({ error: 'invalid_id' }, 400)
 
-  const from = c.req.query('from') ?? new Date().toISOString()
-  const to = c.req.query('to') ?? new Date(Date.now() + 24 * 3600_000).toISOString()
+  const window = epgWindow(c, 24)
+  if (!window) return c.json({ error: 'invalid_window' }, 400)
+  const { from, to } = window
   return c.json(epgChannelWindow(iptvDb(), channelId, from, to))
 })
 
 iptv.get('/epg/grid', requireAuth, requireSection('live'), async (c) => {
-  const from = c.req.query('from') ?? new Date().toISOString()
-  const to = c.req.query('to') ?? new Date(Date.now() + 4 * 3600_000).toISOString()
+  const window = epgWindow(c, 4)
+  if (!window) return c.json({ error: 'invalid_window' }, 400)
+  const { from, to } = window
   const rawCategoryId = c.req.query('categoryId')
   const categoryId = rawCategoryId != null && rawCategoryId !== '' ? Number(rawCategoryId) : undefined
   if (categoryId != null && (!Number.isInteger(categoryId) || categoryId <= 0)) {
@@ -153,8 +162,9 @@ iptv.get('/epg/search', requireAuth, requireSection('live'), epgSearchRateLimit,
   // LIKE into a whole-store scan; require >=2 chars so the filter narrows.
   if (q.length < 2) return c.json({ error: 'invalid_query' }, 400)
 
-  const from = c.req.query('from') ?? new Date().toISOString()
-  const to = c.req.query('to') ?? new Date(Date.now() + 4 * 3600_000).toISOString()
+  const window = epgWindow(c, 4)
+  if (!window) return c.json({ error: 'invalid_window' }, 400)
+  const { from, to } = window
 
   const rawCategoryIds = c.req.query('categoryIds')
   const categoryIds = rawCategoryIds

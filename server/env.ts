@@ -706,8 +706,8 @@ export const env = {
   // short finite-asset TTL above froze live cable after exactly 5 minutes. A
   // live token must outlast a viewing sitting — like MEDIA_STREAM_TOKEN_TTL_SECS
   // for local media. It is rid-bound to one channel + sub and only yields a
-  // stream while the upstream session is alive (idle-reaped 30s after the viewer
-  // stops), so a long TTL is low-impact. Per-segment remux tokens stay on the
+  // remux stream while its reservation is alive (idle-reaped after at least
+  // 90s without fetches), so a long TTL is low-impact. Segment tokens stay on the
   // short TTL above (re-minted each segment, consumed within the live window).
   IPTV_LIVE_TOKEN_TTL_SECS: positiveInt('IPTV_LIVE_TOKEN_TTL_SECS', 43_200),
   // TTL for ON-DEMAND grant tokens (VOD, series, catch-up) and the HLS segment

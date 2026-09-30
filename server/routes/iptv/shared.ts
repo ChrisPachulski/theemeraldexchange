@@ -174,6 +174,40 @@ export function clientWantsAvplayer(c: Context<Env>): boolean {
   return c.req.query('client') === 'avplayer'
 }
 
+const rawLiveStreams = new Map<string, { sub: string; streamId: string; controller: AbortController }>()
+
+/** One physical byte proxy per viewer/channel. Publish its new owner before
+ *  aborting a prior proxy, so late teardown cannot release the replacement. */
+export function beginRawLiveStream(sub: string, streamId: string) {
+  const key = sub + '|' + streamId
+  const previous = rawLiveStreams.get(key)
+  const controller = new AbortController()
+  rawLiveStreams.set(key, { sub, streamId, controller })
+  previous?.controller.abort()
+  const isCurrent = () => rawLiveStreams.get(key)?.controller === controller
+  return {
+    controller, isCurrent,
+    dispose: () => {
+      if (!isCurrent()) return false
+      rawLiveStreams.delete(key)
+      return true
+    },
+  }
+}
+
+export function stopRawLiveStream(sub: string, streamId: string): void {
+  const key = sub + '|' + streamId
+  const stream = rawLiveStreams.get(key)
+  rawLiveStreams.delete(key)
+  stream?.controller.abort()
+}
+
+export function stopOtherRawLiveStreams(sub: string, keepStreamId?: string): void {
+  for (const stream of rawLiveStreams.values()) {
+    if (stream.sub === sub && stream.streamId !== keepStreamId) stopRawLiveStream(sub, stream.streamId)
+  }
+}
+
 // A pass-through TransformStream that invokes `onChunk` for each chunk that
 // flows through it. Used to heartbeat a long-lived byte stream's concurrency
 // slot (finding 8-1) without buffering or copying the payload. `onChunk` is
@@ -226,12 +260,12 @@ export function parsePositiveInt(value: string | undefined): number | null {
   return parsed
 }
 
-export function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId: string): { ok: true; sub: string } | { ok: false; resp: Response } {
+export function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId?: string): { ok: true; sub: string; resourceId: string } | { ok: false; resp: Response } {
   const t = c.req.query('t') ?? ''
   try {
     const claims = verifyStreamToken(env.streamTokenSecret, t)
-    if (claims.k !== expectKind || claims.rid !== resourceId) {
-      return { ok: false, resp: c.json({ error: 'token_mismatch' }, 401) }
+    if (claims.k !== expectKind || (resourceId !== undefined && claims.rid !== resourceId)) {
+      return { ok: false, resp: c.json({ error: resourceId === undefined ? 'invalid_token' : 'token_mismatch' }, 401) }
     }
     // Per-kind replay enforcement. 'playlist' tokens are not routed through
     // checkToken (they have their own inline path) so the cast is always safe.
@@ -255,7 +289,7 @@ export function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId: 
     if (memberStatus(sub) !== 'allowed') {
       return { ok: false, resp: c.json({ error: 'access_revoked' }, 401) }
     }
-    return { ok: true, sub }
+    return { ok: true, sub, resourceId: claims.rid }
   } catch (err) {
     return { ok: false, resp: c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401) }
   }

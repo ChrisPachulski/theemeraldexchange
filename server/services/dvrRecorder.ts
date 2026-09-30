@@ -13,7 +13,7 @@ import path from 'node:path'
 import type Database from 'better-sqlite3'
 import { env } from '../env.js'
 import { credsFromEnv } from './xtream.js'
-import { scrubXtreamCreds } from './iptvRemux.js'
+import { scrubXtreamCreds, liveUpstreamCount } from './iptvRemux.js'
 import { streamConcurrency, type ConcurrencyTracker } from './iptvConcurrency.js'
 import {
   planTransitions,
@@ -35,7 +35,8 @@ const log = createLogger('dvr')
 // live viewers, remux viewers, and recordings (all registered as kind 'live').
 // vod/series open no provider connection, so they don't count.
 function upstreamInUse(tracker: ConcurrencyTracker): number {
-  return tracker.list().filter((s) => s.kind === 'live' || s.kind === 'remux').length
+  const reserved = tracker.list().filter(s => s.kind === 'live' || s.kind === 'remux').length
+  return Math.max(reserved, liveUpstreamCount(tracker))
 }
 
 /** Pure: ffmpeg argv that copies a live .ts stream to a file, bounded by `-t`. */

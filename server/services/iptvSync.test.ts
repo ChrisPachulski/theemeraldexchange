@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -42,7 +42,8 @@ vi.mock('../env.js', () => ({
     IPTV_SYNC_CRON: '0 */6 * * *',
   },
 }))
-vi.mock('./iptvEpg.js', () => ({
+vi.mock('./iptvEpg.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./iptvEpg.js')>(),
   fetchAndStreamEpg: vi.fn(async (onRow: (r: EpgProgrammeRow) => void) => {
     onRow({ channel_id: 'c.1', start_utc: '2026-05-24T10:00:00.000Z', stop_utc: '2026-05-24T10:30:00.000Z', title: 'P1', description: null })
     onRow({ channel_id: 'c.1', start_utc: '2026-05-24T10:30:00.000Z', stop_utc: '2026-05-24T11:00:00.000Z', title: 'P2', description: null })
@@ -53,12 +54,47 @@ vi.mock('./iptvEpgExternal.js', () => ({
 }))
 
 import { syncOnce } from './iptvSync.js'
+import { fetchAndStreamEpg } from './iptvEpg.js'
+import { fetchLiveStreams } from './xtream.js'
+import { ingestAllExternalEpg } from './iptvEpgExternal.js'
 
 describe('iptv sync orchestrator', () => {
   let dbFile: string
   beforeEach(() => {
+    vi.useFakeTimers({ now: new Date('2026-05-24T12:00:00.000Z'), toFake: ['Date'] })
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-'))
     dbFile = path.join(tmp, 'iptv.db')
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('an ancient provider schedule cannot claim a channel and block its current external fallback', async () => {
+    const db = openIptvDb(dbFile)
+    vi.mocked(fetchLiveStreams).mockResolvedValueOnce([{
+      stream_id: 10, num: 1, name: 'US: ESPN', stream_icon: null, epg_channel_id: 'espn.us',
+      category_id: 1, is_adult: 0, tv_archive: 0, tv_archive_duration: null,
+      added_ts: null, fetched_at: '2026-05-24T12:00:00.000Z',
+    }])
+    vi.mocked(fetchAndStreamEpg).mockImplementationOnce(async onRow => {
+      onRow({ channel_id: 'espn.us', start_utc: '2026-05-20T12:00:00.000Z',
+        stop_utc: '2026-05-20T13:00:00.000Z', title: 'Ancient', description: null })
+    })
+    const external = await vi.importActual<typeof import('./iptvEpgExternal.js')>('./iptvEpgExternal.js')
+    const xml = '<tv><channel id="external.espn"><display-name>ESPN</display-name></channel><programme channel="external.espn" start="20260524120000 +0000" stop="20260524130000 +0000"><title>Current external game</title></programme></tv>'
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(xml)))
+    vi.mocked(ingestAllExternalEpg).mockImplementationOnce(async target => [
+      await external.ingestExternalEpg(target, 'https://epg.example/feed.xml'),
+    ])
+    try {
+      await syncOnce(db)
+      expect(db.raw.prepare('SELECT epg_resolved_id FROM channels WHERE stream_id = 10').get())
+        .toEqual({ epg_resolved_id: 'external.espn' })
+      expect(db.raw.prepare('SELECT title FROM epg_programs').all()).toEqual([{ title: 'Current external game' }])
+    } finally {
+      db.close()
+    }
   })
 
   it('populates catalog + epg under one mutex', async () => {

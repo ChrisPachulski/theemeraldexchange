@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { env } from '../env.js'
 import { createLogger } from './logger.js'
+import { REMUX_IDLE_MS, streamConcurrency, type ConcurrencyTracker } from './iptvConcurrency.js'
 
 const log = createLogger('iptv-remux')
 
@@ -58,7 +59,7 @@ export interface StartRemuxResult {
 }
 
 // A live HLS player does NOT poll continuously. AVPlayer buffers a chunk of the
-// sliding window (up to ~48s here: hls_list_size 24 × hls_time 2) and then goes
+// sliding window (up to ~80s here: hls_list_size 40 × hls_time 2) and then goes
 // SILENT while it drains that buffer — measured fetch gaps of ~17s on tvOS. The
 // old 15s reap mistook that buffered silence for a closed app and SIGKILLed the
 // ffmpeg of an actively-watched channel mid-stream: the player drains its buffer,
@@ -67,9 +68,8 @@ export interface StartRemuxResult {
 // The idle reap is only the backstop for an outright app-close that skipped the
 // client's session DELETE; channel switches are freed eagerly by
 // dropOtherLiveRemuxSessions. So the timeout must sit safely ABOVE the buffer-
-// drain gap (well past the 48s window). A ghost lingering this long is fine;
+// drain gap (past the 80s window). A ghost lingering this long is fine;
 // reaping a live viewer is not.
-const IDLE_MS = 90_000
 const sessions = new Map<string, RemuxSession>()
 
 // SIGTERMed-but-not-yet-exited children. stopRemuxSession only SIGTERMs and
@@ -86,8 +86,8 @@ const draining = new Set<ChildProcess>()
 /** Live upstream connections right now: active sessions PLUS SIGTERMed children
  *  that have not yet released their provider socket. This — not `sessions.size`
  *  — is what the connection cap must bound. */
-function liveUpstreamCount(): number {
-  return sessions.size + draining.size
+export function liveUpstreamCount(tracker: ConcurrencyTracker = streamConcurrency()): number {
+  return sessions.size + draining.size + tracker.list().filter(s => s.kind === 'live').length
 }
 
 /** Test seam: drop draining-child tracking so cap accounting doesn't leak across
@@ -329,10 +329,10 @@ export function stopRemuxSession(sessionId: string, reason = 'manual'): void {
  */
 export async function drainRemuxSessions(graceMs = 5_000): Promise<void> {
   const ids = [...sessions.keys()]
-  if (ids.length === 0) return
+  if (ids.length === 0 && draining.size === 0) return
   for (const id of ids) stopRemuxSession(id, 'drain')
   const deadline = Date.now() + graceMs
-  while (sessions.size > 0 && Date.now() < deadline) {
+  while (draining.size > 0 && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50))
   }
 }
@@ -340,7 +340,7 @@ export async function drainRemuxSessions(graceMs = 5_000): Promise<void> {
 function sweepIdleSessions(): void {
   const now = Date.now()
   for (const s of sessions.values()) {
-    if (now - s.lastSeen > IDLE_MS) stopRemuxSession(s.sessionId, 'idle-sweep')
+    if (now - s.lastSeen > REMUX_IDLE_MS) stopRemuxSession(s.sessionId, 'idle-sweep')
   }
 }
 
@@ -360,9 +360,10 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
   // CORRUPT, undecodable video to everyone until it cools down — so we bound the
   // count here rather than trust every caller to behave.
   //
-  // At the cap, evict the least-recently-seen session (a channel-switch ghost or
-  // an abandoned viewer) to free a slot — but do NOT spawn the replacement in the
-  // same tick. stopRemuxSession only SIGTERMs; the evicted ffmpeg keeps its
+  // At the cap, reclaim only a session past the idle deadline. Buffered live
+  // players can be silent for most of the window; LRU alone is not abandonment.
+  // Never spawn the replacement in the same tick. stopRemuxSession only
+  // SIGTERMs; the evicted ffmpeg keeps its
   // provider socket open for a beat (it becomes `draining`), so dialing now would
   // momentarily hold cap+1 connections — the exact over-cap burst the provider
   // punishes. Instead start the eviction and return null: the caller serves a
@@ -377,8 +378,8 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
       for (const s of sessions.values()) {
         if (!lru || s.lastSeen < lru.lastSeen) lru = s
       }
-      if (lru) {
-        log.warn('upstream cap reached — evicting LRU; deferring the new dial until it releases its provider connection', {
+      if (lru && Date.now() - lru.lastSeen > REMUX_IDLE_MS) {
+        log.warn('upstream cap reached — reclaiming idle session; waiting for its provider connection to close', {
           cap,
           evictedSessionId: lru.sessionId,
           idleMs: Date.now() - lru.lastSeen,

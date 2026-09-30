@@ -146,6 +146,7 @@ export async function streamXmltv(
     }
   })
   parser.on('text', (t) => { if (inTitle || inDesc) text += t })
+  parser.on('cdata', (t) => { if (inTitle || inDesc) text += t })
   parser.on('closetag', (name) => {
     if (name === 'title' && inTitle && cur) { cur.title = text || null; inTitle = false; text = '' }
     else if (name === 'desc' && inDesc && cur) { cur.description = text || null; inDesc = false; text = '' }

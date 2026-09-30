@@ -2,6 +2,7 @@
 
 import { Hono } from 'hono'
 import fs from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { requireAuth } from '../../middleware/auth.js'
 import { requireSection } from '../../services/userPolicies.js'
@@ -9,18 +10,17 @@ import { capBlocksUnrated } from '../../services/parentalRating.js'
 import { credsFromEnv } from '../../services/xtream.js'
 import { nodeReadableToWebStream } from '../../services/streamBridge.js'
 import { iptvDb } from '../../services/iptvDbSingleton.js'
-import { signStreamToken, verifyStreamToken } from '../../services/iptvStreamToken.js'
-import { checkReplay } from '../../services/tokenReplayCache.js'
+import { signStreamToken } from '../../services/iptvStreamToken.js'
 import { resolveSourcePrecedence } from '../../services/sourcePrecedence.js'
 import { streamConcurrency } from '../../services/iptvConcurrency.js'
 import { guardedFetchTrustedOrigin, SsrfBlockedError } from '../../services/ssrfGuard.js'
-import { heartbeatRemuxSession, channelIsDeadFeed, markChannelDeadFeed, DEAD_FEED_CLEAN_EOF_MS } from '../../services/iptvRemux.js'
+import { heartbeatRemuxSession, channelIsDeadFeed, markChannelDeadFeed, DEAD_FEED_CLEAN_EOF_MS, liveUpstreamCount } from '../../services/iptvRemux.js'
 import { ensureLiveRemuxEntry, dropOtherLiveRemuxSessions, getActiveLiveRemuxEntry, isChannelOfflineUpstream, remuxManifestReady, remuxSegmentResource, rewriteRemuxManifest } from '../../services/iptvLiveRemuxMap.js'
 import { resolveSiblingFeeds } from '../../services/iptvSiblingFeeds.js'
 import { channelArchiveRow } from '../../services/iptvRows.js'
 import { env } from '../../env.js'
 import { type Env } from '../../middleware/auth.js'
-import { clientIp, sessionTitle, enrichSessionsFor, userOf, clientWantsAvplayer, makeHeartbeatStream, formatXtreamTimeshiftStart, parsePositiveInt, checkToken, sleep } from './shared.js'
+import { clientIp, sessionTitle, enrichSessionsFor, userOf, clientWantsAvplayer, makeHeartbeatStream, formatXtreamTimeshiftStart, parsePositiveInt, checkToken, sleep, beginRawLiveStream, stopOtherRawLiveStreams } from './shared.js'
 
 export const iptv = new Hono<Env>()
 
@@ -57,10 +57,13 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
   // and the two flap. Only a real watch grant tears the account's other tuners
   // down. The client signals its intent via ?intent=preview (GuidePreview).
   const isPreview = c.req.query('intent') === 'preview'
-  const sessionId = `live:${streamId}:${sub}:${Date.now()}`
-  const acquired = streamConcurrency().tryAcquire({
+  const tracker = streamConcurrency()
+  const borrowed = isPreview && wantsRemux && tracker.list().some(s => s.sub === sub && s.kind === 'remux' && s.resourceId === streamId)
+  const sessionId = borrowed ? undefined : 'live:' + streamId + ':' + sub + ':' + randomUUID()
+  const acquired = borrowed ? { ok: true as const } : tracker.tryAcquire({
     sub,
-    sessionId,
+    sessionId: sessionId!,
+    replaceLive: !isPreview,
     kind: wantsRemux ? 'remux' : 'live',
     resourceId: streamId,
     ip: clientIp(c),
@@ -70,9 +73,7 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
     // that ceiling so the surplus viewer gets a clean iptv_concurrency_limit
     // 429 here instead of being silently ffmpeg-evicted mid-stream once the
     // upstream cap is exceeded. Must satisfy CONCURRENT ≤ UPSTREAM for remux.
-    kindCap: wantsRemux
-      ? Math.min(env.IPTV_MAX_CONCURRENT_STREAMS, env.IPTV_MAX_UPSTREAM_CONNECTIONS)
-      : undefined,
+    kindCap: Math.min(env.IPTV_MAX_CONCURRENT_STREAMS, env.IPTV_MAX_UPSTREAM_CONNECTIONS),
   })
   if (!acquired.ok) {
     // source_unavailable (503) is handled above by resolveSourcePrecedence before
@@ -84,22 +85,13 @@ iptv.post('/stream/live/:streamId/grant', requireAuth, requireSection('live'), a
     return c.json({ ...acquired, sessions: enrichSessionsFor(acquired.sessions, sub, c.get('session').role === 'admin') }, 429)
   }
 
+  if (!isPreview) {
+    // Admission replaced the caller's live reservations atomically. Only now
+    // stop its old renderers; failed admission preserves existing playback.
+    stopOtherRawLiveStreams(sub)
+    dropOtherLiveRemuxSessions(sub, wantsRemux ? streamId : '')
+  }
   if (wantsRemux) {
-    // One live tuner per viewer: selecting a channel tears down this user's
-    // OTHER live remux channels (the channel they were on, or a ghost from a
-    // prior app-close) and frees their upstream provider connections + slots
-    // NOW, instead of waiting on the idle sweep — so a 1–2 connection provider
-    // sees the old connection close first rather than momentarily needing two.
-    // This runs ONCE per channel selection (here), never on the manifest poll:
-    // a lingering poll from the channel being left can respawn its own ffmpeg
-    // but can no longer kill the freshly-tuned one, so the two never ping-pong.
-    // Skipped for a preview grant (see isPreview above) so guide browsing never
-    // evicts the household's active watch.
-    if (!isPreview) {
-      for (const goneStreamId of dropOtherLiveRemuxSessions(sub, streamId)) {
-        streamConcurrency().releaseByResource(sub, 'remux', goneStreamId)
-      }
-    }
     const token = signStreamToken(env.streamTokenSecret, {
       kind: 'remux', resourceId: streamId, sub, ttlSecs: env.IPTV_LIVE_TOKEN_TTL_SECS,
     })
@@ -221,15 +213,37 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   if (!streamId) return c.json({ error: 'invalid_id' }, 400)
   const v = checkToken(c, 'live', streamId)
   if (!v.ok) return v.resp
-  // Finding 8-1: a long live view whose player never re-grants was idle-reaped
-  // after 30s while bytes still flowed. The live .ts byte stream is one long
-  // open fetch, so heartbeat the grant session now AND on each streamed chunk
-  // (see liveHeartbeatStream below), and release the slot when the client
-  // disconnects so it frees immediately on tab-close / player teardown. The
-  // grant for non-AVPlayer live acquired kind 'live' on resourceId=streamId,
-  // which this resource-keyed path matches without needing the opaque
-  // sessionId (the stream token is crate-canonical and carries no sid claim).
-  streamConcurrency().heartbeatByResource(v.sub, 'live', streamId)
+  const tracker = streamConcurrency()
+  let reservation = tracker.list().find(s => s.sub === v.sub && s.kind === 'live' && s.resourceId === streamId)
+  // Playlist URLs have no preceding grant POST; reserve before dialing them.
+  if (!reservation) {
+    const acquired = tracker.tryAcquire({ sub: v.sub, sessionId: 'live:' + streamId + ':' + v.sub + ':' + randomUUID(),
+      kind: 'live', resourceId: streamId, ip: clientIp(c), title: sessionTitle('live', streamId),
+      kindCap: Math.min(env.IPTV_MAX_CONCURRENT_STREAMS, env.IPTV_MAX_UPSTREAM_CONNECTIONS) })
+    if (!acquired.ok) {
+      if (acquired.reason !== 'iptv_concurrency_limit') return c.json(acquired, 503)
+      return c.json({ ...acquired, sessions: enrichSessionsFor(acquired.sessions, v.sub, false) }, 429)
+    }
+    reservation = tracker.list().find(s => s.sessionId === acquired.sessionId)
+  }
+  if (!reservation) return c.json({ error: 'session_gone' }, 410)
+  const sessionId = reservation.sessionId
+  tracker.heartbeatByResource(v.sub, 'live', streamId)
+  // A replacement can still have an old remux child draining. Its physical
+  // socket counts alongside DVR and this newly reserved raw slot.
+  const deadline = Date.now() + 6_000
+  while (liveUpstreamCount(tracker) > env.IPTV_MAX_UPSTREAM_CONNECTIONS && Date.now() < deadline) {
+    await sleep(100)
+    if (c.req.raw.signal.aborted || !tracker.list().some(s => s.sessionId === sessionId)) {
+      tracker.release(sessionId)
+      return c.json({ error: 'session_gone' }, 410)
+    }
+  }
+  if (liveUpstreamCount(tracker) > env.IPTV_MAX_UPSTREAM_CONNECTIONS) {
+    tracker.release(sessionId)
+    return c.json({ ok: false, reason: 'iptv_concurrency_limit', limit: env.IPTV_MAX_UPSTREAM_CONNECTIONS,
+      current: liveUpstreamCount(tracker), sessions: enrichSessionsFor(tracker.list(), v.sub, false) }, 429)
+  }
   const creds = credsFromEnv()
   const upstreamUrlFor = (sid: string) =>
     `${creds.host}/live/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${sid}.ts`
@@ -243,14 +257,13 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   // any remembered as a dead placeholder, and dial the first that answers.
   const candidateFeeds = resolveSiblingFeeds(iptvDb().raw, streamId)
 
-  const controller = new AbortController()
+  const lease = beginRawLiveStream(v.sub, streamId)
+  const controller = lease.controller
   let clientAborted = false
-  c.req.raw.signal.addEventListener('abort', () => {
-    clientAborted = true
-    controller.abort()
-    // Client gone — free the slot now rather than waiting for the idle sweep.
-    streamConcurrency().releaseByResource(v.sub, 'live', streamId)
-  }, { once: true })
+  const release = () => { if (lease.dispose()) tracker.release(sessionId) }
+  controller.signal.addEventListener('abort', () => { clientAborted = true; release() }, { once: true })
+  c.req.raw.signal.addEventListener('abort', () => controller.abort(), { once: true })
+  if (c.req.raw.signal.aborted) controller.abort()
 
   // SSRF: trusted creds origin, but re-validate any upstream-issued redirect
   // so a panel can't bounce the live byte stream into the internal network.
@@ -266,6 +279,7 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
       })
     } catch (err) {
       if (err instanceof SsrfBlockedError) continue // a bad candidate — try the next sibling
+      controller.abort()
       throw err
     }
     if (resp.ok && resp.body) {
@@ -282,6 +296,7 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
     // channel_offline_upstream contract the remux path uses (503) so the client
     // stops retrying and offers an alternative instead of the old 502 that
     // looped mpegts.js into a frozen spinner.
+    controller.abort()
     return c.json({ error: 'channel_offline_upstream' }, 503)
   }
   const feed = dialedFeed
@@ -302,16 +317,20 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   // UPSTREAM closes cleanly within the clean-EOF window and the client did NOT
   // disconnect, remember the dialed feed as dead so the client's next reload
   // (mpegts.js recover()) skips it and fails over to a live sibling.
-  const heartbeatBody = upstream.body.pipeThrough(
+  const heartbeat =
     makeHeartbeatStream(
-      () => streamConcurrency().heartbeatByResource(v.sub, 'live', streamId),
       () => {
-        if (clientAborted) return
-        if (Date.now() - dialedAt <= DEAD_FEED_CLEAN_EOF_MS) markChannelDeadFeed(feed)
+        if (!lease.isCurrent() || !tracker.list().some(s => s.sessionId === sessionId)) controller.abort()
+        else tracker.heartbeatByResource(v.sub, 'live', streamId)
       },
-    ),
-  )
-  return new Response(heartbeatBody, {
+      () => {
+        if (clientAborted || !lease.isCurrent()) return
+        if (Date.now() - dialedAt <= DEAD_FEED_CLEAN_EOF_MS) markChannelDeadFeed(feed)
+        release()
+      },
+    )
+  void upstream.body.pipeTo(heartbeat.writable, { signal: controller.signal }).catch(() => {}).finally(release)
+  return new Response(heartbeat.readable, {
     status: 200,
     headers: {
       'Content-Type': 'video/mp2t',
@@ -333,7 +352,14 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   // is idle-swept after ~30s and the IPTV_MAX_CONCURRENT_STREAMS cap is silently
   // defeated — every other delivery kind heartbeats its slot, remux did not, so
   // concurrent AVPlayer viewers each held an unaccounted upstream connection.
-  streamConcurrency().heartbeatByResource(v.sub, 'remux', streamId)
+  if (!streamConcurrency().heartbeatByResource(v.sub, 'remux', streamId)) {
+    return c.json({ error: 'session_gone' }, 410)
+  }
+
+  const tracker = streamConcurrency()
+  const reservation = tracker.list().find(s => s.sub === v.sub && s.kind === 'remux' && s.resourceId === streamId)
+  if (!reservation) return c.json({ error: 'session_gone' }, 410)
+  const ownsReservation = () => !c.req.raw.signal.aborted && tracker.list().some(s => s.sessionId === reservation.sessionId)
 
   const creds = credsFromEnv()
   const upstreamUrlFor = (sid: string) =>
@@ -396,6 +422,7 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
     // ensureLiveRemuxEntry returns the same entry while the session is alive,
     // and null while a just-died session is in reconnect cooldown — in which
     // case stop waiting rather than busy-loop, and let the client retry.
+    if (!ownsReservation()) return c.json({ error: 'session_gone' }, 410)
     const next = ensureLiveRemuxEntry(ensureOpts)
     if (!next) break
     entry = next
@@ -416,6 +443,9 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
     return c.json({ error: 'remux_warming' }, 503)
   }
 
+  if (!ownsReservation()) return c.json({ error: 'session_gone' }, 410)
+  const finalAuth = checkToken(c, 'remux', streamId)
+  if (!finalAuth.ok) return finalAuth.resp
   const rewritten = rewriteRemuxManifest(
     fs.readFileSync(entry.manifestPath, 'utf-8'),
     streamId,
@@ -436,22 +466,14 @@ iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
 
-  const t = c.req.query('t') ?? ''
-  let claims: ReturnType<typeof verifyStreamToken>
-  try {
-    claims = verifyStreamToken(env.streamTokenSecret, t)
-    if (claims.k !== 'remux') throw new Error('kind_mismatch')
-  } catch (err) {
-    return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
-  }
-  const remuxReplay = checkReplay(claims.jti, claims.exp, 'remux')
-  if (!remuxReplay.allowed) return c.json({ error: remuxReplay.reason }, 401)
-
-
-  const resource = remuxSegmentResource(claims.rid)
+  const v = checkToken(c, 'remux')
+  if (!v.ok) return v.resp
+  const resource = remuxSegmentResource(v.resourceId)
   if (!resource) return c.json({ error: 'bad_resource' }, 400)
-
-  const entry = getActiveLiveRemuxEntry(streamId, claims.sub)
+  if (!streamConcurrency().heartbeatByResource(v.sub, 'remux', streamId)) {
+    return c.json({ error: 'session_gone' }, 410)
+  }
+  const entry = getActiveLiveRemuxEntry(streamId, v.sub)
   if (!entry || entry.sessionId !== resource.sessionId) return c.json({ error: 'session_gone' }, 410)
 
   const filePath = path.join(entry.dir, resource.segFile)
@@ -461,7 +483,6 @@ iptv.get('/stream/live/:streamId/remux/seg', (c) => {
   // Refresh the concurrency slot on each segment fetch too, so a steadily-
   // playing AVPlayer that polls segments faster than the manifest still keeps
   // its slot accounted against the cap.
-  streamConcurrency().heartbeatByResource(claims.sub, 'remux', streamId)
   const stream = fs.createReadStream(filePath)
   return new Response(nodeReadableToWebStream(stream), {
     status: 200,

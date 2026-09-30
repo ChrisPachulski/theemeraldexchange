@@ -37,6 +37,7 @@ import {
   _clearDrainingForTests,
 } from './iptvRemux.js'
 import { env } from '../env.js'
+import { streamConcurrency } from './iptvConcurrency.js'
 
 type FakeProcess = EventEmitter & {
   stdout: EventEmitter
@@ -343,7 +344,8 @@ describe('iptv remux session', () => {
     }
   })
 
-  it('drainRemuxSessions SIGTERMs every active session and clears the registry (finding 14-2)', async () => {
+  it('shutdown waits for every remux child to exit after releasing its registry entry', async () => {
+    vi.useFakeTimers()
     const procs: FakeProcess[] = []
     spawnMock.mockImplementation(() => {
       const p = fakeProcess()
@@ -354,15 +356,87 @@ describe('iptv remux session', () => {
     startRemuxSession({ streamId: '21', sub: 'plex:b', upstreamUrl: 'https://x/b.ts' })
     expect(listRemuxSessions()).toHaveLength(2)
 
-    // stopRemuxSession (called by drain) deletes the Map entry synchronously and
-    // SIGTERMs the child, so drain resolves promptly and the registry is empty.
-    await drainRemuxSessions(2_000)
-
-    for (const p of procs) expect(p.kill).toHaveBeenCalledWith('SIGTERM')
-    expect(listRemuxSessions()).toHaveLength(0)
+    let settled = false
+    const draining = drainRemuxSessions(2_000).then(() => { settled = true })
+    try {
+      await Promise.resolve()
+      for (const p of procs) expect(p.kill).toHaveBeenCalledWith('SIGTERM')
+      expect(listRemuxSessions()).toHaveLength(0)
+      expect(settled).toBe(false)
+      procs[0].emit('exit', 0, null)
+      await vi.advanceTimersByTimeAsync(50)
+      expect(settled).toBe(false)
+      procs[1].emit('exit', 0, null)
+      await vi.advanceTimersByTimeAsync(50)
+      await draining
+      expect(settled).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it('never exceeds the upstream cap: at cap it evicts + DEFERS the new dial until the evicted child exits', () => {
+  it('shutdown also waits for children already stopped before the drain began', async () => {
+    vi.useFakeTimers()
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    const s = startRemuxSession({ streamId: '23', sub: 'plex:a', upstreamUrl: 'https://x/a.ts' })!
+    stopRemuxSession(s.sessionId)
+    let settled = false
+    const draining = drainRemuxSessions(2_000).then(() => { settled = true })
+    try {
+      await Promise.resolve()
+      expect(settled).toBe(false)
+      proc.emit('exit', 0, null)
+      await vi.advanceTimersByTimeAsync(50)
+      await draining
+      expect(settled).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('capacity refuses a new viewer while preserving buffered active streams', () => {
+    const prev = env.IPTV_MAX_UPSTREAM_CONNECTIONS
+    ;(env as { IPTV_MAX_UPSTREAM_CONNECTIONS: number }).IPTV_MAX_UPSTREAM_CONNECTIONS = 2
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
+    const procs = [fakeProcess(), fakeProcess()]
+    spawnMock.mockReturnValueOnce(procs[0]).mockReturnValueOnce(procs[1])
+    try {
+      const a = startRemuxSession({ streamId: '24', sub: 'plex:a', upstreamUrl: 'https://x/a.ts' })!
+      const b = startRemuxSession({ streamId: '25', sub: 'plex:b', upstreamUrl: 'https://x/b.ts' })!
+      now.mockReturnValue(1_080_000)
+      heartbeatRemuxSession(b.sessionId)
+      expect(startRemuxSession({ streamId: '26', sub: 'plex:c', upstreamUrl: 'https://x/c.ts' })).toBeNull()
+      expect(listRemuxSessions().map(s => s.sessionId)).toEqual([a.sessionId, b.sessionId])
+      for (const proc of procs) expect(proc.kill).not.toHaveBeenCalled()
+      expect(spawnMock).toHaveBeenCalledTimes(2)
+    } finally {
+      now.mockRestore()
+      ;(env as { IPTV_MAX_UPSTREAM_CONNECTIONS: number }).IPTV_MAX_UPSTREAM_CONNECTIONS = prev
+    }
+  })
+
+  it('a DVR reservation plus a draining remux leaves no physical slot for replacement', () => {
+    const prev = env.IPTV_MAX_UPSTREAM_CONNECTIONS
+    ;(env as { IPTV_MAX_UPSTREAM_CONNECTIONS: number }).IPTV_MAX_UPSTREAM_CONNECTIONS = 2
+    const tracker = streamConcurrency()
+    tracker.tryAcquire({ sub: 'dvr:1', sessionId: 'recording', kind: 'live', resourceId: '27' })
+    const proc = fakeProcess()
+    spawnMock.mockReturnValueOnce(proc)
+    try {
+      const old = startRemuxSession({ streamId: '28', sub: 'plex:a', upstreamUrl: 'https://x/a.ts' })!
+      stopRemuxSession(old.sessionId)
+      expect(startRemuxSession({ streamId: '29', sub: 'plex:a', upstreamUrl: 'https://x/b.ts' })).toBeNull()
+      expect(spawnMock).toHaveBeenCalledTimes(1)
+      proc.emit('exit', 0, null)
+      expect(startRemuxSession({ streamId: '29', sub: 'plex:a', upstreamUrl: 'https://x/b.ts' })).not.toBeNull()
+    } finally {
+      tracker.release('recording')
+      ;(env as { IPTV_MAX_UPSTREAM_CONNECTIONS: number }).IPTV_MAX_UPSTREAM_CONNECTIONS = prev
+    }
+  })
+
+  it('only reclaims an idle stream at capacity and defers replacement until its child exits', () => {
     const prev = env.IPTV_MAX_UPSTREAM_CONNECTIONS
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     ;(env as { IPTV_MAX_UPSTREAM_CONNECTIONS: number }).IPTV_MAX_UPSTREAM_CONNECTIONS = 2
@@ -378,10 +452,12 @@ describe('iptv remux session', () => {
     // exits, so this — not sessions.size — is the count the provider abuse block
     // reacts to. The invariant under test: it never reaches cap+1.
     const liveChildren = (): number => procs.filter((p) => !exited.has(p)).length
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
     try {
       const a = startRemuxSession({ streamId: '40', sub: 'plex:a', upstreamUrl: 'https://x/a.ts' })!
       const b = startRemuxSession({ streamId: '41', sub: 'plex:b', upstreamUrl: 'https://x/b.ts' })!
-      heartbeatRemuxSession(b.sessionId) // keep b fresher than a so a is the LRU
+      now.mockReturnValue(1_095_000)
+      heartbeatRemuxSession(b.sessionId)
       expect(liveChildren()).toBe(2)
 
       // Third tune AT the cap: it evicts the LRU (a) but must NOT spawn a
@@ -410,6 +486,7 @@ describe('iptv remux session', () => {
     } finally {
       ;(env as { IPTV_MAX_UPSTREAM_CONNECTIONS: number }).IPTV_MAX_UPSTREAM_CONNECTIONS = prev
       warn.mockRestore()
+      now.mockRestore()
     }
   })
 

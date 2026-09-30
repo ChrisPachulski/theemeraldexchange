@@ -11,6 +11,7 @@ import {
   ingestExternalEpg,
 } from './iptvEpgExternal.js'
 import { __setSsrfLookupForTests } from './ssrfGuard.js'
+import { resolveEpgChannels } from './iptvSync.js'
 
 const FETCHED_AT = '2026-05-24T12:00:00Z'
 
@@ -209,7 +210,7 @@ describe('ingestExternalEpg — filtering / provider-wins', () => {
     const result = await ingestExternalEpg(db, 'http://x')
 
     expect(result.ok).toBe(true)
-    expect(result.channelsMatched).toBe(1)
+    expect(result.channelsMatched).toBe(0)
     expect(result.programmesStored).toBe(0)
     expect(countPrograms(db, 'unmatched.zz')).toBe(0)
   })
@@ -227,8 +228,8 @@ describe('ingestExternalEpg — filtering / provider-wins', () => {
     const result = await ingestExternalEpg(db, 'http://x')
 
     expect(result.ok).toBe(true)
-    expect(result.channelsMatched).toBe(1)
-    expect(resolvedId(db, 100)).toBe('espn.us') // channel still resolved
+    expect(result.channelsMatched).toBe(0)
+    expect(resolvedId(db, 100)).toBeNull()
     expect(result.programmesStored).toBe(0) // but the stale programme is dropped
     expect(countPrograms(db, 'espn.us')).toBe(0)
   })
@@ -246,7 +247,7 @@ describe('ingestExternalEpg — filtering / provider-wins', () => {
     const result = await ingestExternalEpg(db, 'http://x', { horizonMs: 1000 })
 
     expect(result.ok).toBe(true)
-    expect(result.channelsMatched).toBe(1)
+    expect(result.channelsMatched).toBe(0)
     expect(result.programmesStored).toBe(0)
   })
 
@@ -437,7 +438,7 @@ describe('ingestExternalEpg — channel defs but zero programmes', () => {
     vi.unstubAllGlobals()
   })
 
-  it('resolves channels via the post-stream branch when the feed has no programmes', async () => {
+  it('an empty source leaves the channel available for a working fallback', async () => {
     insertChannel(db, { stream_id: 100, name: 'US: ESPN', epg_channel_id: null })
     const xml = buildFeed([{ id: 'espn.us', name: 'ESPN' }], [])
     stubFetchXml(xml)
@@ -445,9 +446,30 @@ describe('ingestExternalEpg — channel defs but zero programmes', () => {
     const result = await ingestExternalEpg(db, 'http://x')
 
     expect(result.ok).toBe(true)
-    expect(result.channelsMatched).toBe(1)
+    expect(result.channelsMatched).toBe(0)
     expect(result.programmesStored).toBe(0)
-    expect(resolvedId(db, 100)).toBe('espn.us')
+    expect(resolvedId(db, 100)).toBeNull()
+    const now = Date.now()
+    stubFetchXml(buildFeed([{ id: 'fallback.espn', name: 'ESPN' }],
+      [{ channel: 'fallback.espn', startMs: now, stopMs: now + 3600_000 }]))
+    const fallback = await ingestExternalEpg(db, 'http://fallback')
+    expect(fallback.programmesStored).toBe(1)
+    expect(resolvedId(db, 100)).toBe('fallback.espn')
+  })
+
+  it('persisted external schedules do not masquerade as coverage from the current provider feed', async () => {
+    insertChannel(db, { stream_id: 100, name: 'US: ESPN', epg_channel_id: 'espn.us' })
+    const now = Date.now()
+    stubFetchXml(buildFeed([{ id: 'espn.us', name: 'ESPN' }],
+      [{ channel: 'espn.us', startMs: now, stopMs: now + 3600_000, title: 'Original' }]))
+    await ingestExternalEpg(db, 'http://first')
+    resolveEpgChannels(db, [], new Set<string>())
+    stubFetchXml(buildFeed([{ id: 'espn.us', name: 'ESPN' }],
+      [{ channel: 'espn.us', startMs: now + 3600_000, stopMs: now + 7200_000, title: 'Updated' }]))
+    const refreshed = await ingestExternalEpg(db, 'http://second')
+    expect(refreshed.programmesStored).toBe(1)
+    expect(db.raw.prepare("SELECT title FROM epg_programs WHERE channel_id = 'espn.us' ORDER BY start_utc").all())
+      .toEqual([{ title: 'Original' }, { title: 'Updated' }])
   })
 })
 

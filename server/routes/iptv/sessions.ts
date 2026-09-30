@@ -6,7 +6,7 @@ import { getAccountInfo } from '../../services/xtream.js'
 import { streamConcurrency } from '../../services/iptvConcurrency.js'
 import { getActiveLiveRemuxEntry, forgetLiveRemuxEntry } from '../../services/iptvLiveRemuxMap.js'
 import { type Env } from '../../middleware/auth.js'
-import { enrichSessions, userOf } from './shared.js'
+import { enrichSessions, userOf, stopRawLiveStream } from './shared.js'
 
 export const iptv = new Hono<Env>()
 
@@ -71,6 +71,7 @@ iptv.delete('/sessions/:sessionId', requireAuth, (c) => {
     )
   }
   streamConcurrency().release(sessionId)
+  if (target.kind === 'live') stopRawLiveStream(target.sub, target.resourceId)
   // A remux (AVPlayer live) slot is backed by an ffmpeg process holding a live
   // upstream provider connection, tracked SEPARATELY from the concurrency slot.
   // Releasing the slot alone leaves that ffmpeg alive until the 90s idle sweep,

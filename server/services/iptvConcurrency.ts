@@ -17,16 +17,11 @@ export interface AcquireOpts {
   resourceId: string
   ip?: string | null
   title?: string | null
-  // Optional cap scoped to sessions of THIS kind, checked in ADDITION to the
-  // global cap. The remux path opens a HARD-capped live upstream connection
-  // (IPTV_MAX_UPSTREAM_CONNECTIONS ffmpeg sessions); granting more remux slots
-  // than that just gets the surplus viewer silently ffmpeg-evicted mid-stream
-  // when its session spawns past the ceiling. So the remux grant passes
-  // kindCap = min(concurrent, upstream) and the surplus grant is rejected HERE
-  // with the structured iptv_concurrency_limit 429 the client already renders,
-  // instead of the silent eviction. Scoped to same-kind sessions so VOD/series
-  // (which open no live upstream connection) are never limited by it.
+  // Additional upstream budget shared by live/remux/DVR reservations.
+  // Other kinds count only themselves; VOD/series do not consume live slots.
   kindCap?: number
+  /** Replace this viewer's live reservations only after admission succeeds. */
+  replaceLive?: boolean
 }
 // Closed `reason` enum values for grant-endpoint denials (§12.4).
 // Extend only with a contract bump — Swift Decodable switch-exhausts on
@@ -54,6 +49,9 @@ export interface SessionView {
 
 type Session = SessionView
 
+/** Covers the remux's eighty-second window and buffered fetch gaps. */
+export const REMUX_IDLE_MS = 90_000
+
 export interface ConcurrencyTracker {
   tryAcquire: (opts: AcquireOpts) => AcquireResult
   heartbeat: (sessionId: string) => void
@@ -80,7 +78,8 @@ export function createConcurrencyTracker(opts: { cap: number; idleMs: number }):
   function sweep(): void {
     const now = Date.now()
     for (const [id, s] of sessions) {
-      if (now - s.lastSeen > opts.idleMs) sessions.delete(id)
+      const idleMs = s.kind === 'remux' ? Math.max(opts.idleMs, REMUX_IDLE_MS) : opts.idleMs
+      if (now - s.lastSeen > idleMs) sessions.delete(id)
     }
   }
 
@@ -89,52 +88,31 @@ export function createConcurrencyTracker(opts: { cap: number; idleMs: number }):
     return Array.from(sessions.values()).sort((a, b) => b.startedAt - a.startedAt)
   }
 
-  function tryAcquire({ sub, sessionId, kind, resourceId, ip, title, kindCap }: AcquireOpts): AcquireResult {
+  function tryAcquire({ sub, sessionId, kind, resourceId, ip, title, kindCap, replaceLive }: AcquireOpts): AcquireResult {
     sweep()
     const existing = sessions.get(sessionId)
     if (existing) {
       existing.lastSeen = Date.now()
       return { ok: true, sessionId }
     }
-    // Dedupe by (sub, kind, resourceId): a re-grant for a channel the same
-    // user is ALREADY watching supersedes the prior session rather than
-    // booking a SECOND slot against the upstream connection cap. Without
-    // this, selecting the same channel twice held two connections — and on a
-    // ~2-slot provider line, two such double-books saturate it and every
-    // further grant stalls. Replacing also frees the stale slot immediately
-    // (the old player is being torn down and re-created with the new token).
-    for (const [id, s] of sessions) {
-      if (s.sub === sub && s.kind === kind && s.resourceId === resourceId) {
-        sessions.delete(id)
-      }
-    }
-    // Kind-scoped cap (remux ↔ upstream-connection ceiling). Checked after the
-    // dedupe above so a re-grant for a channel the same user already holds does
-    // not count itself. Reuses the iptv_concurrency_limit shape so the client
-    // renders "provider connection limit reached" instead of the silent
-    // mid-stream eviction it would get past the upstream cap.
+    const isLive = (k: SessionKind): boolean => k === 'live' || k === 'remux'
+    const replaced = Array.from(sessions.values()).filter(s => s.sub === sub && (
+      (s.kind === kind && s.resourceId === resourceId) || (replaceLive && isLive(kind) && isLive(s.kind))
+    ))
+    const replacedIds = new Set(replaced.map(s => s.sessionId))
+    const remaining = Array.from(sessions.values()).filter(s => !replacedIds.has(s.sessionId))
     if (kindCap !== undefined) {
-      let sameKind = 0
-      for (const s of sessions.values()) if (s.kind === kind) sameKind++
-      if (sameKind >= kindCap) {
-        return {
-          ok: false,
-          reason: 'iptv_concurrency_limit',
-          limit: kindCap,
-          current: sameKind,
-          sessions: Array.from(sessions.values()).sort((a, b) => b.startedAt - a.startedAt),
-        }
+      const count = remaining.filter(s => isLive(kind) ? isLive(s.kind) : s.kind === kind).length
+      if (count >= kindCap) return {
+        ok: false, reason: 'iptv_concurrency_limit', limit: kindCap, current: count,
+        sessions: list(),
       }
     }
-    if (sessions.size >= opts.cap) {
-      return {
-        ok: false,
-        reason: 'iptv_concurrency_limit',
-        limit: opts.cap,
-        current: sessions.size,
-        sessions: Array.from(sessions.values()).sort((a, b) => b.startedAt - a.startedAt),
-      }
+    if (remaining.length >= opts.cap) return {
+      ok: false, reason: 'iptv_concurrency_limit', limit: opts.cap, current: remaining.length,
+      sessions: list(),
     }
+    for (const id of replacedIds) sessions.delete(id)
     const now = Date.now()
     sessions.set(sessionId, {
       sub,

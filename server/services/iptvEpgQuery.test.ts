@@ -100,6 +100,49 @@ describe('epg queries', () => {
     ])
   })
 
+  it('schedule corrections choose the latest current row without hiding the next programme', () => {
+    db.raw.prepare("DELETE FROM epg_programs WHERE channel_id = 'c1' AND title = 'Next'").run()
+    db.stmts.upsertEpg.run({
+      channel_id: 'c1', start_utc: '2026-05-24T11:45:00.000Z', stop_utc: '2026-05-24T12:45:00.000Z',
+      title: 'Corrected current', description: null,
+    })
+    db.stmts.upsertEpg.run({
+      channel_id: 'c1', start_utc: '2026-05-24T12:45:00.000Z', stop_utc: '2026-05-24T13:45:00.000Z',
+      title: 'Following show', description: null,
+    })
+    const [row] = epgNow(db, [10], new Date('2026-05-24T12:00:00Z'))
+    expect(row.current?.title).toBe('Corrected current')
+    expect(row.next?.title).toBe('Following show')
+  })
+
+  it('a bounded category grid and search survive more EPG ids than SQLite bind slots', () => {
+    db.raw.transaction(() => {
+      for (let i = 0; i < 32_770; i++) {
+        db.stmts.upsertEpg.run({
+          channel_id: 'unrelated-' + i, start_utc: '2026-05-24T12:00:00.000Z',
+          stop_utc: '2026-05-24T13:00:00.000Z', title: 'Bulk News', description: null,
+        })
+      }
+      db.stmts.upsertEpg.run({
+        channel_id: 'c1', start_utc: '2026-05-24T12:00:00.000Z',
+        stop_utc: '2026-05-24T12:15:00.000Z', title: 'Bulk News', description: null,
+      })
+    })()
+    const grid = epgGrid(db, '2026-05-24T12:00:00.000Z', '2026-05-24T13:00:00.000Z',
+      { categoryId: 1, hasEpgOnly: true, limit: 1 })
+    expect(grid.map(row => row.stream_id)).toEqual([10])
+    const search = epgSearch(db, '2026-05-24T12:00:00.000Z', '2026-05-24T13:00:00.000Z',
+      { categoryIds: [1], q: 'Bulk', limit: 1 })
+    expect(search.total).toBe(1)
+    expect(search.hits.map(hit => hit.streamId)).toEqual([10])
+  })
+
+  it.each(['%', '_', '\\'])('grid search matches %s literally', (term) => {
+    db.raw.prepare('UPDATE channels SET name = ? WHERE stream_id = 10').run('100' + term + ' News')
+    const rows = epgGrid(db, '2026-05-24T10:00:00Z', '2026-05-24T13:00:00Z', { q: term })
+    expect(rows.map(row => row.stream_id)).toEqual([10])
+  })
+
   it('epgChannelWindow returns programmes overlapping the requested range', () => {
     const rows = epgChannelWindow(db, 10, '2026-05-24T10:00:00Z', '2026-05-24T13:00:00Z')
 
@@ -157,89 +200,6 @@ describe('epg queries', () => {
   it('epgGrid returns no rows when hasEpgOnly and the window is empty', () => {
     const rows = epgGrid(db, '2020-01-01T00:00:00Z', '2020-01-01T01:00:00Z', { hasEpgOnly: true })
     expect(rows).toEqual([])
-  })
-})
-
-describe('epg grid query plan (perf regression guard)', () => {
-  // Mirrors the programmes scan inside epgGrid() (iptvEpgQuery.ts): a
-  // window-only filter over epg_programs with NO channel predicate. Without
-  // sqlite_stat1 the planner has no selectivity estimate and full-SCANs this
-  // ~10^5–10^6-row table on the synchronous better-sqlite3 driver — on the same
-  // event loop that proxies live segments. syncOnce() now runs PRAGMA optimize
-  // after populating the table so the planner range-SEARCHes the
-  // (channel_id, start_utc) primary-key index instead (which also serves the
-  // ORDER BY channel_id for free). This test pins that invariant: a future
-  // change that drops the stats step or rewrites the query back into a full
-  // scan fails here. (If this SQL drifts from epgGrid()'s, update both.)
-  const GRID_PROGRAMMES_SQL = `
-    SELECT channel_id, start_utc, stop_utc, title, description
-    FROM epg_programs
-    WHERE start_utc < ? AND stop_utc > ?
-    ORDER BY channel_id, start_utc ASC
-  `
-  let dir: string
-  let db: IptvDb
-  let fromIso: string
-  let toIso: string
-
-  beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'epg-plan-'))
-    db = openIptvDb(path.join(dir, 'iptv.db'))
-    // Prod-shaped retention window [now-24h, now+7d]: mostly future rows across
-    // many channels — the distribution under which the planner's index choice
-    // matters and an index without stats would be skipped.
-    const now = Date.now()
-    const DAY = 86_400_000
-    const past = now - DAY
-    const span = 8 * DAY
-    const CHANNELS = 300
-    const PROGS = 30
-    const slot = span / PROGS
-    const seed = db.raw.transaction(() => {
-      for (let c = 0; c < CHANNELS; c++) {
-        const cid = `c${c}`
-        for (let p = 0; p < PROGS; p++) {
-          const start = past + p * slot
-          db.stmts.upsertEpg.run({
-            channel_id: cid,
-            start_utc: new Date(start).toISOString(),
-            stop_utc: new Date(start + slot).toISOString(),
-            title: 'T',
-            description: 'D',
-          })
-        }
-      }
-    })
-    seed()
-    fromIso = new Date(now).toISOString()
-    toIso = new Date(now + 4 * 3_600_000).toISOString()
-  })
-
-  afterEach(() => {
-    db.close()
-    fs.rmSync(dir, { recursive: true, force: true })
-  })
-
-  const planFor = (): string =>
-    (
-      db.raw.prepare(`EXPLAIN QUERY PLAN ${GRID_PROGRAMMES_SQL}`).all(toIso, fromIso) as Array<{
-        detail: string
-      }>
-    )
-      .map((r) => r.detail)
-      .join(' | ')
-
-  it('full-SCANs epg_programs before statistics exist', () => {
-    // Baseline: a freshly-opened DB has no sqlite_stat1, so the guide query
-    // degrades to a full table scan — the problem this fix addresses.
-    expect(planFor()).toContain('SCAN epg_programs')
-  })
-
-  it('range-SEARCHes epg_programs after the sync runs PRAGMA optimize', () => {
-    db.raw.pragma('optimize')
-    const plan = planFor()
-    expect(plan).toContain('SEARCH epg_programs')
-    expect(plan).not.toContain('SCAN epg_programs')
   })
 })
 

@@ -43,11 +43,10 @@ export interface ExternalEpgResult {
 
 /**
  * Resolve every still-unresolved catalog channel against the external feed's
- * channel aliases, pointing epg_resolved_id at the matched external id and
- * returning the set of external ids we now want programmes for. Only touches
+ * channel aliases, returning tentative mappings and the external ids we want programmes for. Only touches
  * channels the provider feed left unresolved, so the provider always wins.
  */
-function resolveAgainstExternal(db: IptvDb, defs: XmltvChannelDef[]): { wanted: Set<string>; matched: number } {
+function resolveAgainstExternal(db: IptvDb, defs: XmltvChannelDef[]): { wanted: Set<string>; matches: Array<{ streamId: number; id: string }> } {
   const feedWithEpg = new Set<string>()
   for (const d of defs) {
     const id = normalizeEpgChannelId(d.id)
@@ -58,21 +57,16 @@ function resolveAgainstExternal(db: IptvDb, defs: XmltvChannelDef[]): { wanted: 
     .prepare(`SELECT stream_id, name, epg_channel_id FROM channels WHERE COALESCE(NULLIF(TRIM(epg_resolved_id), ''), '') = ''`)
     .all() as Array<{ stream_id: number; name: string; epg_channel_id: string | null }>
 
-  const setResolved = db.raw.prepare(`UPDATE channels SET epg_resolved_id = ? WHERE stream_id = ?`)
   const wanted = new Set<string>()
-  let matched = 0
-  const apply = db.raw.transaction((rows: typeof unresolved) => {
-    for (const ch of rows) {
-      const id = resolveEpgId(ch, index)
-      if (id) {
-        setResolved.run(id, ch.stream_id)
-        wanted.add(id)
-        matched += 1
-      }
+  const matches: Array<{ streamId: number; id: string }> = []
+  for (const ch of unresolved) {
+    const id = resolveEpgId(ch, index)
+    if (id) {
+      wanted.add(id)
+      matches.push({ streamId: ch.stream_id, id })
     }
-  })
-  apply(unresolved)
-  return { wanted, matched }
+  }
+  return { wanted, matches }
 }
 
 export async function ingestExternalEpg(
@@ -100,12 +94,16 @@ export async function ingestExternalEpg(
     const src = webStreamToNodeReadable(res.body)
 
     const defs: XmltvChannelDef[] = []
-    let wanted: Set<string> | null = null
+    let candidates: ReturnType<typeof resolveAgainstExternal> | null = null
+    const storedIds = new Set<string>()
     let channelsMatched = 0
     let programmesStored = 0
     let batch: EpgProgrammeRow[] = []
     const flush = db.raw.transaction((rows: EpgProgrammeRow[]) => {
-      for (const r of rows) db.stmts.upsertEpg.run(r)
+      for (const r of rows) {
+        db.stmts.upsertEpg.run(r)
+        storedIds.add(r.channel_id)
+      }
     })
 
     await streamXmltv(
@@ -113,12 +111,8 @@ export async function ingestExternalEpg(
       (row) => {
         // First programme ⇒ the channel section is fully parsed (standard XMLTV
         // ordering). Resolve now, once, and learn which external ids to keep.
-        if (!wanted) {
-          const r = resolveAgainstExternal(db, defs)
-          wanted = r.wanted
-          channelsMatched = r.matched
-        }
-        if (!wanted.has(row.channel_id)) return
+        candidates ??= resolveAgainstExternal(db, defs)
+        if (!candidates.wanted.has(row.channel_id)) return
         if (row.stop_utc < cutoffIso || row.stop_utc > horizonIso) return
         batch.push(row)
         programmesStored += 1
@@ -133,12 +127,15 @@ export async function ingestExternalEpg(
       },
     )
 
-    // Feed had channel defs but we never hit a programme (edge) — still resolve.
-    if (!wanted) {
-      const r = resolveAgainstExternal(db, defs)
-      channelsMatched = r.matched
-    }
     if (batch.length) flush(batch)
+    // Commit only mappings backed by successfully retained programmes. Empty,
+    // expired and failed sources leave channels available for the next feed.
+    const setResolved = db.raw.prepare("UPDATE channels SET epg_resolved_id = ? WHERE stream_id = ? AND COALESCE(NULLIF(TRIM(epg_resolved_id), ''), '') = ''")
+    db.raw.transaction(() => {
+      for (const match of candidates?.matches ?? []) {
+        if (storedIds.has(match.id)) channelsMatched += setResolved.run(match.id, match.streamId).changes
+      }
+    })()
     return { url, ok: true, channelsMatched, programmesStored }
   } catch (e) {
     return { url, ok: false, channelsMatched: 0, programmesStored: 0, error: e instanceof Error ? e.message : String(e) }
