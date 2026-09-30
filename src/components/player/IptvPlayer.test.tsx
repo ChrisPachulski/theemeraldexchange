@@ -15,6 +15,7 @@ import IptvPlayer, {
   createHlsStallWatchdog,
   createProgressiveStallEscalator,
   selectHlsEngine,
+  buildHlsConfig,
   HLS_PLAYLIST_LOAD_POLICY,
   ESCALATE_CONFIRM_MS,
   ESCALATE_WINDOW_MS,
@@ -160,6 +161,30 @@ describe('HLS_PLAYLIST_LOAD_POLICY', () => {
     expect(p.timeoutRetry.maxNumRetry).toBeGreaterThanOrEqual(4)
     expect(p.timeoutRetry.retryDelayMs).toBe(0)
     expect(p.errorRetry.maxNumRetry).toBeGreaterThanOrEqual(4)
+  })
+})
+
+describe('buildHlsConfig', () => {
+  // Regression guard: the live branch once carried the shared
+  // liveSyncDurationCount alongside liveSyncDuration, and hls.js threw
+  // "Illegal hls.js config: don't mix up ..." from its constructor, so every
+  // live channel on the web died before the manifest was ever requested. Run
+  // both variants through the real hls.js constructor.
+  it.each([false, true])('is accepted by the hls.js constructor (vodHls=%s)', async (vodHls) => {
+    const Hls = (await import('hls.js')).default
+    const hls = new Hls(buildHlsConfig(vodHls))
+    hls.destroy()
+  })
+
+  it('keeps live duration-based and VOD count-based', () => {
+    const live = buildHlsConfig(false) as Record<string, unknown>
+    const vod = buildHlsConfig(true) as Record<string, unknown>
+    expect(live.liveSyncDuration).toBe(15)
+    expect(live).not.toHaveProperty('liveSyncDurationCount')
+    expect(live).not.toHaveProperty('liveMaxLatencyDurationCount')
+    expect(vod.liveSyncDurationCount).toBe(4)
+    expect(vod).not.toHaveProperty('liveSyncDuration')
+    expect(vod).not.toHaveProperty('liveMaxLatencyDuration')
   })
 })
 
