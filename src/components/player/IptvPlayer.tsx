@@ -231,6 +231,99 @@ export const HLS_PLAYLIST_LOAD_POLICY = {
   },
 } as const
 
+// ── hls.js config ───────────────────────────────────────────────
+//
+// Live HLS (the remux path) over the same proxy → cloudflared →
+// edge transport as mpegts. Default hls.js sits near the live edge
+// and underruns on tunnel jitter, so favor a resilient buffer over
+// low latency: sit a few segments back, allow a deep forward
+// buffer, bridge small gaps, and retry fragments generously. A few
+// seconds of latency is irrelevant for IPTV; uninterrupted playback
+// is everything.
+//
+// hls.js THROWS at construction ("Illegal hls.js config: don't mix up
+// liveSyncDurationCount/liveMaxLatencyDurationCount and liveSyncDuration/
+// liveMaxLatencyDuration") when one config carries both the segment-COUNT
+// and the DURATION latency keys. Each branch below therefore uses exactly
+// one style: VOD is count-based, live is duration-based. Mixing them made
+// every live channel on the web player die before the manifest was fetched.
+export function buildHlsConfig(vodHls: boolean) {
+  return {
+    lowLatencyMode: false,
+    maxBufferHole: 0.5,
+    enableWorker: true,
+    // Fast-failing playlist loads (see HLS_PLAYLIST_LOAD_POLICY): the
+    // default 20 s body timeout turned an edge-dropped manifest
+    // response into a 20 s startup spinner on fresh sessions.
+    manifestLoadPolicy: HLS_PLAYLIST_LOAD_POLICY,
+    playlistLoadPolicy: HLS_PLAYLIST_LOAD_POLICY,
+    // Generous fragment retries over the tunnel path: cloudflared TTFB
+    // can be seconds, and a 10-20 MB fMP4 copy segment at a modest
+    // uplink legitimately takes tens of seconds — bailing early turns
+    // a slow fetch into a fatal error. (fragLoadPolicy supersedes the
+    // deprecated fragLoadingMaxRetry* keys.)
+    fragLoadPolicy: {
+      default: {
+        maxTimeToFirstByteMs: 15000,
+        maxLoadTimeMs: 65000,
+        timeoutRetry: { maxNumRetry: 3, retryDelayMs: 500, maxRetryDelayMs: 4000 },
+        errorRetry: { maxNumRetry: 4, retryDelayMs: 2000, maxRetryDelayMs: 16000 },
+      },
+    },
+    // Local-media VOD sessions grow an EVENT playlist that hls.js
+    // treats as live until ENDLIST, which trips TWO live behaviors a
+    // finite title must not get:
+    //  * the default live-edge START — a faster-than-realtime encode
+    //    (copy-remuxes run at I/O speed) is minutes ahead by attach
+    //    time, so the movie opened minutes in → pin startPosition 0
+    //    (any resume offset is baked server-side via ffmpeg -ss, so
+    //    session position 0 IS the resume point);
+    //  * the max-latency CATCH-UP SEEK — with a finite cap, hls.js
+    //    force-seeks the playhead toward the runaway "edge" mid-watch
+    //    (observed: playback jumped 0:00 → 7:48 as the remux outran
+    //    it) → Infinity disables the forced seek for VOD while IPTV
+    //    keeps the bounded latency window it needs.
+    //
+    // Buffer budgets are split VOD vs live because the BYTE cap is the
+    // real governor: hls.js stops fetching at maxBufferSize regardless
+    // of the time targets, and the default 60 MB held only 3-6 of the
+    // 10-20 MB fMP4 copy segments — one slow tunnel fetch from an
+    // underrun. 120 MB stays under Chrome's ~150 MB SourceBuffer
+    // ceiling (drop it first if QuotaExceededError ever appears).
+    // backBufferLength must be FINITE: the default (Infinity) grows the
+    // SourceBuffer until the browser evicts mid-play — the documented
+    // stall-an-hour-into-a-movie failure mode.
+    ...(vodHls
+      ? {
+          startPosition: 0,
+          liveSyncDurationCount: 4,
+          liveMaxLatencyDurationCount: Infinity,
+          maxBufferLength: 60,
+          maxMaxBufferLength: 120,
+          maxBufferSize: 120 * 1024 * 1024,
+          backBufferLength: 60,
+        }
+      : {
+          // Duration-based, NOT count-based. This provider's keyframes are
+          // wildly irregular, so the remux emits 0.5–3.7 s segments; a
+          // 4-SEGMENT sync window could be as little as ~4 s of cushion and
+          // underran constantly (freeze every few seconds after ~10 min).
+          // Sit a fixed ~15 s back and don't force a catch-up seek until
+          // ~60 s behind, matched to the server's ~80 s window
+          // (hls_list_size 40). No *Count keys may appear here: hls.js
+          // rejects a config that mixes the count and duration styles.
+          liveSyncDuration: 15,
+          liveMaxLatencyDuration: 60,
+          maxBufferLength: 40,
+          maxMaxBufferLength: 120,
+          backBufferLength: 10,
+          // Gentle rate-based catch-up (default 1 = none): drifting
+          // slowly back to the sync window beats a hard seek.
+          maxLiveSyncPlaybackRate: 1.05,
+        }),
+  }
+}
+
 // ── Fatal hls.js error recovery ──────────────────────────────────────
 //
 // hls.js fatal errors fall into three classes with different recovery
@@ -782,87 +875,7 @@ export default function IptvPlayer({
         }
         // engine === 'mse' — drive the <video> through hls.js below.
 
-        // Live HLS (the remux path) over the same proxy → cloudflared →
-        // edge transport as mpegts. Default hls.js sits near the live edge
-        // and underruns on tunnel jitter, so favor a resilient buffer over
-        // low latency: sit a few segments back, allow a deep forward
-        // buffer, bridge small gaps, and retry fragments generously. A few
-        // seconds of latency is irrelevant for IPTV; uninterrupted playback
-        // is everything.
-        const hls = new Hls({
-          lowLatencyMode: false,
-          liveSyncDurationCount: 4,
-          maxBufferHole: 0.5,
-          enableWorker: true,
-          // Fast-failing playlist loads (see HLS_PLAYLIST_LOAD_POLICY): the
-          // default 20 s body timeout turned an edge-dropped manifest
-          // response into a 20 s startup spinner on fresh sessions.
-          manifestLoadPolicy: HLS_PLAYLIST_LOAD_POLICY,
-          playlistLoadPolicy: HLS_PLAYLIST_LOAD_POLICY,
-          // Generous fragment retries over the tunnel path: cloudflared TTFB
-          // can be seconds, and a 10-20 MB fMP4 copy segment at a modest
-          // uplink legitimately takes tens of seconds — bailing early turns
-          // a slow fetch into a fatal error. (fragLoadPolicy supersedes the
-          // deprecated fragLoadingMaxRetry* keys.)
-          fragLoadPolicy: {
-            default: {
-              maxTimeToFirstByteMs: 15000,
-              maxLoadTimeMs: 65000,
-              timeoutRetry: { maxNumRetry: 3, retryDelayMs: 500, maxRetryDelayMs: 4000 },
-              errorRetry: { maxNumRetry: 4, retryDelayMs: 2000, maxRetryDelayMs: 16000 },
-            },
-          },
-          // Local-media VOD sessions grow an EVENT playlist that hls.js
-          // treats as live until ENDLIST, which trips TWO live behaviors a
-          // finite title must not get:
-          //  * the default live-edge START — a faster-than-realtime encode
-          //    (copy-remuxes run at I/O speed) is minutes ahead by attach
-          //    time, so the movie opened minutes in → pin startPosition 0
-          //    (any resume offset is baked server-side via ffmpeg -ss, so
-          //    session position 0 IS the resume point);
-          //  * the max-latency CATCH-UP SEEK — with a finite cap, hls.js
-          //    force-seeks the playhead toward the runaway "edge" mid-watch
-          //    (observed: playback jumped 0:00 → 7:48 as the remux outran
-          //    it) → Infinity disables the forced seek for VOD while IPTV
-          //    keeps the bounded latency window it needs.
-          //
-          // Buffer budgets are split VOD vs live because the BYTE cap is the
-          // real governor: hls.js stops fetching at maxBufferSize regardless
-          // of the time targets, and the default 60 MB held only 3-6 of the
-          // 10-20 MB fMP4 copy segments — one slow tunnel fetch from an
-          // underrun. 120 MB stays under Chrome's ~150 MB SourceBuffer
-          // ceiling (drop it first if QuotaExceededError ever appears).
-          // backBufferLength must be FINITE: the default (Infinity) grows the
-          // SourceBuffer until the browser evicts mid-play — the documented
-          // stall-an-hour-into-a-movie failure mode.
-          ...(vodHls
-            ? {
-                startPosition: 0,
-                liveMaxLatencyDurationCount: Infinity,
-                maxBufferLength: 60,
-                maxMaxBufferLength: 120,
-                maxBufferSize: 120 * 1024 * 1024,
-                backBufferLength: 60,
-              }
-            : {
-                // Duration-based, NOT count-based. This provider's keyframes are
-                // wildly irregular, so the remux emits 0.5–3.7 s segments; a
-                // 4-SEGMENT sync window could be as little as ~4 s of cushion and
-                // underran constantly (freeze every few seconds after ~10 min).
-                // Sit a fixed ~15 s back and don't force a catch-up seek until
-                // ~60 s behind, matched to the server's ~80 s window
-                // (hls_list_size 40). liveSyncDuration overrides the shared
-                // liveSyncDurationCount (duration wins in hls.js).
-                liveSyncDuration: 15,
-                liveMaxLatencyDuration: 60,
-                maxBufferLength: 40,
-                maxMaxBufferLength: 120,
-                backBufferLength: 10,
-                // Gentle rate-based catch-up (default 1 = none): drifting
-                // slowly back to the sync window beats a hard seek.
-                maxLiveSyncPlaybackRate: 1.05,
-              }),
-        })
+        const hls = new Hls(buildHlsConfig(vodHls))
         hlsRef.current = hls
 
         const updateHlsTracks = () => {
