@@ -126,7 +126,9 @@ telemetry.post(
     }
 
     const t = new URL(target)
-    const url = `${t.protocol}//${t.host}/api/${pub.projectId}/envelope/`
+    // GlitchTip (unlike Sentry) does not authenticate an envelope by the DSN in
+    // its header: without sentry_key in the query it answers 403 Denied.
+    const url = `${t.protocol}//${t.host}/api/${pub.projectId}/envelope/?sentry_version=7&sentry_key=${encodeURIComponent(pub.key)}`
     try {
       const res = await fetchWithTimeout(
         url,
