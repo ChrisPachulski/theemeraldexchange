@@ -89,6 +89,10 @@ function initialize(dsn: string, environment: string, release?: string): boolean
 
   Sentry.init({
     dsn,
+    // Envelopes go through the backend (/api/telemetry/tunnel), not straight to
+    // the DSN host: that host is tailnet-only and answers a browser preflight
+    // with a redirect, so direct reports from the SPA never arrived.
+    tunnel: apiUrl('/api/telemetry/tunnel'),
     environment,
     release,
     // Crash-data islands: error capture only. No performance tracing so we don't

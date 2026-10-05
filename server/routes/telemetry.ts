@@ -11,8 +11,12 @@
 // Contract reference: §15.2
 
 import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import type { Env } from '../middleware/auth.js'
+import { rateLimit } from '../middleware/rateLimit.js'
 import { env } from '../env.js'
+import { serverSideDsn } from '../services/serverTelemetry.js'
+import { fetchWithTimeout } from '../services/upstream.js'
 
 export const telemetry = new Hono<Env>()
 
@@ -73,3 +77,66 @@ telemetry.get('/config', (c) => {
     release: env.EEX_RELEASE,
   })
 })
+
+// POST /api/telemetry/tunnel — Sentry `tunnel` for the SPA. The public DSN's
+// host (a Tailscale MagicDNS name) is unreachable from browsers off the
+// tailnet, and GlitchTip answers a CORS preflight with a 302 to /login, so the
+// SPA's crash reports never arrived: a web live player that threw on every
+// channel for five weeks left zero events. The SPA now posts envelopes here,
+// over the API origin it already talks to, and the backend forwards them to
+// GlitchTip on the docker network (serverSideDsn).
+//
+// Open (crashes happen before sign-in) but narrow: the envelope header's DSN
+// must name OUR key + project, the body is capped, and callers are
+// rate-limited, so the route cannot be used to post anywhere else.
+const TUNNEL_BODY_LIMIT_BYTES = 256 * 1024
+const TUNNEL_TIMEOUT_MS = 5000
+const tunnelRateLimit = rateLimit({ name: 'telemetry-tunnel', capacity: 30, refill: 30, intervalMs: 60_000 })
+
+function dsnIdentity(dsn: string | null | undefined): { key: string; projectId: string } | null {
+  if (!dsn) return null
+  try {
+    const u = new URL(dsn)
+    const projectId = u.pathname.replace(/^\/+|\/+$/g, '')
+    return u.username && projectId ? { key: u.username, projectId } : null
+  } catch {
+    return null
+  }
+}
+
+telemetry.post(
+  '/tunnel',
+  tunnelRateLimit,
+  bodyLimit({ maxSize: TUNNEL_BODY_LIMIT_BYTES, onError: (c) => c.json({ error: 'payload_too_large' }, 413) }),
+  async (c) => {
+    const pub = dsnIdentity(env.EEX_TELEMETRY_DSN)
+    const target = serverSideDsn()
+    if (!pub || !target) return c.json({ error: 'telemetry_not_configured' }, 503)
+
+    const body = await c.req.text()
+    let header: { dsn?: unknown }
+    try {
+      header = JSON.parse(body.slice(0, body.indexOf('\n') === -1 ? body.length : body.indexOf('\n')))
+    } catch {
+      return c.json({ error: 'invalid_envelope' }, 400)
+    }
+    const claimed = dsnIdentity(typeof header.dsn === 'string' ? header.dsn : null)
+    if (!claimed || claimed.key !== pub.key || claimed.projectId !== pub.projectId) {
+      return c.json({ error: 'dsn_mismatch' }, 403)
+    }
+
+    const t = new URL(target)
+    const url = `${t.protocol}//${t.host}/api/${pub.projectId}/envelope/`
+    try {
+      const res = await fetchWithTimeout(
+        url,
+        { method: 'POST', headers: { 'Content-Type': 'application/x-sentry-envelope' }, body },
+        TUNNEL_TIMEOUT_MS,
+        'telemetry.tunnel',
+      )
+      return c.body(null, res.ok ? 200 : 502)
+    } catch {
+      return c.body(null, 502)
+    }
+  },
+)

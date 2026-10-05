@@ -2,7 +2,7 @@
 
 ## Standing Authorization
 
-Personal homelab; pre-approved every session, no re-ask: SSH into `root@theemeraldexchange.local`; remote `docker` commands on the NAS (start/stop/restart/pull/compose up-down/exec); DB migrations/schema changes on the NAS; deploys (rsync, scp, docker build+push+roll); `git push` to any branch. The allow-list enforces this at the harness level — do not prompt for routine SSH/docker/push. Exception: destructive bulk ops (mass branch deletion, wiping a prod volume/DB) still get one one-line confirm.
+Personal homelab; pre-approved every session, no re-ask: SSH into the NAS (`ssh theemeraldexchange`); remote `docker` commands on the NAS (start/stop/restart/pull/compose up-down/exec); DB migrations/schema changes on the NAS; deploys (rsync, scp, docker build+push+roll); `git push` to any branch. The allow-list enforces this at the harness level — do not prompt for routine SSH/docker/push. Exception: destructive bulk ops (mass branch deletion, wiping a prod volume/DB) still get one one-line confirm.
 
 ### Identity & access — ask first (not covered above)
 
@@ -44,7 +44,9 @@ Exit code 0 is not done. After every step in stateful/deploy work, verify the ac
 - `curl` works locally and over SSH on the NAS; `wget` is NOT installed.
 - `$status` is reserved in zsh — use `exit_code`/`rc` instead.
 - Scripts may run under zsh or sh — avoid bash-isms (`${var//pattern/replace}`) without an explicit `#!/bin/bash` shebang.
-- Prod host `root@theemeraldexchange.local`; appdata root `/mnt/user/appdata/exchange-backend/`. All remote ops go through SSH or `docker` forwarded via SSH.
+- Prod host: `ssh theemeraldexchange` (`~/.ssh/config` alias); appdata root `/mnt/user/appdata/exchange-backend/`. All remote ops go through SSH or `docker` forwarded via SSH.
+- Prod runs `origin/main`, not the working branch: release = SPA `<meta name="release">`, backend `/api/version`.
+- Live-TV prod timeline: `scripts/live-timeline.sh [since]`.
 - No `sleep`-then-curl health-checks — sandbox blocks long leading sleeps; poll via `node` or SSH directly.
 - Repo may be public — never hardcode secrets, API keys, tokens, IPs, or personal info in any committed file; use env vars and gitignored `.env`.
 
