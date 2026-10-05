@@ -12,8 +12,19 @@ export default defineConfig(({ mode }) => {
   // /api/radarr, /api/sab paths so nothing in the SPA needs to change.
   // In prod (Netlify) the SPA points at api.<domain> directly and this
   // proxy block is irrelevant.
+  // Which commit the deployed SPA was built from, readable with one curl of
+  // index.html (<meta name="release">). Netlify sets COMMIT_REF at build time;
+  // the backend's equivalent is /api/version `release`.
+  const release = (env.COMMIT_REF || 'dev').slice(0, 7)
+
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      {
+        name: 'release-meta',
+        transformIndexHtml: () => [{ tag: 'meta', attrs: { name: 'release', content: release }, injectTo: 'head' }],
+      },
+    ],
     build: {
       // hls.js and the Three.js gem scene are intentionally isolated lazy
       // chunks (~509/516kB minified); neither is part of the entry path. Keep
