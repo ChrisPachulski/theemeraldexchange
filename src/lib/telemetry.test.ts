@@ -90,6 +90,13 @@ describe('src/lib/telemetry', () => {
     )
   })
 
+  it('routes envelopes through the backend tunnel, not the DSN host', async () => {
+    stubWindow({ glitchtipDsn: 'https://injected@glitchtip.test/1' })
+    const { initTelemetry } = await loadFresh()
+    initTelemetry()
+    expect(vi.mocked(Sentry.init).mock.calls[0][0]?.tunnel).toMatch(/\/api\/telemetry\/tunnel$/)
+  })
+
   // C. Sentry.init config invariants (§15 crash-data islands / no PII)
   it('initialises with tracesSampleRate 0 and sendDefaultPii false', async () => {
     stubWindow({ glitchtipDsn: 'https://injected@glitchtip.test/1' })

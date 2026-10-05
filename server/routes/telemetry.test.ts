@@ -11,7 +11,7 @@
 // test file has burned this loop before (commit 8d1d418), hence the
 // strict restore.
 
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { Hono } from 'hono'
 import { telemetry } from './telemetry.js'
 import { createSession } from '../session.js'
@@ -36,12 +36,15 @@ async function authCookie() {
 
 const ORIG = {
   dsn: env.EEX_TELEMETRY_DSN,
+  dsnInternal: env.EEX_TELEMETRY_DSN_INTERNAL,
   isProd: env.isProd,
   release: env.EEX_RELEASE,
 }
 
 afterEach(() => {
   ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = ORIG.dsn
+  ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN_INTERNAL = ORIG.dsnInternal
+  vi.unstubAllGlobals()
   ;(env as Record<string, unknown>).isProd = ORIG.isProd
   ;(env as Record<string, unknown>).EEX_RELEASE = ORIG.release
 })
@@ -154,5 +157,52 @@ describe('telemetry GET /config — happy paths', () => {
     })
     expect(res.status).toBe(200)
     expect((await res.json() as { dsn: string }).dsn).toBe(httpDsn)
+  })
+})
+
+describe('telemetry POST /tunnel — SPA envelope relay', () => {
+  const envelope = (dsn: string) =>
+    `${JSON.stringify({ dsn, sent_at: '2026-10-04T00:00:00Z' })}\n{"type":"event"}\n{"message":"boom"}`
+
+  function useDsns() {
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = VALID_DSN
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN_INTERNAL = 'http://abc123def456@glitchtip-internal:8000/42'
+  }
+
+  it('forwards an envelope for our DSN to the internal envelope endpoint', async () => {
+    useDsns()
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const body = envelope(VALID_DSN)
+    const res = await appUnderTest().request('/tunnel', { method: 'POST', body })
+    expect(res.status).toBe(200)
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(String(url)).toBe('http://glitchtip-internal:8000/api/42/envelope/')
+    expect(init.body).toBe(body)
+  })
+
+  it('refuses an envelope addressed to a different DSN', async () => {
+    useDsns()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const res = await appUnderTest().request('/tunnel', {
+      method: 'POST',
+      body: envelope('https://otherkey@evil.example.com/42'),
+    })
+    expect(res.status).toBe(403)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a body that is not an envelope', async () => {
+    useDsns()
+    const res = await appUnderTest().request('/tunnel', { method: 'POST', body: 'not json' })
+    expect(res.status).toBe(400)
+  })
+
+  it('503s when telemetry is not configured', async () => {
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN = null
+    ;(env as Record<string, unknown>).EEX_TELEMETRY_DSN_INTERNAL = null
+    const res = await appUnderTest().request('/tunnel', { method: 'POST', body: envelope(VALID_DSN) })
+    expect(res.status).toBe(503)
   })
 })

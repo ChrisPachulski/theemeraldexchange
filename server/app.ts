@@ -121,7 +121,10 @@ app.use('*', async (c, next) => {
   const path = redactRequestSecrets(url.pathname + url.search)
   const rid = c.get('requestId')
   const start = Date.now()
-  log.info(`<-- ${c.req.method} ${path} [${rid}]`)
+  // The user agent is the only thing that tells the web SPA from the Apple
+  // apps (or one browser from another) when reading a playback timeline.
+  const ua = (c.req.header('user-agent') ?? '-').replace(/["\r\n]/g, '').slice(0, 120)
+  log.info(`<-- ${c.req.method} ${path} [${rid}] ua="${ua}"`)
   await next()
   log.info(`--> ${c.req.method} ${path} ${c.res.status} ${Date.now() - start}ms [${rid}]`)
 })
