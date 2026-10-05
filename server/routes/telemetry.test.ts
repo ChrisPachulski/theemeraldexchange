@@ -177,7 +177,10 @@ describe('telemetry POST /tunnel — SPA envelope relay', () => {
     const res = await appUnderTest().request('/tunnel', { method: 'POST', body })
     expect(res.status).toBe(200)
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-    expect(String(url)).toBe('http://glitchtip-internal:8000/api/42/envelope/')
+    const forwarded = new URL(String(url))
+    expect(forwarded.origin + forwarded.pathname).toBe('http://glitchtip-internal:8000/api/42/envelope/')
+    // GlitchTip authenticates envelopes only by the query key (403 without it).
+    expect(forwarded.searchParams.get('sentry_key')).toBe(new URL(VALID_DSN).username)
     expect(init.body).toBe(body)
   })
 
