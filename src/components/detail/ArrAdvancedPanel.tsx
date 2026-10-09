@@ -183,7 +183,7 @@ function MonitoringSection({
 // persisted sort/filter across opens, skeleton rows while searching, and an
 // over-cap "Grab anyway" confirm that states the size-vs-cap specifics.
 
-function InteractiveSearchSection({
+export function InteractiveSearchSection({
   kind,
   itemId,
   episodes,
@@ -248,16 +248,23 @@ function InteractiveSearchSection({
   })
   // Which row's Grab is in flight — so only that button shows the spinner.
   const [grabbingGuid, setGrabbingGuid] = useState<string | null>(null)
+  // Rows already grabbed this session. A grab can take 30s+ on a loaded box and
+  // the only success cue was a toast, so the row re-armed and a second click
+  // queued the identical release again (Guardians Vol. 3 downloaded twice).
+  const [grabbed, setGrabbed] = useState<ReadonlySet<string>>(() => new Set())
+  const markGrabbed = (id: string) => setGrabbed((prev) => new Set(prev).add(id))
 
   const doGrab = (r: ArrRelease, allowOverCap: boolean) => {
-    setGrabbingGuid(`${r.indexerId}:${r.guid}`)
+    const id = `${r.indexerId}:${r.guid}`
+    setGrabbingGuid(id)
     grab.mutate(
       { ...r, allowOverCap },
-      { onSettled: () => setGrabbingGuid(null) },
+      { onSuccess: () => markGrabbed(id), onSettled: () => setGrabbingGuid(null) },
     )
   }
 
   const onGrab = (r: ArrRelease) => {
+    if (grabbed.has(`${r.indexerId}:${r.guid}`)) return
     if (r.overCap) {
       // State the specifics (checklist): actual size vs the cap, verb+noun CTA.
       confirm({
@@ -266,10 +273,11 @@ function InteractiveSearchSection({
         confirmLabel: 'Grab anyway',
         onConfirm: async () => {
           await new Promise<void>((resolve) => {
-            setGrabbingGuid(`${r.indexerId}:${r.guid}`)
+            const id = `${r.indexerId}:${r.guid}`
+            setGrabbingGuid(id)
             grab.mutate(
               { ...r, allowOverCap: true },
-              { onSettled: () => { setGrabbingGuid(null); resolve() } },
+              { onSuccess: () => markGrabbed(id), onSettled: () => { setGrabbingGuid(null); resolve() } },
             )
           })
         },
@@ -431,6 +439,7 @@ function InteractiveSearchSection({
                   {filtered.map((r) => {
                     const id = `${r.indexerId}:${r.guid}`
                     const busy = grabbingGuid === id
+                    const done = grabbed.has(id)
                     return (
                       <tr key={id} className={r.rejected ? 'arr-adv__tr arr-adv__tr--rejected' : 'arr-adv__tr'}>
                         <td className="arr-adv__td">{r.indexer ?? '—'}</td>
@@ -463,11 +472,11 @@ function InteractiveSearchSection({
                             type="button"
                             className="arr-adv__btn arr-adv__btn--grab"
                             onClick={() => onGrab(r)}
-                            disabled={grab.isPending}
+                            disabled={grab.isPending || done}
                             aria-busy={busy}
-                            aria-label={r.overCap ? `Grab ${r.title} (over cap)` : `Grab ${r.title}`}
+                            aria-label={done ? `Grabbed ${r.title}` : r.overCap ? `Grab ${r.title} (over cap)` : `Grab ${r.title}`}
                           >
-                            {busy ? '…' : 'Grab'}
+                            {busy ? '…' : done ? 'Grabbed' : 'Grab'}
                           </button>
                         </td>
                       </tr>
