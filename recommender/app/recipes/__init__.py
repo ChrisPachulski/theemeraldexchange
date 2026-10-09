@@ -74,6 +74,8 @@ REGISTRY: dict[str, str] = {
     "cold_start_trending": "app.recipes.cold_start_trending",
     # Promoted from the research loop: content + cast/crew fused item re-rank.
     "fused": "app.recipes.fused",
+    # Two-stage ranker learned from the household's own judgments.
+    "ranker": "app.recipes.ranker",
     # Research variants (not yet promoted to production):
     "item_knn": "app.recipes.item_knn",
 }

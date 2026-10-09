@@ -33,7 +33,7 @@ from app.context import (
     title_key_variants,
 )
 from app.db import VEC_TABLE_DDL, connect, encode_vec_rowid, serialize_f32
-from app.recipes import baseline_cosine, cold_start_trending, fused, item_knn, mmr_diverse
+from app.recipes import baseline_cosine, cold_start_trending, fused, item_knn, mmr_diverse, ranker
 from app.recipes.mmr_diverse import _mmr
 from app.retrieval import cold_start_pool, retrieve_candidates
 from app.schemas import ScoreRequest
@@ -117,11 +117,12 @@ def add_title(
 
 @pytest.fixture(autouse=True)
 def _clear_module_caches():
-    fused._IDF.clear()
-    item_knn._CATALOG.clear()
+    caches = (fused._IDF, item_knn._CATALOG, ranker._CATALOG, ranker._MODELS)
+    for cache in caches:
+        cache.clear()
     yield
-    fused._IDF.clear()
-    item_knn._CATALOG.clear()
+    for cache in caches:
+        cache.clear()
 
 
 @pytest.fixture()
@@ -533,6 +534,87 @@ def test_fused_cold_start_fallback(conn) -> None:
     assert all(it.provenance == "trending" for it in result.items)
     pops = [it.score for it in result.items]
     assert pops == sorted(pops, reverse=True), "cold start is popularity-ordered"
+
+
+# =========================================================================
+# recipes/ranker
+# =========================================================================
+
+
+def test_ranker_never_surfaces_excluded_titles(conn) -> None:
+    result = ranker.score(_ctx(conn), conn, n=20, params={})
+    ids = [it.tmdb_id for it in result.items]
+    assert result.diag["path"] == "ranker" and ids
+    for banned in (VETOED, DISLIKED, SHOWN, LIB_A1, LIB_A2, LOW_VOTE, UNRELEASED):
+        assert banned not in ids, banned
+    # Only an exact owned title blocks; owning a film must not block its sequel.
+    assert FRANCHISE in ids
+
+
+def test_ranker_drops_owned_title_under_another_tmdb_id(conn) -> None:
+    add_title(conn, 901, title="Steel Vengeance", vec=COMEDY)  # LIB_A2's title, different id
+    ids = [it.tmdb_id for it in ranker.score(_ctx(conn), conn, n=20, params={}).items]
+    assert ids and 901 not in ids
+
+
+def test_ranker_learns_from_household_judgments(conn) -> None:
+    # Red-dotting a run of comedies must push a comedy candidate down.
+    ctx = _ctx(conn)
+    neutral = ranker.score_ids(ctx, conn, [CAND_FAR, CAND_NEAR], {})
+    for i in range(8):
+        add_title(conn, 950 + i, title=f"Laugh Track {i}", vec=axis_vec({1: 1.0, 5 + i: 0.1}), genres=(35,))
+    ranker.warm(conn)  # the request path never reloads the catalog; the background warm does
+    soured = _ctx(conn, feedback=[{"tmdb_id": 950 + i, "signal": "dislike"} for i in range(8)])
+    after = ranker.score_ids(soured, conn, [CAND_FAR, CAND_NEAR], {})
+    assert after[CAND_FAR] < neutral[CAND_FAR]
+    assert after[CAND_NEAR] - after[CAND_FAR] > neutral[CAND_NEAR] - neutral[CAND_FAR]
+
+
+def test_ranker_cold_start_fallback(conn) -> None:
+    ctx = _ctx(conn, library=[], feedback=[], household_rejections=[])
+    result = ranker.score(ctx, conn, n=5, params={})
+    assert result.diag["path"] == "cold_start" and result.items
+
+
+def test_ranker_slate_running_constraints() -> None:
+    # 8 inputs, best-first. 0-3 kids; 4 and 5 share a TMDB collection; 7 is the
+    # only fresh title. Walk: slot 1 can't be a kid (1 > 0.5*1) -> 4; slot 2
+    # admits a kid -> 0; slot 3 can't (2 > 1.5) and 5 repeats 4's collection
+    # -> 6; slot 4 owes the fresh floor (int(0.25*4) = 1) -> 7.
+    z = np.array([8.0, 7, 6, 5, 4, 3, 2, 1])
+    emb = np.eye(8, DIM, dtype=np.float32)
+    gdist = np.eye(8)
+    kids = np.array([True] * 4 + [False] * 4)
+    collection = np.array([0, 0, 0, 0, 9, 9, 0, 0])
+    fresh = np.array([False] * 7 + [True])
+    p = {"calibration": 0.0, "redundancy": 0.0, "kids_genre_cap": 0.5, "fresh_share": 0.25}
+    chosen = ranker._slate(z, emb, gdist, np.full(8, 1 / 8), collection, kids, fresh, 4, p)
+    assert chosen == [4, 0, 6, 7]
+
+
+def test_ranker_slate_calibration_pulls_in_underrepresented_genre() -> None:
+    # Household taste is half genre A, half genre B; the three best-scored
+    # inputs are all A. Without calibration the slate is all A; with it, B
+    # must make the first two picks.
+    z = np.array([3.0, 2.9, 2.8, 1.0])
+    gdist = np.array([[1.0, 0], [1.0, 0], [1.0, 0], [0, 1.0]])
+    args = (np.eye(4, DIM, dtype=np.float32), gdist, np.array([0.5, 0.5]), np.zeros(4, int),
+            np.zeros(4, bool), np.zeros(4, bool), 3)
+    base = {"redundancy": 0.0, "kids_genre_cap": 1.0, "fresh_share": 0.0}
+    assert ranker._slate(z, *args, {**base, "calibration": 0.0}) == [0, 1, 2]
+    assert 3 in ranker._slate(z, *args, {**base, "calibration": 0.5})[:2]
+
+
+def test_ranker_logodds_neutral_for_unjudged_category() -> None:
+    from scipy import sparse
+
+    # cat 0 only in positives, cat 1 only in negatives, cat 2 never judged.
+    # Unequal class sizes (2 vs 6) used to push the unjudged category positive.
+    cats = [0, 0, 1, 1, 1, 1, 1, 1, 2, 2]
+    m = sparse.csr_matrix((np.ones(10), (range(10), cats)), shape=(10, 3))
+    lo = ranker._logodds(m, np.array([0, 1]), np.arange(2, 8))[0]
+    assert lo[0] > 0 > lo[1]
+    assert lo[2] == 0.0
 
 
 # =========================================================================
