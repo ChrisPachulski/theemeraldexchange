@@ -117,7 +117,7 @@ def add_title(
 
 @pytest.fixture(autouse=True)
 def _clear_module_caches():
-    caches = (fused._IDF, item_knn._CATALOG, ranker._CATALOG, ranker._KW_IDF, ranker._MODELS)
+    caches = (fused._IDF, item_knn._CATALOG, ranker._CATALOG, ranker._MODELS)
     for cache in caches:
         cache.clear()
     yield
@@ -563,6 +563,7 @@ def test_ranker_learns_from_household_judgments(conn) -> None:
     neutral = ranker.score_ids(ctx, conn, [CAND_FAR, CAND_NEAR], {})
     for i in range(8):
         add_title(conn, 950 + i, title=f"Laugh Track {i}", vec=axis_vec({1: 1.0, 5 + i: 0.1}), genres=(35,))
+    ranker.warm(conn)  # the request path never reloads the catalog; the background warm does
     soured = _ctx(conn, feedback=[{"tmdb_id": 950 + i, "signal": "dislike"} for i in range(8)])
     after = ranker.score_ids(soured, conn, [CAND_FAR, CAND_NEAR], {})
     assert after[CAND_FAR] < neutral[CAND_FAR]

@@ -58,7 +58,7 @@ from ..reasons import discover_reason, personalized_reason
 from ..retrieval import AVAILABLE_TITLE_PREDICATE
 from ..schemas import ScoredItem
 from . import EMBED_EPS, RecipeResult, cold_start_result
-from .fused import KEY_CREW_JOBS, KIDS_GENRE_IDS, _idf_map
+from .fused import KEY_CREW_JOBS, KIDS_GENRE_IDS
 
 log = logging.getLogger(__name__)
 
@@ -129,6 +129,9 @@ class _Catalog:
     available: np.ndarray      # bool: released + not cancelled-before-air
     collection: np.ndarray     # TMDB collection id, 0 = none
     key: list[str | None]      # full normalized title
+    cast: sparse.csr_matrix    # IDF-weighted, L2-normalized top-billed cast
+    crew: sparse.csr_matrix    # same, key crew (director / writer / ...)
+    kw: sparse.csr_matrix      # same, TMDB keywords
 
 
 _CATALOG: dict[str, tuple[tuple, _Catalog]] = {}
@@ -147,9 +150,43 @@ def _onehot(codes: list, n_rows: int) -> sparse.csr_matrix:
     )
 
 
-def _catalog(conn: sqlite3.Connection, kind: str) -> _Catalog:
-    gen = table_generation(conn, ("titles", "fetched_at"), ("title_features", "computed_at"))
+def _creators(conn: sqlite3.Connection, kind: str, row: dict[int, int], which: str) -> sparse.csr_matrix:
+    """Catalog-aligned (n_titles, vocab) rows of IDF-weighted, L2-normalized
+    people or keywords, so request-time overlap is a sparse product, not SQL."""
+    if which == "cast":
+        sql, args = "SELECT tmdb_id, person_id FROM title_cast WHERE kind = ? AND order_idx < ?", (kind, CAST_TOPN)
+    elif which == "crew":
+        jobs = ",".join("?" for _ in KEY_CREW_JOBS)
+        sql = f"SELECT DISTINCT tmdb_id, person_id FROM title_crew WHERE kind = ? AND job IN ({jobs})"
+        args = (kind, *KEY_CREW_JOBS)
+    else:
+        sql, args = "SELECT tmdb_id, keyword_id FROM title_keywords WHERE kind = ?", (kind,)
+    vocab: dict[int, int] = {}
+    rows, cols = [], []
+    for tid, key in conn.execute(sql, args):
+        r = row.get(tid)
+        if r is not None:
+            rows.append(r)
+            cols.append(vocab.setdefault(key, len(vocab)))
+    n = len(row)
+    m = sparse.csr_matrix((np.ones(len(rows), np.float32), (rows, cols)), shape=(n, max(len(vocab), 1)))
+    m.sum_duplicates()
+    m.data[:] = 1.0
+    df = np.bincount(m.indices, minlength=m.shape[1])
+    m = m.multiply((np.log((1.0 + n) / (1.0 + df)) + 1.0).astype(np.float32)).tocsr()
+    norms = np.sqrt(np.asarray(m.multiply(m).sum(axis=1)).ravel())
+    norms[norms == 0] = 1.0
+    return sparse.diags((1.0 / norms).astype(np.float32)).dot(m).tocsr()
+
+
+def _catalog(conn: sqlite3.Connection, kind: str, *, refresh: bool = False) -> _Catalog:
+    """The cached catalog. Requests never revalidate it -- the fingerprint is
+    full-table scans over a multi-GB DB, seconds on the NAS -- so a nightly
+    ingest reaches the ranker when ``warm`` (startup + hourly) rebuilds it."""
     hit = _CATALOG.get(kind)
+    if hit is not None and not refresh:
+        return hit[1]
+    gen = table_generation(conn, ("titles", "fetched_at"), ("title_features", "computed_at"))
     if hit is not None and hit[0] == gen:
         return hit[1]
     with _CATALOG_LOCK:
@@ -192,9 +229,10 @@ def _catalog(conn: sqlite3.Connection, kind: str) -> _Catalog:
         recent = np.fmax(year, np.array(
             [float(r["last_air_year"]) if (r["last_air_year"] or "").isdigit() else np.nan for r in rows]
         ))
+        row = {int(t): i for i, t in enumerate(ids)}
         cat = _Catalog(
             ids=ids,
-            row={int(t): i for i, t in enumerate(ids)},
+            row=row,
             emb=emb,
             genre=_onehot(genres, n),
             lang=_onehot([(r["original_language"] or "?",) for r in rows], n),
@@ -210,64 +248,13 @@ def _catalog(conn: sqlite3.Connection, kind: str) -> _Catalog:
             available=np.array([bool(r["available"]) for r in rows]),
             collection=np.array([int(r["collection"] or 0) for r in rows], dtype=np.int64),
             key=[normalize_title_key(r["title"]) for r in rows],
+            cast=_creators(conn, kind, row, "cast"),
+            crew=_creators(conn, kind, row, "crew"),
+            kw=_creators(conn, kind, row, "kw"),
         )
         _CATALOG[kind] = (gen, cat)
         log.info("ranker catalog loaded: kind=%s titles=%d", kind, n)
         return cat
-
-
-# --- sparse creator / theme vectors ------------------------------------------------
-
-_KW_IDF: dict[str, tuple[tuple, dict[int, float]]] = {}
-
-
-def _keyword_idf(conn: sqlite3.Connection, kind: str) -> dict[int, float]:
-    gen = table_generation(conn, "titles", "title_keywords")
-    hit = _KW_IDF.get(kind)
-    if hit is not None and hit[0] == gen:
-        return hit[1]
-    n_titles = conn.execute("SELECT COUNT(*) FROM titles WHERE kind = ?", (kind,)).fetchone()[0] or 1
-    idf = {
-        r[0]: math.log((1.0 + n_titles) / (1.0 + r[1])) + 1.0
-        for r in conn.execute(
-            "SELECT keyword_id, COUNT(DISTINCT tmdb_id) FROM title_keywords WHERE kind = ? GROUP BY keyword_id",
-            (kind,),
-        )
-    }
-    _KW_IDF[kind] = (gen, idf)
-    return idf
-
-
-def _sparse_vectors(conn: sqlite3.Connection, kind: str, ids: list[int], which: str) -> sparse.csr_matrix:
-    """(len(ids), vocab) IDF-weighted, L2-normalized person/keyword rows."""
-    if which == "kw":
-        idf = _keyword_idf(conn, kind)
-        sql, extra = "SELECT tmdb_id, keyword_id FROM title_keywords WHERE kind = ? AND tmdb_id IN ({ph})", ()
-    elif which == "cast":
-        idf = _idf_map(conn, kind, "cast", CAST_TOPN)
-        sql = "SELECT tmdb_id, person_id FROM title_cast WHERE kind = ? AND order_idx < ? AND tmdb_id IN ({ph})"
-        extra = (CAST_TOPN,)
-    else:
-        idf = _idf_map(conn, kind, "crew")
-        jobs = ",".join("?" for _ in KEY_CREW_JOBS)
-        sql = f"SELECT DISTINCT tmdb_id, person_id FROM title_crew WHERE kind = ? AND job IN ({jobs}) AND tmdb_id IN ({{ph}})"
-        extra = KEY_CREW_JOBS
-    pos = {t: i for i, t in enumerate(ids)}
-    vocab: dict[int, int] = {}
-    rows, cols, vals = [], [], []
-    for i in range(0, len(ids), 500):
-        batch = ids[i : i + 500]
-        q = sql.format(ph=",".join("?" for _ in batch))
-        for tid, key in conn.execute(q, (kind, *extra, *batch)):
-            rows.append(pos[tid])
-            cols.append(vocab.setdefault(key, len(vocab)))
-            vals.append(idf.get(key, 1.0))
-    m = sparse.csr_matrix(
-        (np.array(vals, np.float32), (rows, cols)), shape=(len(ids), max(len(vocab), 1))
-    )
-    norms = np.sqrt(np.asarray(m.multiply(m).sum(axis=1)).ravel())
-    norms[norms == 0] = 1.0
-    return sparse.diags(1.0 / norms).dot(m).tocsr()
 
 
 # --- household reference sets + features ---------------------------------------------
@@ -313,7 +300,7 @@ def _logodds(m: sparse.csr_matrix, pos: np.ndarray, neg: np.ndarray) -> tuple[np
             lo(cp, n_p, np.maximum(cn - 1, 0), max(n_n - 1, 0)))
 
 
-def _refs(conn: sqlite3.Connection, cat: _Catalog, kind: str, pos_ids: set[int], neg_ids: set[int]) -> _Refs:
+def _refs(cat: _Catalog, pos_ids: set[int], neg_ids: set[int]) -> _Refs:
     pos = np.array(sorted(cat.row[t] for t in pos_ids if t in cat.row), dtype=np.int64)
     neg = np.array(sorted(cat.row[t] for t in neg_ids - pos_ids if t in cat.row), dtype=np.int64)
     return _Refs(
@@ -355,9 +342,7 @@ def _sim_stats(sim: np.ndarray, rows: np.ndarray, col: dict[int, int], fill: flo
     return sim.max(axis=1), top.mean(axis=1)
 
 
-def _features(
-    conn: sqlite3.Connection, cat: _Catalog, kind: str, refs: _Refs, rows: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
+def _features(cat: _Catalog, refs: _Refs, rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """(len(rows), len(FEATURES)) matrix, plus the per-row positive-neighbour
     affinity matrix (content + creators + themes) used for "because you have"."""
     in_p = np.isin(rows, refs.pos)
@@ -372,17 +357,11 @@ def _features(
     x[:, 2] = np.maximum(neg_max - pos_max, 0.0) if len(refs.neg) else 0.0
     x[:, 3] = np.maximum(neg_topk - pos_topk, 0.0) if len(refs.neg) else 0.0
 
-    union = np.unique(np.concatenate([rows, refs.pos, refs.neg]))
-    at = {int(r): i for i, r in enumerate(union)}
-    ids = [int(cat.ids[r]) for r in union]
-    xi = [at[int(r)] for r in rows]
-    pi = [at[int(r)] for r in refs.pos]
-    ni = [at[int(r)] for r in refs.neg]
     affinity = s_pos.copy()
-    for which, fp, fn in (("cast", 4, 5), ("crew", 6, 7), ("kw", 8, 9)):
-        m = _sparse_vectors(conn, kind, ids, which)
-        ov_pos = (m[xi] @ m[pi].T).toarray()
-        ov_neg = (m[xi] @ m[ni].T).toarray()
+    for m, fp, fn in ((cat.cast, 4, 5), (cat.crew, 6, 7), (cat.kw, 8, 9)):
+        mx = m[rows]
+        ov_pos = (mx @ m[refs.pos].T).toarray()
+        ov_neg = (mx @ m[refs.neg].T).toarray()
         x[:, fp] = _sim_stats(ov_pos, rows, refs.pos_col, 0.0)[0]
         x[:, fn] = _sim_stats(ov_neg, rows, refs.neg_col, 0.0)[0]
         affinity += 0.5 * ov_pos
@@ -446,7 +425,7 @@ def _auc(s: np.ndarray, y: np.ndarray) -> float:
     return float((r[y == 1].sum() - n1 * (n1 + 1) / 2) / (n1 * n0)) if n1 and n0 else float("nan")
 
 
-def _model(ctx: UserContext, conn: sqlite3.Connection, cat: _Catalog, refs: _Refs, ridge: float) -> _Model:
+def _model(ctx: UserContext, cat: _Catalog, refs: _Refs, ridge: float) -> _Model:
     """The household's fitted weights. Reused across catalog reloads (they hold
     no catalog rows); refit on TTL, a ridge change, or judgment-count drift."""
     key = (ctx.sub, ctx.kind)
@@ -464,7 +443,7 @@ def _model(ctx: UserContext, conn: sqlite3.Connection, cat: _Catalog, refs: _Ref
         neg = refs.neg if n_neg <= MAX_TRAIN_PER_CLASS else rng.choice(refs.neg, MAX_TRAIN_PER_CLASS, replace=False)
         rows = np.concatenate([pos, neg])
         y = np.concatenate([np.ones(len(pos)), np.zeros(len(neg))])
-        x, _ = _features(conn, cat, ctx.kind, refs, rows)
+        x, _ = _features(cat, refs, rows)
         mean = x.mean(axis=0)
         std = x.std(axis=0)
         std[std < 1e-9] = 1.0
@@ -608,19 +587,17 @@ def _prepare(ctx: UserContext, conn: sqlite3.Connection, p: dict):
     cat = _catalog(conn, ctx.kind)
     pos_ids = ctx.library_ids | ctx.liked_ids
     neg_ids = (ctx.disliked_ids | ctx.rejected_ids) - pos_ids
-    refs = _refs(conn, cat, ctx.kind, pos_ids, neg_ids)
-    model = _model(ctx, conn, cat, refs, float(p["ridge"]))
+    refs = _refs(cat, pos_ids, neg_ids)
+    model = _model(ctx, cat, refs, float(p["ridge"]))
     return cat, refs, model
 
 
 def warm(conn: sqlite3.Connection) -> None:
-    """Build the catalog + IDF caches off the request path (a cold catalog load
-    is seconds: it parses every title's raw TMDB JSON for collection ids)."""
+    """(Re)build the catalogs off the request path if the catalog tables moved.
+    A cold build is slow (it parses every title's raw TMDB JSON and scans the
+    credits/keyword tables), which no strip request should wait on."""
     for kind in ("movie", "tv"):
-        _catalog(conn, kind)
-        _keyword_idf(conn, kind)
-        _idf_map(conn, kind, "cast", CAST_TOPN)
-        _idf_map(conn, kind, "crew")
+        _catalog(conn, kind, refresh=True)
 
 
 def score_ids(ctx: UserContext, conn: sqlite3.Connection, ids: list[int], params: dict) -> dict[int, float]:
@@ -630,7 +607,7 @@ def score_ids(ctx: UserContext, conn: sqlite3.Connection, ids: list[int], params
     rows = np.array([cat.row[t] for t in ids if t in cat.row], dtype=np.int64)
     if len(rows) == 0 or len(refs.pos) == 0:
         return {}
-    x, _ = _features(conn, cat, ctx.kind, refs, rows)
+    x, _ = _features(cat, refs, rows)
     return {int(cat.ids[r]): float(s) for r, s in zip(rows, model.z(x))}
 
 
@@ -649,7 +626,7 @@ def score(ctx: UserContext, conn: sqlite3.Connection, *, n: int, params: dict) -
     if len(rows) == 0:
         return RecipeResult(items=[], diag={"path": "empty_pool"})
 
-    x, affinity = _features(conn, cat, ctx.kind, refs, rows)
+    x, affinity = _features(cat, refs, rows)
     z = model.z(x)
     by_score = np.argsort(-z)
     fresh_rows = [i for i in by_score if cat.fresh[rows[i]]][:FRESH_INPUT]
