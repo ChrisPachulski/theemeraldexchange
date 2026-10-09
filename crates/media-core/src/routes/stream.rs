@@ -48,6 +48,12 @@ pub(super) async fn resolve_media_file(
             .fetch_optional(&state.db.pool)
             .await?
             .ok_or(AppError::NotFound)?,
+        // A YouTube video (ytdl-sub) — the same media_files row and range path.
+        "video" => sqlx::query_scalar("SELECT media_file_id FROM youtube_videos WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db.pool)
+            .await?
+            .ok_or(AppError::NotFound)?,
         _ => return Err(AppError::BadRequest(format!("unknown media kind: {kind}"))),
     };
 
@@ -388,6 +394,7 @@ pub(super) async fn stream_file(
     let allowed_roots: Vec<std::path::PathBuf> = match kind.as_str() {
         "track" => state.config.music_roots.clone(),
         "audiobook" => state.config.audiobook_roots.clone(),
+        "video" => state.config.youtube_roots.clone(),
         _ => state.config.library_paths(),
     };
     if !path_within_roots(std::path::Path::new(&file.path), &allowed_roots).await {

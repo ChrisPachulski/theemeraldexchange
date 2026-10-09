@@ -97,6 +97,33 @@ describe('USE_MEDIA_CORE — media proxy mount gate', () => {
     }
   })
 
+  it('reports youtubeEnabled only when USE_MEDIA_CORE=1 AND YOUTUBE_LIBRARY_PATHS is set', async () => {
+    const { vi } = await import('vitest')
+    const prevMedia = process.env.USE_MEDIA_CORE
+    const prevYt = process.env.YOUTUBE_LIBRARY_PATHS
+    const enabled = async () => {
+      vi.resetModules()
+      const { app } = await import('./app.js')
+      const body = (await (await app.request('/api/limits')).json()) as { youtubeEnabled: boolean }
+      return body.youtubeEnabled
+    }
+    try {
+      process.env.USE_MEDIA_CORE = '1'
+      delete process.env.YOUTUBE_LIBRARY_PATHS
+      expect(await enabled()).toBe(false)
+      process.env.YOUTUBE_LIBRARY_PATHS = '/media/youtube'
+      expect(await enabled()).toBe(true)
+      delete process.env.USE_MEDIA_CORE
+      expect(await enabled()).toBe(false)
+    } finally {
+      if (prevMedia === undefined) delete process.env.USE_MEDIA_CORE
+      else process.env.USE_MEDIA_CORE = prevMedia
+      if (prevYt === undefined) delete process.env.YOUTUBE_LIBRARY_PATHS
+      else process.env.YOUTUBE_LIBRARY_PATHS = prevYt
+      vi.resetModules()
+    }
+  })
+
   it('reports musicEnabled:false when a music root is set but the proxy is off', async () => {
     const { vi } = await import('vitest')
     vi.resetModules()

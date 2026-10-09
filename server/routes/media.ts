@@ -22,7 +22,7 @@ import {
   MEDIA_HLS_KIND,
 } from '../services/mediaStreamToken.js'
 import { memberStatus } from '../services/membership.js'
-import { ratingBlocked } from '../services/parentalRating.js'
+import { capBlocksUnrated, ratingBlocked } from '../services/parentalRating.js'
 import { createLogger } from '../services/logger.js'
 
 const log = createLogger('media')
@@ -155,7 +155,7 @@ async function mediaAuth(c: Context<Env>, next: Next) {
     if (authDenied) return authDenied
     const kind = streamMatch[1]
     if (
-      (kind === 'movie' || kind === 'episode' || kind === 'track') &&
+      (kind === 'movie' || kind === 'episode' || kind === 'track' || kind === 'video') &&
       (await ratingBlocked(c.get('session'), kind, Number(streamMatch[2])))
     ) {
       return c.json({ error: 'rating_blocked' }, 403)
@@ -179,6 +179,16 @@ async function mediaAuth(c: Context<Env>, next: Next) {
     }
     return next()
   }
+  // YouTube listings and art: an unrated catalog, hidden from capped profiles
+  // like IPTV VOD (capBlocksUnrated). Playback is gated by ratingBlocked.
+  if (subpath.startsWith('/youtube/')) {
+    const authDenied = await requireAuth(c, async () => {})
+    if (authDenied) return authDenied
+    if (await capBlocksUnrated(c.get('session'))) {
+      return c.json({ error: 'rating_blocked' }, 403)
+    }
+    return next()
+  }
   return requireAuth(c, next)
 }
 
@@ -192,7 +202,7 @@ media.post('/playback/:kind/:id', async (c) => {
   const session = c.get('session')
   const kind = c.req.param('kind')
   const id = c.req.param('id')
-  if (kind !== 'movie' && kind !== 'episode' && kind !== 'track') {
+  if (kind !== 'movie' && kind !== 'episode' && kind !== 'track' && kind !== 'video') {
     return c.json({ error: 'unknown media kind' }, 400)
   }
 

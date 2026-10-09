@@ -165,6 +165,18 @@ pub async fn run_guarded_scan(state: &AppState, trigger: &str) -> bool {
         ),
         Err(e) => tracing::warn!(trigger, "audiobook scan failed: {e}"),
     }
+    match scanner::scan_youtube_isolated(state.db.clone(), state.config.youtube_roots.clone()).await
+    {
+        Ok(report) => tracing::info!(
+            trigger,
+            files_seen = report.files_seen,
+            files_added = report.files_added,
+            files_removed = report.files_removed,
+            errors = report.errors,
+            "youtube scan complete"
+        ),
+        Err(e) => tracing::warn!(trigger, "youtube scan failed: {e}"),
+    }
 
     state.scanning.store(false, Ordering::SeqCst);
     true

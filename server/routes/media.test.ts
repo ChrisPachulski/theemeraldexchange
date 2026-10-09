@@ -47,6 +47,7 @@ vi.mock('../services/membership.js', () => ({
 
 vi.mock('../services/parentalRating.js', () => ({
   ratingBlocked: vi.fn(async () => ratingState.blocked),
+  capBlocksUnrated: vi.fn(async () => ratingState.blocked),
 }))
 
 // Shape of the second arg the route passes to fetchWithTimeout: a fetch
@@ -256,6 +257,40 @@ describe('media proxy route', () => {
     const body = (await res.json()) as { items: { id: number; name: string }[]; total: number }
     expect(body.total).toBe(1)
     expect(body.items[0].name).toBe('Miles Davis')
+  })
+
+  it('proxies the YouTube library to media-core for an uncapped caller', async () => {
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ items: [{ name: 'PBS', video_count: 3 }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const res = await media.request('/youtube/channels', { method: 'GET', headers: { host: 'localhost' } })
+    expect(res.status).toBe(200)
+    expect(mockFetch.mock.calls[0][0]).toBe('http://media-core.test/api/media/youtube/channels')
+  })
+
+  it('403s YouTube listings and art for a capped caller (unrated catalog)', async () => {
+    ratingState.blocked = true
+    for (const path of ['/youtube/channels', '/youtube/videos?channel=PBS', '/youtube/videos/3/thumb']) {
+      const res = await media.request(path, { method: 'GET', headers: { host: 'localhost' } })
+      expect(res.status).toBe(403)
+      expect((await res.json()) as { error: string }).toEqual({ error: 'rating_blocked' })
+    }
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('gates a YouTube video grant on the rating cap', async () => {
+    ratingState.blocked = true
+    const res = await media.request('/playback/video/3', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: '{}',
+    })
+    expect(res.status).toBe(403)
+    expect(mockRatingBlocked).toHaveBeenCalledWith(expect.objectContaining({ sub: 'plex:42' }), 'video', 3)
+    expect(mockFetch).not.toHaveBeenCalled()
   })
 
   it('403s a cookie-authed /stream/:kind/:id above the caller rating cap (no ?t=)', async () => {

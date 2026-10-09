@@ -110,7 +110,7 @@ pub(super) async fn post_watch(
         Some(false) => return Err(AppError::NotFound),
         None => {
             return Err(AppError::BadRequest(
-                "media_kind must be one of movie, episode, track, audiobook, podcast_episode"
+                "media_kind must be one of movie, episode, track, audiobook, podcast_episode, video"
                     .into(),
             ));
         }

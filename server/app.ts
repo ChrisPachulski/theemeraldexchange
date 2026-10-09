@@ -235,6 +235,9 @@ app.get('/api/limits', async (c) => {
     // (/api/media/music/*) and audio playback ride the same proxy, so both
     // facts are required. Public boolean — no secret leakage.
     musicEnabled: env.useMediaCore && env.musicRootsConfigured,
+    // Same for the YouTube library (YOUTUBE_LIBRARY_PATHS): the Apple apps
+    // show their YouTube shelves on this. Public boolean.
+    youtubeEnabled: env.useMediaCore && env.youtubeRootsConfigured,
     // Optional integrations (plan 006 Phase 3): the SPA hides the
     // request/download surfaces an unconfigured install can't serve
     // (mirrors iptvEnabled — the same facts are implied by the typed

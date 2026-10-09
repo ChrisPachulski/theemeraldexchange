@@ -166,6 +166,9 @@ const useMediaCore = process.env.USE_MEDIA_CORE === '1'
 // value as media-core (they share the config) so /api/limits can honestly gate
 // the SPA's music tab. Empty/unset → music disabled (the M3-only posture).
 const musicRootsConfigured = Boolean((opt('MUSIC_LIBRARY_PATHS') ?? '').trim())
+// Same contract for YouTube (ytdl-sub channel folders): media-core indexes them
+// only when YOUTUBE_LIBRARY_PATHS is set, and the backend gets the same value.
+const youtubeRootsConfigured = Boolean((opt('YOUTUBE_LIBRARY_PATHS') ?? '').trim())
 const trustClientIpHeaders = process.env.TRUST_CLIENT_IP_HEADERS === '1'
 const recommenderEventSecret = opt('RECOMMENDER_EVENT_SECRET') ?? null
 if (useLocalRecommender && !recommenderEventSecret) {
@@ -630,6 +633,7 @@ export const env = {
 
   useMediaCore,
   musicRootsConfigured,
+  youtubeRootsConfigured,
   mediaCoreUrl:
     opt('MEDIA_CORE_URL') ??
     (process.env.NODE_ENV === 'production'

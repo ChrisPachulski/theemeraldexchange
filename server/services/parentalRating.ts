@@ -133,13 +133,16 @@ type SessionLike = { sub: string; role: string }
 /** True when the caller's rating cap forbids this media-core title. */
 export async function ratingBlocked(
   session: SessionLike,
-  kind: 'movie' | 'episode' | 'track',
+  kind: 'movie' | 'episode' | 'track' | 'video',
   id: number,
 ): Promise<boolean> {
   if (session.role === 'admin') return false
   if (kind === 'track') return false
   const cap = (await getPolicy(session.sub)).maxContentRating
   if (cap === null) return false
+  // A YouTube video carries no certification: an unrated catalog, blocked
+  // under any cap (the capBlocksUnrated rule for IPTV).
+  if (kind === 'video') return true
   try {
     return !ratingAllowed(await resolver(kind, id), cap)
   } catch {
