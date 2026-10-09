@@ -98,6 +98,9 @@ pub struct Config {
     /// Audiobook roots (`AUDIOBOOK_LIBRARY_PATHS`, colon-separated). Empty →
     /// audiobook scan disabled.
     pub audiobook_roots: Vec<PathBuf>,
+    /// YouTube roots (`YOUTUBE_LIBRARY_PATHS`, colon-separated): ytdl-sub's
+    /// channel folders. Empty → YouTube scan disabled.
+    pub youtube_roots: Vec<PathBuf>,
     pub internal_principal_secret: Option<String>,
     pub principal_mode: PrincipalMode,
     pub server_id: String,
@@ -173,6 +176,7 @@ impl Config {
         };
         let photo_roots = colon_paths("PHOTO_LIBRARY_PATHS");
         let audiobook_roots = colon_paths("AUDIOBOOK_LIBRARY_PATHS");
+        let youtube_roots = colon_paths("YOUTUBE_LIBRARY_PATHS");
         let internal_principal_secret = std::env::var("INTERNAL_PRINCIPAL_SECRET")
             .ok()
             .filter(|s| !s.is_empty());
@@ -227,6 +231,7 @@ impl Config {
             music_roots,
             photo_roots,
             audiobook_roots,
+            youtube_roots,
             internal_principal_secret,
             principal_mode,
             server_id,

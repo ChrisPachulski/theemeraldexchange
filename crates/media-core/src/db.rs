@@ -77,6 +77,11 @@ pub const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0014_podcast_owner",
         include_str!("../migrations/0014_podcast_owner.sql"),
     ),
+    (
+        15,
+        "0015_youtube",
+        include_str!("../migrations/0015_youtube.sql"),
+    ),
 ];
 
 #[derive(Clone)]

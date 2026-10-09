@@ -2476,6 +2476,245 @@ pub async fn scan_audiobooks_isolated(
     }
 }
 
+// ── YouTube (ytdl-sub) ──────────────────────────────────────────────────
+
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct YoutubeScanReport {
+    pub files_seen: usize,
+    pub files_added: usize,
+    pub files_updated: usize,
+    pub files_removed: usize,
+    pub errors: usize,
+}
+
+/// What the library shows for one video: yt-dlp's `.info.json` beside the
+/// file first, then ytdl-sub's file name (`sYYYY.eMMDDNN - Title`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct YoutubeMeta {
+    pub title: String,
+    pub upload_date: Option<String>,
+    pub description: Option<String>,
+    pub duration_secs: Option<i64>,
+}
+
+pub fn classify_youtube(info: Option<&serde_json::Value>, stem: &str) -> YoutubeMeta {
+    let text = |k: &str| {
+        info.and_then(|v| v.get(k))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    let (code, name_title) = match stem.split_once(" - ") {
+        Some((c, t)) => (c.trim(), t.trim()),
+        None => ("", stem.trim()),
+    };
+    let upload_date = text("upload_date")
+        .filter(|d| d.len() == 8 && d.bytes().all(|b| b.is_ascii_digit()))
+        .map(|d| format!("{}-{}-{}", &d[0..4], &d[4..6], &d[6..8]))
+        .or_else(|| ytdl_sub_date(code));
+    let duration_secs = info
+        .and_then(|v| v.get("duration"))
+        .and_then(|v| v.as_f64())
+        .filter(|d| d.is_finite() && *d >= 0.0)
+        .map(|d| d.round() as i64);
+    let title = text("title").unwrap_or_else(|| {
+        if name_title.is_empty() {
+            stem.trim().to_string()
+        } else {
+            name_title.to_string()
+        }
+    });
+    YoutubeMeta {
+        title,
+        upload_date,
+        description: text("description"),
+        duration_secs,
+    }
+}
+
+/// `s2018.e022201` → `2018-02-22`: ytdl-sub's season is the year and its
+/// episode is MMDD plus a per-day index.
+fn ytdl_sub_date(code: &str) -> Option<String> {
+    let rest = code.strip_prefix(['s', 'S'])?;
+    let (year, ep) = rest.split_once('.')?;
+    let ep = ep.strip_prefix(['e', 'E'])?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if year.len() != 4 || ep.len() < 4 || !digits(year) || !digits(ep) {
+        return None;
+    }
+    let (mm, dd) = (&ep[0..2], &ep[2..4]);
+    let (m, d): (u32, u32) = (mm.parse().ok()?, dd.parse().ok()?);
+    ((1..=12).contains(&m) && (1..=31).contains(&d)).then(|| format!("{year}-{mm}-{dd}"))
+}
+
+/// The channel a video belongs to: the first folder under its root. A file
+/// sitting directly in a root has no channel and is skipped.
+fn youtube_channel(
+    roots: &[std::path::PathBuf],
+    path: &std::path::Path,
+) -> Option<(String, std::path::PathBuf)> {
+    let root = roots.iter().find(|r| path.starts_with(r))?;
+    let mut parts = path.strip_prefix(root).ok()?.components();
+    let channel = parts.next()?.as_os_str().to_str()?.to_string();
+    parts.next()?; // the file itself (or a season folder) must follow
+    Some((channel.clone(), root.join(channel)))
+}
+
+/// One YouTube scan pass over `roots` (mirrors [`scan_audiobooks_once`]).
+pub async fn scan_youtube_once(
+    db: &Db,
+    roots: &[std::path::PathBuf],
+) -> Result<YoutubeScanReport, AppError> {
+    scan_youtube_once_with_probe_bin(db, roots, "ffprobe").await
+}
+
+async fn scan_youtube_once_with_probe_bin(
+    db: &Db,
+    roots: &[std::path::PathBuf],
+    ffprobe_bin: &str,
+) -> Result<YoutubeScanReport, AppError> {
+    let mut report = YoutubeScanReport::default();
+    if roots.is_empty() {
+        return Ok(report);
+    }
+
+    let roots_owned = roots.to_vec();
+    let walk = tokio::task::spawn_blocking(move || {
+        walk_matching_roots(&roots_owned, is_video_file, "youtube")
+    })
+    .await
+    .map_err(|e| AppError::Internal(format!("youtube walk task failed: {e}")))?;
+    report.files_seen = walk.files.len();
+    report.errors = walk.errors;
+
+    for file in &walk.files {
+        let path_str = &file.path_str;
+        let Some((channel, channel_dir)) = youtube_channel(roots, &file.path) else {
+            continue;
+        };
+        match existing_stat(db, path_str).await {
+            Ok(Some((prev_size, prev_mtime)))
+                if prev_size == file.size_bytes && prev_mtime == file.mtime =>
+            {
+                continue;
+            }
+            Ok(existing) => {
+                let is_update = existing.is_some();
+                let probed = match probe::ffprobe_with_bin(ffprobe_bin, &file.path).await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!("ffprobe failed for {path_str}: {e}");
+                        report.errors += 1;
+                        continue;
+                    }
+                };
+                let sidecar =
+                    |suffix: &str| file.path.with_file_name(format!("{}{suffix}", file.stem));
+                let info: Option<serde_json::Value> = tokio::fs::read(sidecar(".info.json"))
+                    .await
+                    .ok()
+                    .and_then(|b| serde_json::from_slice(&b).ok());
+                let meta = classify_youtube(info.as_ref(), &file.stem);
+                let mut thumb_path = None;
+                for suffix in ["-thumb.jpg", ".jpg", "-thumb.webp", ".webp"] {
+                    let candidate = sidecar(suffix);
+                    if tokio::fs::try_exists(&candidate).await.unwrap_or(false) {
+                        thumb_path = candidate.to_str().map(str::to_string);
+                        break;
+                    }
+                }
+                let index = async {
+                    let (file_id, _) =
+                        upsert_media_file(db, path_str, file.size_bytes, &file.mtime, &probed)
+                            .await?;
+                    sqlx::query(
+                        "INSERT INTO youtube_videos (media_file_id, channel, channel_dir, title, \
+                         upload_date, description, duration_secs, thumb_path) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+                         ON CONFLICT(media_file_id) DO UPDATE SET channel = excluded.channel, \
+                         channel_dir = excluded.channel_dir, title = excluded.title, \
+                         upload_date = excluded.upload_date, description = excluded.description, \
+                         duration_secs = excluded.duration_secs, thumb_path = excluded.thumb_path",
+                    )
+                    .bind(file_id)
+                    .bind(&channel)
+                    .bind(channel_dir.to_str())
+                    .bind(&meta.title)
+                    .bind(&meta.upload_date)
+                    .bind(&meta.description)
+                    .bind(meta.duration_secs.or(probed.duration_secs))
+                    .bind(&thumb_path)
+                    .execute(&db.pool)
+                    .await?;
+                    Ok::<(), AppError>(())
+                };
+                match index.await {
+                    Ok(()) => {
+                        if is_update {
+                            report.files_updated += 1;
+                        } else {
+                            report.files_added += 1;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("youtube index failed for {path_str}: {e}");
+                        report.errors += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("youtube lookup failed for {path_str}: {e}");
+                report.errors += 1;
+            }
+        }
+    }
+
+    // Prune vanished videos (cascades youtube_videos), healthy roots only —
+    // the same guard as audiobooks.
+    if !walk.prunable_roots.is_empty() {
+        let rows: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT mf.id, mf.path FROM media_files mf JOIN youtube_videos y ON y.media_file_id = mf.id",
+        )
+        .fetch_all(&db.pool)
+        .await?;
+        let roots = walk.prunable_roots.clone();
+        let missing: Vec<i64> = tokio::task::spawn_blocking(move || {
+            rows.into_iter()
+                .filter(|(_, path)| {
+                    let p = std::path::Path::new(path);
+                    roots.iter().any(|root| p.starts_with(root)) && !p.exists()
+                })
+                .map(|(id, _)| id)
+                .collect()
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("youtube prune task failed: {e}")))?;
+        for id in missing {
+            report.files_removed += sqlx::query("DELETE FROM media_files WHERE id = ?")
+                .bind(id)
+                .execute(&db.pool)
+                .await?
+                .rows_affected() as usize;
+        }
+    }
+
+    Ok(report)
+}
+
+/// [`scan_youtube_once`] isolated on its own task.
+pub async fn scan_youtube_isolated(
+    db: Db,
+    roots: Vec<std::path::PathBuf>,
+) -> Result<YoutubeScanReport, AppError> {
+    match tokio::spawn(async move { scan_youtube_once(&db, &roots).await }).await {
+        Ok(result) => result,
+        Err(e) => Err(AppError::Internal(format!(
+            "youtube scan task panicked: {e}"
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5041,5 +5280,107 @@ mod tests {
             "the skipped root is surfaced as an error"
         );
         assert_eq!(count(&db, "tracks").await, 1, "the track survives");
+    }
+}
+
+#[cfg(test)]
+mod youtube_tests {
+    use super::*;
+
+    #[test]
+    fn classify_youtube_prefers_info_json_then_file_name() {
+        let info = serde_json::json!({
+            "title": "Homeopathy Explained",
+            "upload_date": "20180222",
+            "description": "Gentle healing or reckless fraud?",
+            "duration": 612.4
+        });
+        let stem = "s2018.e022201 - Homeopathy Explained – Gentle Healing";
+        assert_eq!(
+            classify_youtube(Some(&info), stem),
+            YoutubeMeta {
+                title: "Homeopathy Explained".into(),
+                upload_date: Some("2018-02-22".into()),
+                description: Some("Gentle healing or reckless fraud?".into()),
+                duration_secs: Some(612),
+            }
+        );
+        // No sidecar: date and title come from ytdl-sub's file name.
+        let meta = classify_youtube(None, stem);
+        assert_eq!(meta.title, "Homeopathy Explained – Gentle Healing");
+        assert_eq!(meta.upload_date.as_deref(), Some("2018-02-22"));
+        assert_eq!(meta.duration_secs, None);
+        // A name without ytdl-sub's code keeps the whole stem and no date.
+        let plain = classify_youtube(None, "Some Upload");
+        assert_eq!(plain.title, "Some Upload");
+        assert_eq!(plain.upload_date, None);
+        assert_eq!(
+            ytdl_sub_date("s2018.e139901"),
+            None,
+            "month 13 is not a date"
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn youtube_scan_indexes_channels_skips_loose_files_and_prunes() {
+        let stub_dir = tempfile::tempdir().unwrap();
+        let stub = crate::probe::write_echoing_stub_path(stub_dir.path());
+        let tmp = tempfile::tempdir().unwrap();
+        let season = tmp.path().join("Kurzgesagt").join("Season 2018");
+        std::fs::create_dir_all(&season).unwrap();
+        let video = season.join("s2018.e022201 - Homeopathy Explained.mp4");
+        std::fs::write(&video, b"video").unwrap();
+        std::fs::write(
+            season.join("s2018.e022201 - Homeopathy Explained-thumb.jpg"),
+            b"jpg",
+        )
+        .unwrap();
+        std::fs::write(
+            season.join("s2018.e022201 - Homeopathy Explained.info.json"),
+            br#"{"title":"Homeopathy Explained","upload_date":"20180222","duration":612}"#,
+        )
+        .unwrap();
+        std::fs::write(tmp.path().join("loose.mp4"), b"no channel").unwrap();
+
+        let db = Db::connect_memory().await.unwrap();
+        let roots = vec![tmp.path().to_path_buf()];
+        let first = scan_youtube_once_with_probe_bin(&db, &roots, stub.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(first.files_seen, 2, "both videos walked");
+        assert_eq!(first.files_added, 1, "the loose file has no channel");
+        let row: (String, String, String, Option<String>, Option<i64>, Option<String>) = sqlx::query_as(
+            "SELECT channel, channel_dir, title, upload_date, duration_secs, thumb_path FROM youtube_videos",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, "Kurzgesagt");
+        assert_eq!(row.1, tmp.path().join("Kurzgesagt").to_str().unwrap());
+        assert_eq!(row.2, "Homeopathy Explained");
+        assert_eq!(row.3.as_deref(), Some("2018-02-22"));
+        assert_eq!(row.4, Some(612));
+        assert!(row.5.unwrap().ends_with("Homeopathy Explained-thumb.jpg"));
+
+        let again = scan_youtube_once_with_probe_bin(&db, &roots, stub.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            (again.files_added, again.files_updated),
+            (0, 0),
+            "unchanged files are skipped"
+        );
+
+        std::fs::remove_file(&video).unwrap();
+        let pruned = scan_youtube_once_with_probe_bin(&db, &roots, stub.to_str().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(pruned.files_removed, 1);
+        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM youtube_videos")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 0, "the cascade removed the video row");
     }
 }

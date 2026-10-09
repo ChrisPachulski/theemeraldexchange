@@ -47,6 +47,7 @@ pub(super) async fn test_state_enforce(secret: &str) -> AppState {
         music_roots: Vec::new(),
         photo_roots: Vec::new(),
         audiobook_roots: Vec::new(),
+        youtube_roots: Vec::new(),
         internal_principal_secret: Some(secret.to_string()),
         principal_mode: PrincipalMode::Enforce,
         server_id: "srv-test".into(),

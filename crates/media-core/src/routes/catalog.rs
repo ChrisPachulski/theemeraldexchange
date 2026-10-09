@@ -114,6 +114,7 @@ pub(super) async fn media_exists(
         "episode" => "episodes",
         "track" => "tracks",
         "audiobook" => "audiobooks",
+        "video" => "youtube_videos",
         "podcast_episode" => "podcast_episodes",
         _ => return Ok(None),
     };

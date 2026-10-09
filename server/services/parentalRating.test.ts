@@ -98,6 +98,16 @@ describe('ratingBlocked (grant gate)', () => {
     })
     expect(await ratingBlocked(user, 'track', 5)).toBe(false)
   })
+
+  it('blocks YouTube videos under any cap — an unrated catalog, like IPTV VOD', async () => {
+    _setCertificationResolverForTests(async () => {
+      throw new Error('must not be called')
+    })
+    expect(await ratingBlocked(user, 'video', 5)).toBe(false) // uncapped
+    await cap('R')
+    expect(await ratingBlocked(user, 'video', 5)).toBe(true)
+    expect(await ratingBlocked(admin, 'video', 5)).toBe(false)
+  })
 })
 
 describe('capBlocksUnrated (IPTV VOD gate)', () => {

@@ -180,6 +180,8 @@ services:
       # until then the backend never proxies to it (no behavior change).
       USE_MEDIA_CORE: "${USE_MEDIA_CORE:-0}"
       MEDIA_CORE_URL: "${MEDIA_CORE_URL:-http://media-core:8002}"
+      # Same value as media-core's: /api/limits reports youtubeEnabled from it.
+      YOUTUBE_LIBRARY_PATHS: "${YOUTUBE_LIBRARY_PATHS:-}"
       # The mount above; keep in lockstep with media-core's MEDIA_DB_PATH.
       MEDIA_DB_PATH: "/media-core-db/media.db"
       # When a file can't direct-play, media-core hands the client an HLS
@@ -351,6 +353,9 @@ services:
       MEDIA_CORE_PORT: "8002"
       MEDIA_DB_PATH: "/data/media.db"
       MEDIA_LIBRARY_PATHS: "${MEDIA_LIBRARY_PATHS:-/media}"
+      # ytdl-sub's channel folders under the /media mount (e.g. /media/youtube);
+      # unset = no YouTube library. Keep out of MEDIA_LIBRARY_PATHS.
+      YOUTUBE_LIBRARY_PATHS: "${YOUTUBE_LIBRARY_PATHS:-}"
       # Internal-principal verification (contract §4), same posture knobs AND
       # default as the recommender: enforce (fail-closed). The receiver verifies
       # the server-minted caller identity rather than trusting a spoofable body

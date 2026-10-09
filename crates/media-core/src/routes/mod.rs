@@ -44,6 +44,7 @@ mod subtitles;
 #[cfg(test)]
 mod testsupport;
 mod watch;
+mod youtube;
 
 pub use markers::{MarkerQuery, MarkerUpsert};
 pub use podcasts::PodcastAddBody;
@@ -76,6 +77,9 @@ use self::subtitles::{
     download_subtitle, list_subtitles, subtitle_file, subtitle_job_status, transcribe_subtitle,
 };
 use self::watch::{delete_watch, get_watch, post_watch};
+use self::youtube::{
+    list_youtube_channels, list_youtube_videos, youtube_channel_art, youtube_thumb,
+};
 
 /// Bounded total-request timeout for the small, fast JSON/metadata handlers. The
 /// streaming route is intentionally excluded (see [`router`]).
@@ -136,6 +140,10 @@ pub fn router(state: AppState) -> Router {
         .route("/photos/{id}/file", get(photo_file))
         .route("/audiobooks", get(list_audiobooks))
         .route("/audiobooks/{id}", get(get_audiobook))
+        .route("/youtube/channels", get(list_youtube_channels))
+        .route("/youtube/channel-art", get(youtube_channel_art))
+        .route("/youtube/videos", get(list_youtube_videos))
+        .route("/youtube/videos/{id}/thumb", get(youtube_thumb))
         .route("/podcasts", get(list_podcasts).post(add_podcast))
         .route("/podcasts/{id}", axum::routing::delete(delete_podcast))
         .route("/podcasts/{id}/refresh", post(refresh_podcast_route))
