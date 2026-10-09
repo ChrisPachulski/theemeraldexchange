@@ -40,6 +40,11 @@ MODEL_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "personalized_threshold": (-1.0, 1.0),
     "mmr_lambda": (0.0, 1.0),
     "kids_genre_cap": (0.0, 1.0),
+    "interest_clusters": (1, 64),
+    "ridge": (0.01, 10000.0),
+    "calibration": (0.0, 1.0),
+    "redundancy": (0.0, 1.0),
+    "fresh_share": (0.0, 1.0),
 }
 
 

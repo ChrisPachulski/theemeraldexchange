@@ -19,7 +19,7 @@ from typing import Any
 from fastapi import Depends, FastAPI, Header, HTTPException
 
 from .config import CONFIG
-from .context import load_user_context, select_model_config_for_context
+from .context import get_active_model_config, load_user_context, select_model_config_for_context
 from .db import connect, migrate, transaction
 from .metrics import compute_funnel
 from . import recipes
@@ -64,12 +64,29 @@ def sweep_retention_once() -> None:
         conn.close()
 
 
+def warm_ranker_once() -> None:
+    """Rebuild the ranker's catalog caches in the background (startup, then
+    hourly), so the first strip after a nightly ingest doesn't pay for it."""
+    conn = connect()
+    try:
+        if get_active_model_config(conn)[1] == "ranker":
+            from .recipes import ranker
+
+            ranker.warm(conn)
+    finally:
+        conn.close()
+
+
 async def retention_sweeper() -> None:
     while True:
         try:
             await asyncio.to_thread(sweep_retention_once)
         except Exception:
             log.exception("retention sweep failed")
+        try:
+            await asyncio.to_thread(warm_ranker_once)
+        except Exception:
+            log.exception("ranker cache warm failed")
         await asyncio.sleep(RETENTION_SWEEP_INTERVAL_SECONDS)
 
 
