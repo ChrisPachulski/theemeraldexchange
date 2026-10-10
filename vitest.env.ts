@@ -23,4 +23,7 @@ export const TEST_ENV: Record<string, string> = {
   // any machine that ever ran a vite build) AND the probe is an fs call at
   // env import time, which trips suites that mock node:fs (iptv.test.ts).
   SERVE_SPA: '0',
+  // Feed checks spawn ffmpeg in the background off live sessions; suites that
+  // exercise them call iptvFeedVerify directly with fakes.
+  IPTV_FEED_CHECK: '0',
 }

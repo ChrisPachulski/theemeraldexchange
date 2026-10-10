@@ -14,8 +14,9 @@ import { signStreamToken } from '../../services/iptvStreamToken.js'
 import { resolveSourcePrecedence } from '../../services/sourcePrecedence.js'
 import { streamConcurrency } from '../../services/iptvConcurrency.js'
 import { guardedFetchTrustedOrigin, SsrfBlockedError } from '../../services/ssrfGuard.js'
-import { heartbeatRemuxSession, channelIsDeadFeed, markChannelDeadFeed, DEAD_FEED_CLEAN_EOF_MS, liveUpstreamCount } from '../../services/iptvRemux.js'
-import { ensureLiveRemuxEntry, dropOtherLiveRemuxSessions, getActiveLiveRemuxEntry, isChannelOfflineUpstream, remuxManifestReady, remuxSegmentResource, rewriteRemuxManifest } from '../../services/iptvLiveRemuxMap.js'
+import { heartbeatRemuxSession, channelIsDeadFeed, markChannelDeadFeed, DEAD_FEED_CLEAN_EOF_MS, liveUpstreamCount, spawnAuxUpstream, UPSTREAM_USER_AGENT, yieldAuxUpstreams } from '../../services/iptvRemux.js'
+import { ensureLiveRemuxEntry, dropOtherLiveRemuxSessions, getActiveLiveRemuxEntry, isChannelOfflineUpstream, redirectLiveFeed, remuxManifestReady, remuxSegmentResource, rewriteRemuxManifest, type LiveRemuxEntry } from '../../services/iptvLiveRemuxMap.js'
+import { feedCheckIo, scheduleLiveFeedCheck } from '../../services/iptvFeedVerify.js'
 import { resolveSiblingFeeds } from '../../services/iptvSiblingFeeds.js'
 import { channelArchiveRow } from '../../services/iptvRows.js'
 import { env } from '../../env.js'
@@ -229,6 +230,8 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   if (!reservation) return c.json({ error: 'session_gone' }, 410)
   const sessionId = reservation.sessionId
   tracker.heartbeatByResource(v.sub, 'live', streamId)
+  // A feed check's capture never holds a slot a viewer needs.
+  await yieldAuxUpstreams('raw-live')
   // A replacement can still have an old remux child draining. Its physical
   // socket counts alongside DVR and this newly reserved raw slot.
   const deadline = Date.now() + 6_000
@@ -341,6 +344,29 @@ iptv.get('/stream/live/:streamId.ts', async (c) => {
   })
 })
 
+/** Check that the stream behind this viewer's session carries the channel they
+ *  picked; if it carries another, switch them (iptvFeedVerify). Cheap per poll:
+ *  a session is only ever checked once. */
+function startFeedCheck(entry: LiveRemuxEntry, upstreamUrlFor: (sid: string) => string): void {
+  const io = feedCheckIo(iptvDb().raw, upstreamUrlFor, {
+    spawnUpstream: spawnAuxUpstream,
+    isDead: channelIsDeadFeed,
+    userAgent: UPSTREAM_USER_AGENT,
+  })
+  scheduleLiveFeedCheck(
+    io,
+    {
+      tunedStreamId: Number(entry.streamId),
+      dialedStreamId: Number(entry.dialedStreamId),
+      sessionId: entry.sessionId,
+      dir: entry.dir,
+      startedAt: entry.startedAt,
+    },
+    () => getActiveLiveRemuxEntry(entry.streamId, entry.sub)?.sessionId === entry.sessionId,
+    (switchTo) => redirectLiveFeed(entry.streamId, entry.sub, String(switchTo), entry.sessionId),
+  )
+}
+
 iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   const streamId = c.req.param('streamId')
   if (!/^\d+$/.test(streamId)) return c.json({ error: 'invalid_id' }, 400)
@@ -380,6 +406,9 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
     upstreamUrlFor,
   }
 
+  // About to dial for a viewer: a feed check's capture gives up its slot first.
+  if (!getActiveLiveRemuxEntry(streamId, v.sub)) await yieldAuxUpstreams('remux')
+
   // NOTE: freeing the viewer's OTHER live channels happens once at GRANT time
   // (see the avplayer branch of POST .../grant), NOT here. AVPlayer re-fetches
   // this manifest every ~2s; doing the teardown on this hot path made two
@@ -404,6 +433,7 @@ iptv.get('/stream/live/:streamId/remux/index.m3u8', async (c) => {
   }
 
   heartbeatRemuxSession(entry.sessionId)
+  if (env.IPTV_FEED_CHECK) startFeedCheck(entry, upstreamUrlFor)
   // 15s, not 8s: a larger ffmpeg probe ceiling (see iptvRemux's -analyzeduration
   // 10M, needed for late-declaring HEVC channels) can push the first segment past
   // 8s, and an initial-load 504 is fatal to AVPlayer. The client's own readiness

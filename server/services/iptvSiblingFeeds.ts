@@ -12,6 +12,7 @@
 // picks the first candidate not currently remembered as a dead feed.
 
 import type Database from 'better-sqlite3'
+import { effectiveOf, feedOverrides, listedEpgSql } from './iptvFeedChecks.js'
 
 /**
  * Fold a raw channel name to a comparison key: lowercase, drop bracketed and
@@ -33,14 +34,19 @@ export function normalizeChannelName(name: string): string {
     .replace(/\s+/g, ' ')
 }
 
-type ChannelRow = { stream_id: number; name: string; epg_channel_id: string | null; num: number | null }
+type ChannelRow = { stream_id: number; name: string; listed: string | null; num: number | null }
+
+const CHANNEL_COLUMNS = `stream_id, name, num, ${listedEpgSql()} AS listed`
 
 /**
  * Ordered candidate feed stream_ids for `streamId`: itself first, then every
- * sibling sharing its epg_channel_id or normalized name, ordered by channel
- * number then stream_id for a stable failover sequence. Returns `[streamId]`
- * when the channel is unknown or has no siblings. Stream ids are strings to
- * match the route/remux layer, which treats stream_id as an opaque id.
+ * sibling sharing its guide id or normalized name, ordered by channel number
+ * then stream_id for a stable failover sequence. The guide id is the effective
+ * one (iptvFeedChecks): a stream a feed check caught carrying another channel is
+ * a sibling of THAT channel, and never a name sibling of the one it is labelled.
+ * Returns `[streamId]` when the channel is unknown or has no siblings. Stream ids
+ * are strings to match the route/remux layer, which treats stream_id as an
+ * opaque id.
  *
  * Only invoked on a session (re)start / offline check — never on the hot
  * per-segment path — so the whole-table scan (a few thousand light rows) is
@@ -50,22 +56,26 @@ export function resolveSiblingFeeds(db: Database.Database, streamId: string): st
   if (!/^\d+$/.test(streamId)) return [streamId]
   const id = Number(streamId)
   const self = db
-    .prepare('SELECT stream_id, name, epg_channel_id, num FROM channels WHERE stream_id = ?')
+    .prepare(`SELECT ${CHANNEL_COLUMNS} FROM channels WHERE stream_id = ?`)
     .get(id) as ChannelRow | undefined
   if (!self) return [streamId]
 
-  const epg = (self.epg_channel_id ?? '').trim().toLowerCase()
+  const overrides = feedOverrides(db)
+  const epgOf = (r: ChannelRow): string => (effectiveOf(r.stream_id, r.listed, overrides) ?? '').trim().toLowerCase()
+  const relabeled = (r: ChannelRow): boolean => effectiveOf(r.stream_id, r.listed, overrides) !== r.listed
+  const epg = epgOf(self)
   const norm = normalizeChannelName(self.name)
 
   const rows = db
-    .prepare('SELECT stream_id, name, epg_channel_id, num FROM channels')
+    .prepare(`SELECT ${CHANNEL_COLUMNS} FROM channels`)
     .all() as ChannelRow[]
 
   const siblings = rows
     .filter((r) => {
       if (r.stream_id === id) return false
-      const rEpg = (r.epg_channel_id ?? '').trim().toLowerCase()
+      const rEpg = epgOf(r)
       if (epg && rEpg && rEpg === epg) return true
+      if (relabeled(self) || relabeled(r)) return false
       return norm.length > 0 && normalizeChannelName(r.name) === norm
     })
     .sort((a, b) => (a.num ?? a.stream_id) - (b.num ?? b.stream_id))

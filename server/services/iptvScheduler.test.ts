@@ -73,9 +73,9 @@ describe('registerIptvSchedule', () => {
       } as ReturnType<typeof cron.schedule>
     })
     const tasks = await registerIptvSchedule('0 */6 * * *')
-    expect(tasks).toHaveLength(2) // sync + tombstone sweep
+    expect(tasks).toHaveLength(3) // sync + tombstone sweep + idle feed check
     for (const t of tasks) t.stop()
-    expect(stops).toHaveLength(2)
+    expect(stops).toHaveLength(3)
   })
 
   it('registers tombstone sweep cron in addition to the sync cron', async () => {

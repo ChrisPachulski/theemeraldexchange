@@ -35,6 +35,10 @@ import {
   TS_STORM_LINES,
   _clearDeadFeedMemoryForTests,
   _clearDrainingForTests,
+  _clearAuxUpstreamsForTests,
+  liveUpstreamCount,
+  spawnAuxUpstream,
+  yieldAuxUpstreams,
 } from './iptvRemux.js'
 import { env } from '../env.js'
 import { streamConcurrency } from './iptvConcurrency.js'
@@ -537,6 +541,69 @@ describe('iptv remux session', () => {
       startRemuxSession({ streamId: '33', sub: 'p', upstreamUrl: 'not a url' }),
     ).toThrow(/not a valid URL/)
     expect(spawnMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('feed-check captures (aux upstream slots)', () => {
+  let prevCap: number
+
+  /** A running child, as preemption sees one (no exit code or signal yet). */
+  function runningProcess(): FakeProcess {
+    return Object.assign(fakeProcess(), { exitCode: null, signalCode: null })
+  }
+
+  beforeEach(() => {
+    for (const s of listRemuxSessions()) stopRemuxSession(s.sessionId)
+    _clearDrainingForTests()
+    _clearAuxUpstreamsForTests()
+    spawnMock.mockReset()
+    spawnMock.mockImplementation(() => runningProcess())
+    prevCap = env.IPTV_MAX_UPSTREAM_CONNECTIONS
+    ;(env as { IPTV_MAX_UPSTREAM_CONNECTIONS: number }).IPTV_MAX_UPSTREAM_CONNECTIONS = 2
+  })
+
+  afterEach(() => {
+    for (const s of listRemuxSessions()) stopRemuxSession(s.sessionId)
+    _clearDrainingForTests()
+    _clearAuxUpstreamsForTests()
+    ;(env as { IPTV_MAX_UPSTREAM_CONNECTIONS: number }).IPTV_MAX_UPSTREAM_CONNECTIONS = prevCap
+    fs.rmSync(remuxTmpDir, { recursive: true, force: true })
+  })
+
+  it('takes only a free slot and counts against the cap until it exits', () => {
+    startRemuxSession({ streamId: '40', sub: 'plex:a', upstreamUrl: 'https://x/a.ts' })
+    const capture = spawnAuxUpstream(['-i', 'https://x/b.ts'])!
+    expect(capture).not.toBeNull()
+    expect(liveUpstreamCount()).toBe(2)
+    expect(spawnAuxUpstream(['-i', 'https://x/c.ts'])).toBeNull()
+    capture.emit('exit', 0, null)
+    expect(liveUpstreamCount()).toBe(1)
+  })
+
+  it('gives its slot to a viewer: killed, then counted until its socket closes', () => {
+    startRemuxSession({ streamId: '41', sub: 'plex:a', upstreamUrl: 'https://x/a.ts' })
+    const capture = spawnAuxUpstream(['-i', 'https://x/b.ts'])! as unknown as FakeProcess
+    // The viewer's dial at the cap kills the capture and defers one poll.
+    expect(startRemuxSession({ streamId: '42', sub: 'plex:b', upstreamUrl: 'https://x/c.ts' })).toBeNull()
+    expect(capture.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(liveUpstreamCount()).toBe(2)
+    capture.emit('exit', null, 'SIGKILL')
+    expect(startRemuxSession({ streamId: '42', sub: 'plex:b', upstreamUrl: 'https://x/c.ts' })).not.toBeNull()
+  })
+
+  it('yields before a viewer dials, waiting for the killed capture to exit', async () => {
+    startRemuxSession({ streamId: '43', sub: 'plex:a', upstreamUrl: 'https://x/a.ts' })
+    const capture = spawnAuxUpstream(['-i', 'https://x/b.ts'])! as unknown as FakeProcess
+    capture.kill.mockImplementation(() => setTimeout(() => capture.emit('exit', null, 'SIGKILL'), 10))
+    await yieldAuxUpstreams('test')
+    expect(capture.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(liveUpstreamCount()).toBe(1)
+  })
+
+  it('leaves a capture alone when the cap has room', async () => {
+    const capture = spawnAuxUpstream(['-i', 'https://x/b.ts'])! as unknown as FakeProcess
+    await yieldAuxUpstreams('test')
+    expect(capture.kill).not.toHaveBeenCalled()
   })
 })
 

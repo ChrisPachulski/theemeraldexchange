@@ -32,6 +32,8 @@ export type LiveRemuxEntry = {
   // death to the right variant on the next ensure.
   dialedStreamId: string
   sub: string
+  // ms the session was spawned (the feed check waits for some footage).
+  startedAt: number
   // segFile -> the fully-tokenised /remux/seg URL minted the FIRST time that
   // segment appeared in the manifest. Reused on every later poll so a given
   // segment's URL is byte-identical across playlist reloads (HLS / RFC 8216
@@ -43,6 +45,43 @@ export type LiveRemuxEntry = {
 }
 
 const liveRemuxIndex = new Map<string, LiveRemuxEntry>()
+
+// ── Feed redirects (feed-check switch) ───────────────────────────────────────
+//
+// A feed check (iptvFeedVerify) proved the stream behind a viewer's tune carries
+// a different channel than the listing they picked ("US: Showtime" carrying
+// Showtime 2). The viewer is moved to a stream of the channel they picked: later
+// dials for this (tuned channel, viewer) go to `feed` first. It holds across the
+// app's own reconnect re-grants of the same channel, ends when the viewer tunes
+// another channel (dropOtherLiveRemuxSessions), and expires after REDIRECT_TTL_MS
+// (by then the guide lists the stream's real programmes, so a fresh tune of it
+// means its real content).
+const REDIRECT_TTL_MS = 4 * 3600_000
+const feedRedirects = new Map<string, { streamId: string; sub: string; feed: string; expiresAt: number }>()
+
+function redirectFor(key: string, now: number): string | null {
+  const r = feedRedirects.get(key)
+  if (!r) return null
+  if (now >= r.expiresAt) {
+    feedRedirects.delete(key)
+    return null
+  }
+  return r.feed
+}
+
+/** Send this viewer's tune of `streamId` to `feed` from now on and stop the
+ *  session still dialed to the wrong stream (if it is `sessionId`), so the next
+ *  manifest poll dials `feed`. The client-facing media sequence stays monotonic
+ *  across the swap (see SequenceContinuity), as on a dead-feed failover. */
+export function redirectLiveFeed(streamId: string, sub: string, feed: string, sessionId: string, now = Date.now()): void {
+  const key = remuxKey(streamId, sub)
+  feedRedirects.set(key, { streamId, sub, feed, expiresAt: now + REDIRECT_TTL_MS })
+  const entry = liveRemuxIndex.get(key)
+  if (entry && entry.sessionId === sessionId) {
+    liveRemuxIndex.delete(key)
+    stopRemuxSession(sessionId, 'feed-check-switch')
+  }
+}
 
 // ── Reconnect throttle (provider abuse-block guard) ──────────────────────────
 //
@@ -123,6 +162,7 @@ export function _resetLiveRemuxIndexForTests(): void {
   sessionSpawnAt.clear()
   failStreak.clear()
   sequenceContinuity.clear()
+  feedRedirects.clear()
 }
 
 export type EnsureLiveRemuxOpts = {
@@ -147,9 +187,12 @@ function candidateFeeds(opts: EnsureLiveRemuxOpts): string[] {
 
 /** Pick the first candidate feed NOT currently remembered as a dead placeholder,
  *  or null when EVERY candidate is a known dead feed (the channel is offline
- *  upstream — nothing left to dial). */
-function pickLiveFeed(opts: EnsureLiveRemuxOpts): string | null {
-  for (const cand of candidateFeeds(opts)) {
+ *  upstream — nothing left to dial). A feed redirect for this viewer goes first. */
+function pickLiveFeed(opts: EnsureLiveRemuxOpts, now: number): string | null {
+  const redirect = redirectFor(remuxKey(opts.streamId, opts.sub), now)
+  const list = candidateFeeds(opts)
+  const ordered = redirect ? [redirect, ...list.filter((f) => f !== redirect)] : list
+  for (const cand of ordered) {
     if (!channelIsDeadFeed(cand)) return cand
   }
   return null
@@ -214,7 +257,7 @@ export function ensureLiveRemuxEntry(
     if (delay > 0 && now - (lastConnectAt.get(key) ?? 0) < delay) return null
     // Choose the feed to dial, skipping any known dead-channel placeholder and
     // failing over to a live sibling. Null = every candidate is dead (offline).
-    const dialStreamId = pickLiveFeed(opts)
+    const dialStreamId = pickLiveFeed(opts, now)
     if (dialStreamId === null) return null
     const dialUrl =
       dialStreamId === opts.streamId
@@ -243,6 +286,7 @@ export function ensureLiveRemuxEntry(
       streamId: opts.streamId,
       dialedStreamId: dialStreamId,
       sub: opts.sub,
+      startedAt: now,
       segUrlCache: new Map(),
     }
     liveRemuxIndex.set(key, entry)
@@ -284,6 +328,9 @@ export function forgetLiveRemuxEntry(streamId: string, sub: string, sessionId: s
  */
 export function dropOtherLiveRemuxSessions(sub: string, keepStreamId: string): string[] {
   const stopped: string[] = []
+  for (const [key, r] of feedRedirects) {
+    if (r.sub === sub && r.streamId !== keepStreamId) feedRedirects.delete(key)
+  }
   for (const [key, entry] of liveRemuxIndex) {
     if (entry.sub === sub && entry.streamId !== keepStreamId) {
       liveRemuxIndex.delete(key)
