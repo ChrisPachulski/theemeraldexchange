@@ -68,8 +68,10 @@ const CAPTURE_TIMEOUT_MS = 60_000
  *  provider opens a feed with a burst from a few seconds back). Stays inside the
  *  remux's ~80s segment window. */
 const SESSION_LEAD_MS = 30_000
-/** Session age before a check starts: its first segments. */
-const SESSION_WARMUP_MS = 4_000
+/** Session age before a check dials its candidate. Long enough that flicking
+ *  past a channel never opens a second provider connection: each one a hop
+ *  kills again is churn the provider's abuse block counts. */
+const SESSION_WARMUP_MS = 10_000
 /** Wait after a capture for the session to finish the segment covering it. */
 const FLUSH_MS = 2_500
 const SESSION_GAP_MS = 1_000

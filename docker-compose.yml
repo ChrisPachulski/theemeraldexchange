@@ -203,6 +203,9 @@ services:
       IPTV_RECOMMENDER_EXPORT_SECRET: "${IPTV_RECOMMENDER_EXPORT_SECRET:-}"
       IPTV_REMUX_TMP_DIR: "${IPTV_REMUX_TMP_DIR:-/tmp/iptv-remux}"
       IPTV_EPG_PATH: "${IPTV_EPG_PATH:-/xmltv.php}"
+      # Feed checks (server/env.ts): IPTV_FEED_CHECK=0 in .env turns them off.
+      IPTV_FEED_CHECK: "${IPTV_FEED_CHECK:-1}"
+      IPTV_FEED_SWEEP_HOURS_UTC: "${IPTV_FEED_SWEEP_HOURS_UTC:-9-15}"
 
   recommender:
     # Context is repo root (not ./recommender) so the Dockerfile can

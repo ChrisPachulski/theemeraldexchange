@@ -24,6 +24,8 @@ vi.mock('../env.js', () => ({
 }))
 
 import {
+  _setViewerActivityForTests,
+  lastViewerActivityAt,
   startRemuxSession,
   heartbeatRemuxSession,
   stopRemuxSession,
@@ -72,6 +74,19 @@ describe('iptv remux session', () => {
   afterEach(() => {
     for (const s of listRemuxSessions()) stopRemuxSession(s.sessionId)
     fs.rmSync(remuxTmpDir, { recursive: true, force: true })
+  })
+
+  it('a viewer session starting, being polled and stopping each count as viewer activity', () => {
+    _setViewerActivityForTests(0)
+    const s = startRemuxSession({ streamId: '11', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })!
+    const started = lastViewerActivityAt()
+    expect(started).toBeGreaterThan(0)
+    _setViewerActivityForTests(1)
+    heartbeatRemuxSession(s.sessionId)
+    expect(lastViewerActivityAt()).toBeGreaterThanOrEqual(started)
+    _setViewerActivityForTests(1)
+    stopRemuxSession(s.sessionId)
+    expect(lastViewerActivityAt()).toBeGreaterThanOrEqual(started)
   })
 
   it('copies video, re-encodes audio to AAC-LC, + hls sliding-window flags', () => {

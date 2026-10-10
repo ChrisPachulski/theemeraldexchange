@@ -100,6 +100,30 @@ export function liveUpstreamCount(tracker: ConcurrencyTracker = streamConcurrenc
   return sessions.size + draining.size + auxUpstreams.size + tracker.list().filter(s => s.kind === 'live').length
 }
 
+/** Provider connections viewers hold right now (remux sessions and raw .ts
+ *  streams), leaving out feed-check captures and children still draining. */
+export function viewerUpstreamCount(tracker: ConcurrencyTracker = streamConcurrency()): number {
+  return sessions.size + tracker.list().filter(s => s.kind === 'live').length
+}
+
+// When a viewer last needed the provider: a remux session started, was polled
+// or stopped. Starts at boot, since a restart can land in the middle of an
+// evening's viewing. The idle feed-check sweep keeps a quiet period after it.
+let viewerActivityAt = Date.now()
+
+export function noteViewerActivity(at = Date.now()): void {
+  if (at > viewerActivityAt) viewerActivityAt = at
+}
+
+export function lastViewerActivityAt(): number {
+  return viewerActivityAt
+}
+
+/** Test seam: set the viewer-activity clock outright. */
+export function _setViewerActivityForTests(at: number): void {
+  viewerActivityAt = at
+}
+
 /** Spawn a feed-check ffmpeg that opens a provider connection, or null when the
  *  upstream cap leaves no free slot. The capture is counted until it exits. */
 export function spawnAuxUpstream(args: string[]): ChildProcess | null {
@@ -337,13 +361,16 @@ export function listRemuxSessions(): Array<{
 
 export function heartbeatRemuxSession(sessionId: string): void {
   const s = sessions.get(sessionId)
-  if (s) s.lastSeen = Date.now()
+  if (!s) return
+  s.lastSeen = Date.now()
+  noteViewerActivity(s.lastSeen)
 }
 
 export function stopRemuxSession(sessionId: string, reason = 'manual'): void {
   const s = sessions.get(sessionId)
   if (!s) return
   sessions.delete(sessionId)
+  noteViewerActivity()
   // Diagnostic: record WHY a live session was torn down and how long it ran /
   // how long since it was last polled. A mid-watch stop (small sinceSeenMs while
   // a viewer is active) is the signature of the "plays then stalls" report.
@@ -418,6 +445,7 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
   // Defense in depth: refuse non-http(s) inputs before any side effects
   // (temp dir creation, ffmpeg spawn).
   assertHttpUpstream(opts.upstreamUrl)
+  noteViewerActivity()
 
   // HARD SAFETY: never hold more than IPTV_MAX_UPSTREAM_CONNECTIONS live upstream
   // connections to the provider at once. This is the single choke point where an
