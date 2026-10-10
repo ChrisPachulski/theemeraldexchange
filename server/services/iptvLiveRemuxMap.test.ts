@@ -60,6 +60,7 @@ import {
   remuxManifestReady,
   remuxSegmentResource,
   isChannelOfflineUpstream,
+  redirectLiveFeed,
   _resetLiveRemuxIndexForTests,
 } from './iptvLiveRemuxMap.js'
 
@@ -381,6 +382,57 @@ describe('dead-feed failover (Fox Soccer Plus incident, S1 item 7)', () => {
     expect(
       ensureLiveRemuxEntry({ streamId: '9', sub: 'u', upstreamUrl: 'http://up/9' }, 1_100),
     ).toBeNull()
+  })
+})
+
+describe('feed redirects (feed-check switch)', () => {
+  // Channel '1' is listed as Showtime but its stream carries Showtime 2; '2' is
+  // a stream of Showtime. The feed check redirects the viewer of '1' to '2'.
+  const opts = (streamId: string, sub = 'u') => ({
+    streamId,
+    sub,
+    upstreamUrl: `http://up/${streamId}`,
+    siblingFeeds: () => [streamId],
+    upstreamUrlFor: (id: string) => `http://up/${id}`,
+  })
+
+  it('stops the wrong stream and dials the redirect on the next poll, keyed to the tuned channel', () => {
+    const a = ensureLiveRemuxEntry(opts('1'), 1_000)!
+    redirectLiveFeed('1', 'u', '2', a.sessionId, 2_000)
+    expect(h.stop).toHaveBeenCalledWith(a.sessionId)
+    const b = ensureLiveRemuxEntry(opts('1'), 2_100)!
+    expect(b.streamId).toBe('1')
+    expect(b.dialedStreamId).toBe('2')
+    expect(h.state.dialedStreamIds).toEqual(['1', '2'])
+  })
+
+  it('holds across the same channel being re-tuned (the app reconnecting)', () => {
+    const a = ensureLiveRemuxEntry(opts('1'), 1_000)!
+    redirectLiveFeed('1', 'u', '2', a.sessionId, 2_000)
+    dropOtherLiveRemuxSessions('u', '1')
+    h.state.active = []
+    expect(ensureLiveRemuxEntry(opts('1'), 60_000)?.dialedStreamId).toBe('2')
+  })
+
+  it('ends when the viewer tunes another channel', () => {
+    const a = ensureLiveRemuxEntry(opts('1'), 1_000)!
+    redirectLiveFeed('1', 'u', '2', a.sessionId, 2_000)
+    dropOtherLiveRemuxSessions('u', '7')
+    expect(ensureLiveRemuxEntry(opts('1'), 60_000)?.dialedStreamId).toBe('1')
+  })
+
+  it('is per viewer and expires', () => {
+    const a = ensureLiveRemuxEntry(opts('1'), 1_000)!
+    redirectLiveFeed('1', 'u', '2', a.sessionId, 2_000)
+    expect(ensureLiveRemuxEntry(opts('1', 'other'), 2_100)?.dialedStreamId).toBe('1')
+    h.state.active = []
+    expect(ensureLiveRemuxEntry(opts('1'), 2_000 + 4 * 3600_000)?.dialedStreamId).toBe('1')
+  })
+
+  it('leaves a newer session alone', () => {
+    ensureLiveRemuxEntry(opts('1'), 1_000)
+    redirectLiveFeed('1', 'u', '2', 'some-older-session', 2_000)
+    expect(h.stop).not.toHaveBeenCalled()
   })
 })
 

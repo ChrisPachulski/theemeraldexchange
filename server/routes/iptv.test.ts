@@ -219,6 +219,9 @@ vi.mock('../services/iptvRemux.js', () => ({
     remuxState.deadFeeds.add(streamId)
   }),
   DEAD_FEED_CLEAN_EOF_MS: 60_000,
+  UPSTREAM_USER_AGENT: 'IPTVSmarters',
+  spawnAuxUpstream: vi.fn(() => null),
+  yieldAuxUpstreams: vi.fn(async () => undefined),
 }))
 
 // node:fs is shared with better-sqlite3 migrations (which readFileSync the .sql

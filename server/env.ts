@@ -703,6 +703,12 @@ export const env = {
   // grant, a direct manifest poll, a test probe, or a future bug — can exceed
   // it. Set this to your provider's real max simultaneous connections; default 2.
   IPTV_MAX_UPSTREAM_CONNECTIONS: positiveInt('IPTV_MAX_UPSTREAM_CONNECTIONS', 2),
+  // Feed checks (iptvFeedVerify): compare a tuned stream's picture with other
+  // streams' to catch a stream carrying a different channel than its guide
+  // listing, correct the guide, and switch the viewer to a stream that carries
+  // what they picked. Uses a spare upstream slot for ~25s per comparison and
+  // yields it to any viewer. Set IPTV_FEED_CHECK=0 to turn it off.
+  IPTV_FEED_CHECK: process.env.IPTV_FEED_CHECK !== '0',
   IPTV_STREAM_TOKEN_TTL_SECS: positiveInt('IPTV_STREAM_TOKEN_TTL_SECS', 300),
   // TTL for LIVE grant tokens (the `live` .ts and `remux` index.m3u8 URLs). A
   // live session is UNBOUNDED and the player re-fetches the SAME tokenized

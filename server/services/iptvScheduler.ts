@@ -11,6 +11,7 @@ import { iptvDb } from './iptvDbSingleton.js'
 import { reportServerEvent } from './serverTelemetry.js'
 import { resolveCronExpr } from './cronConfig.js'
 import { createLogger } from './logger.js'
+import { runFeedCheckSweep } from './iptvFeedSweep.js'
 
 const log = createLogger('iptv')
 
@@ -26,6 +27,8 @@ function reportSchedulerFailure(message: string, err: unknown): void {
 const DEFAULT_IPTV_SYNC_CRON = '0 */6 * * *'
 // Hard-delete tombstoned link rows older than 14 days at 03:00 local time.
 const TOMBSTONE_SWEEP_CRON = '0 3 * * *'
+// Idle feed check of one watched channel (iptvFeedSweep) every 15 minutes.
+const FEED_CHECK_SWEEP_CRON = '*/15 * * * *'
 
 /**
  * Register the recurring IPTV jobs and return the scheduled tasks so the
@@ -61,5 +64,9 @@ export async function registerIptvSchedule(cronExpr: string): Promise<ScheduledT
     }
   })
 
-  return [syncTask, sweepTask]
+  const feedCheckTask = cron.schedule(FEED_CHECK_SWEEP_CRON, () => {
+    void runFeedCheckSweep(db.raw).catch((err) => reportSchedulerFailure('feed check sweep failed', err))
+  })
+
+  return [syncTask, sweepTask, feedCheckTask]
 }

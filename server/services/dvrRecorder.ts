@@ -13,7 +13,7 @@ import path from 'node:path'
 import type Database from 'better-sqlite3'
 import { env } from '../env.js'
 import { credsFromEnv } from './xtream.js'
-import { scrubXtreamCreds, liveUpstreamCount } from './iptvRemux.js'
+import { scrubXtreamCreds, liveUpstreamCount, preemptAuxUpstreams } from './iptvRemux.js'
 import { streamConcurrency, type ConcurrencyTracker } from './iptvConcurrency.js'
 import {
   planTransitions,
@@ -199,6 +199,8 @@ export class FfmpegRecorder implements Recorder {
     if (this.tracker) {
       const cap = this.upstreamCap()
       if (cap > 0 && upstreamInUse(this.tracker) >= cap) {
+        // A feed check's capture never delays a recording past the next tick.
+        preemptAuxUpstreams('dvr')
         log.warn('upstream busy — deferring recording', {
           recordingId: rec.id,
           inUse: upstreamInUse(this.tracker),

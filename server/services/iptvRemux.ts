@@ -83,11 +83,78 @@ const sessions = new Map<string, RemuxSession>()
 // entry is cleared on the child's own exit/error.
 const draining = new Set<ChildProcess>()
 
+// Short feed-check captures (iptvFeedVerify) are provider connections too. They
+// count against the hard cap like a session but never hold a slot a viewer or a
+// recording needs: whoever needs it preempts them (SIGKILL, then draining until
+// the socket closes).
+const auxUpstreams = new Set<ChildProcess>()
+
+/** The User-Agent every provider dial sends; the provider 503s ffmpeg's default
+ *  "Lavf/…" (2026-09-12). Same UA the raw .ts proxy sends (routes/iptv/streamLive.ts). */
+export const UPSTREAM_USER_AGENT = 'IPTVSmarters'
+
 /** Live upstream connections right now: active sessions PLUS SIGTERMed children
- *  that have not yet released their provider socket. This — not `sessions.size`
- *  — is what the connection cap must bound. */
+ *  that have not yet released their provider socket PLUS feed-check captures.
+ *  This — not `sessions.size` — is what the connection cap must bound. */
 export function liveUpstreamCount(tracker: ConcurrencyTracker = streamConcurrency()): number {
-  return sessions.size + draining.size + tracker.list().filter(s => s.kind === 'live').length
+  return sessions.size + draining.size + auxUpstreams.size + tracker.list().filter(s => s.kind === 'live').length
+}
+
+/** Spawn a feed-check ffmpeg that opens a provider connection, or null when the
+ *  upstream cap leaves no free slot. The capture is counted until it exits. */
+export function spawnAuxUpstream(args: string[]): ChildProcess | null {
+  const cap = env.IPTV_MAX_UPSTREAM_CONNECTIONS
+  if (cap > 0 && liveUpstreamCount() >= cap) return null
+  const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] })
+  auxUpstreams.add(proc)
+  const done = (): void => {
+    auxUpstreams.delete(proc)
+  }
+  proc.once('exit', done)
+  proc.once('error', done)
+  return proc
+}
+
+/** Kill every feed-check capture so a viewer or recording gets the slot. Each
+ *  stays counted (draining) until its socket closes. Returns how many it killed. */
+export function preemptAuxUpstreams(reason: string): number {
+  let killed = 0
+  for (const proc of auxUpstreams) {
+    auxUpstreams.delete(proc)
+    if (proc.exitCode === null && proc.signalCode === null) {
+      draining.add(proc)
+      const undrain = (): void => {
+        draining.delete(proc)
+      }
+      proc.once('exit', undrain)
+      proc.once('error', undrain)
+    }
+    try {
+      proc.kill('SIGKILL')
+    } catch {
+      // Already exited.
+    }
+    killed++
+  }
+  if (killed > 0) log.info('feed check preempted for a viewer', { reason, captures: killed })
+  return killed
+}
+
+/** A viewer is about to dial: when feed-check captures hold the slot it needs,
+ *  preempt them and wait (bounded) for their sockets to close. */
+export async function yieldAuxUpstreams(reason: string, timeoutMs = 3_000): Promise<void> {
+  const cap = env.IPTV_MAX_UPSTREAM_CONNECTIONS
+  if (auxUpstreams.size === 0 || cap <= 0 || liveUpstreamCount() < cap) return
+  preemptAuxUpstreams(reason)
+  const deadline = Date.now() + timeoutMs
+  while (draining.size > 0 && liveUpstreamCount() >= cap && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50))
+  }
+}
+
+/** Test seam: forget feed-check captures whose fake children never exit. */
+export function _clearAuxUpstreamsForTests(): void {
+  auxUpstreams.clear()
 }
 
 /** Test seam: drop draining-child tracking so cap accounting doesn't leak across
@@ -373,6 +440,9 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
   // cascade-evict live viewers one after another.
   const cap = env.IPTV_MAX_UPSTREAM_CONNECTIONS
   if (cap > 0 && liveUpstreamCount() >= cap) {
+    // A feed-check capture never outranks a viewer: kill it and let the next
+    // poll dial once its socket has closed (same deferral as an eviction).
+    if (preemptAuxUpstreams('remux') > 0) return null
     if (draining.size === 0) {
       let lru: RemuxSession | undefined
       for (const s of sessions.values()) {
@@ -453,9 +523,7 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
     // socket makes ffmpeg exit, letting the existing dead-feed/sibling failover and
     // the client's reconnect actually re-dial a fresh connection.
     '-rw_timeout', '15000000',
-    // The provider 503s ffmpeg's default "Lavf/…" User-Agent (2026-09-12). Same
-    // UA the raw .ts proxy already sends (routes/iptv/streamLive.ts).
-    '-user_agent', 'IPTVSmarters',
+    '-user_agent', UPSTREAM_USER_AGENT,
     '-i', opts.upstreamUrl,
     // Video is copied losslessly. Audio is RE-ENCODED to AAC-LC even though the
     // provider already sends AAC: the provider's profile is HE-AAC (AAC+SBR),

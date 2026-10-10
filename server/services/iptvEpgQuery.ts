@@ -1,4 +1,5 @@
 import type { IptvDb } from './iptvDb.js'
+import { effectiveEpgSql } from './iptvFeedChecks.js'
 
 export interface EpgProgramme {
   channel_id: string
@@ -33,9 +34,10 @@ type ChannelEpgRow = {
 }
 
 // The feed id a channel joins EPG on: the name-resolved id if the sync matched
-// one, else the raw tvg-id (so queries work before the first resync). See
-// iptvEpgResolve + migration 0006.
-const EPG_JOIN_ID = 'COALESCE(epg_resolved_id, epg_channel_id)'
+// one, else the raw tvg-id (so queries work before the first resync), unless a
+// feed check proved the stream carries another channel. See iptvEpgResolve,
+// migration 0006 and iptvFeedChecks.
+const EPG_JOIN_ID = effectiveEpgSql()
 
 function uniqueStreamIds(channelStreamIds: number[]): number[] {
   return [...new Set(channelStreamIds.filter((id) => Number.isInteger(id) && id > 0))]
@@ -249,7 +251,7 @@ export function epgSearch(
   // No whole-store id bind list or uncapped JS hit array is needed.
   const rows = db.raw.prepare(`
     WITH channel_scope AS (
-      SELECT stream_id, num, name, category_id, COALESCE(epg_resolved_id, epg_channel_id) AS epg_id
+      SELECT stream_id, num, name, category_id, ${EPG_JOIN_ID} AS epg_id
       FROM channels ${categoryWhere}
     ), programmes AS (
       SELECT channel_id, start_utc, stop_utc, title, description,

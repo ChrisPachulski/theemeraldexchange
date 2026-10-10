@@ -27,7 +27,12 @@ describe('resolveSiblingFeeds', () => {
         stream_id INTEGER PRIMARY KEY,
         num INTEGER,
         name TEXT NOT NULL,
-        epg_channel_id TEXT
+        epg_channel_id TEXT,
+        epg_resolved_id TEXT
+      );
+      CREATE TABLE channel_feed_checks (
+        stream_id INTEGER PRIMARY KEY, verdict TEXT NOT NULL, listed_epg_id TEXT, actual_epg_id TEXT,
+        matched_stream_id INTEGER, score REAL, checked_at TEXT NOT NULL
       );
     `)
     const ins = db.prepare('INSERT INTO channels (stream_id, num, name, epg_channel_id) VALUES (?, ?, ?, ?)')
