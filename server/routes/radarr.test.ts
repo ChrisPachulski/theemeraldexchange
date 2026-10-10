@@ -1612,11 +1612,19 @@ describe('radarr movie-add in-flight reservation', () => {
   // the clock frozen it never fired, hanging `await p` to the test timeout (a
   // pass-here/hang-there flake). Looping on a PREDICATE instead of a fixed
   // count fires the timer no matter how late it appears.
+  //
+  // Each round also yields a few REAL milliseconds. Microtask drains never let
+  // real I/O finish (crypto, sockets), so a loaded runner burned the whole fake
+  // budget in a blink while the handler still waited on it, and the release
+  // timer it scheduled afterwards never fired (CI 2026-10-10, twice in a row).
 
-  // Advance fake time (interleaved with microtask drains) until `done()` holds.
+  // Captured at load, before any test installs fake timers.
+  const realSetTimeout = globalThis.setTimeout
+
+  // Advance fake time (interleaved with real-time yields) until `done()` holds.
   async function advanceUntil(done: () => boolean, maxFakeMs = 60_000): Promise<void> {
     for (let elapsed = 0; elapsed < maxFakeMs && !done(); elapsed += 250) {
-      await Promise.resolve()
+      await new Promise((r) => realSetTimeout(r, 5))
       await vi.advanceTimersByTimeAsync(250)
     }
   }
