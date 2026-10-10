@@ -403,6 +403,12 @@ sonarr.put('/api/v3/series/:id', requireAdmin, sonarrMutateLimit, async (c) => {
 //    (Choose Me doesn't allow 2160p, etc.) and indexer-level issues.
 //    Automatic grabs only use non-rejected releases so we stay inside
 //    the same safety decisions Sonarr made upstream.
+//
+// No client waits on this background grab, so its per-season search is not
+// bound by the SPA's 60s abort like SEARCH_TIMEOUT_MS is. On a loaded NAS a
+// season search runs past 50s (observed ~55s with downloads unpacking).
+const TV_GRAB_SEARCH_TIMEOUT_MS = 180_000
+
 async function grabTvUnderCap(
   seriesId: number,
   monitoredSeasons: number[],
@@ -439,7 +445,7 @@ async function grabTvUnderCap(
   const all: Release[] = []
   for (const seasonNumber of monitoredSeasons) {
     const url = `/api/v3/release?seriesId=${seriesId}&seasonNumber=${seasonNumber}`
-    const res = await sonarrFetch(url, { method: 'GET' }, undefined, SEARCH_TIMEOUT_MS)
+    const res = await sonarrFetch(url, { method: 'GET' }, undefined, TV_GRAB_SEARCH_TIMEOUT_MS)
     if (!res.ok) {
       capLog.error('release search failed', { status: res.status, seasonNumber, seriesId })
       await recordSonarrGrabEvent({ ...base, type: 'search_failed', status: res.status })

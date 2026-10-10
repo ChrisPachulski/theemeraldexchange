@@ -1277,13 +1277,13 @@ describe('sonarr season-grab in-flight reservation', () => {
     expect(grabPostCount(calls2)).toBe(1)
   })
 
-  it('SLOW SEARCH: a season search slower than the 15 s LAN budget still grabs', async () => {
+  it('SLOW SEARCH: a season search slower than the 50 s interactive budget still grabs', async () => {
     // Regression: the cap grab ran its per-season search on the 15 s LAN
-    // budget, so a busy indexer search (routinely 20-60 s) aborted as a
-    // synthesized 504 and the add ended in no_releases.
+    // budget, then the 50 s interactive one; on a loaded NAS a search runs
+    // past both, aborted as a synthesized 504 and the add ended in no_releases.
     const path = '/data/tv-slowsearch'
     const calls: Array<{ url: string; method: string }> = []
-    stubSeasonMonitor(calls, { path, searchDelayMs: 20_000 })
+    stubSeasonMonitor(calls, { path, searchDelayMs: 90_000 })
     await monitorAndFlushGrab(await adminCookie())
     expect(grabPostCount(calls)).toBe(1)
   })
