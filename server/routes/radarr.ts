@@ -338,9 +338,12 @@ async function grabBestUnderCap(
   // Brief delay so Radarr finishes wiring the new movie record before
   // we hit the release endpoint.
   await new Promise((r) => setTimeout(r, 1500))
-  const releaseRes = await radarrFetch(`/api/v3/release?movieId=${movieId}`, {
-    method: 'GET',
-  })
+  const releaseRes = await radarrFetch(
+    `/api/v3/release?movieId=${movieId}`,
+    { method: 'GET' },
+    undefined,
+    SEARCH_TIMEOUT_MS,
+  )
   if (!releaseRes.ok) {
     capLog.error('release search failed', { status: releaseRes.status, movieId })
     await recordRadarrGrabEvent({ ...base, type: 'search_failed', status: releaseRes.status })

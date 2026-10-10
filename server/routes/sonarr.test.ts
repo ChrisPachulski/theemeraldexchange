@@ -1065,6 +1065,8 @@ describe('sonarr season-grab in-flight reservation', () => {
     noReleases?: boolean
     // Optional gate to hold the grab POST open (used by the overcommit test).
     holdPost?: (resolve: () => void) => void
+    // Delay the release search; honors the request's abort signal.
+    searchDelayMs?: number
   }
 
   function stubSeasonMonitor(calls: Array<{ url: string; method: string }>, s: Stubs) {
@@ -1097,6 +1099,15 @@ describe('sonarr season-grab in-flight reservation', () => {
           return new Response(JSON.stringify([{ seasonNumber: 1, episodeNumber: 1, hasFile: false }]), { status: 200 })
         }
         if (url.includes('/api/v3/release') && method === 'GET') {
+          if (s.searchDelayMs) {
+            await new Promise<void>((resolve, reject) => {
+              const t = setTimeout(resolve, s.searchDelayMs)
+              init?.signal?.addEventListener('abort', () => {
+                clearTimeout(t)
+                reject(new DOMException('aborted', 'AbortError'))
+              })
+            })
+          }
           if (s.noReleases) return new Response(JSON.stringify([]), { status: 200 })
           return new Response(
             JSON.stringify([
@@ -1264,6 +1275,17 @@ describe('sonarr season-grab in-flight reservation', () => {
     await monitorAndFlushGrab(await adminCookie())
     expect(plannedSizeEvents().length).toBe(0)
     expect(grabPostCount(calls2)).toBe(1)
+  })
+
+  it('SLOW SEARCH: a season search slower than the 15 s LAN budget still grabs', async () => {
+    // Regression: the cap grab ran its per-season search on the 15 s LAN
+    // budget, so a busy indexer search (routinely 20-60 s) aborted as a
+    // synthesized 504 and the add ended in no_releases.
+    const path = '/data/tv-slowsearch'
+    const calls: Array<{ url: string; method: string }> = []
+    stubSeasonMonitor(calls, { path, searchDelayMs: 20_000 })
+    await monitorAndFlushGrab(await adminCookie())
+    expect(grabPostCount(calls)).toBe(1)
   })
 })
 

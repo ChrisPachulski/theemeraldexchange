@@ -439,7 +439,7 @@ async function grabTvUnderCap(
   const all: Release[] = []
   for (const seasonNumber of monitoredSeasons) {
     const url = `/api/v3/release?seriesId=${seriesId}&seasonNumber=${seasonNumber}`
-    const res = await sonarrFetch(url, { method: 'GET' })
+    const res = await sonarrFetch(url, { method: 'GET' }, undefined, SEARCH_TIMEOUT_MS)
     if (!res.ok) {
       capLog.error('release search failed', { status: res.status, seasonNumber, seriesId })
       await recordSonarrGrabEvent({ ...base, type: 'search_failed', status: res.status })
