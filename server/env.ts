@@ -709,6 +709,12 @@ export const env = {
   // what they picked. Uses a spare upstream slot for ~25s per comparison and
   // yields it to any viewer. Set IPTV_FEED_CHECK=0 to turn it off.
   IPTV_FEED_CHECK: process.env.IPTV_FEED_CHECK !== '0',
+  // UTC hours "start-end" (end exclusive, may wrap midnight) when the idle
+  // feed-check sweep may run. It holds two provider connections per check, so
+  // it stays in the hours nobody watches: a viewer sitting down mid-check
+  // churned the provider into its abuse block during a game (2026-10-10).
+  // Default 9-15 = 2-8 AM Pacific daylight time.
+  IPTV_FEED_SWEEP_HOURS_UTC: process.env.IPTV_FEED_SWEEP_HOURS_UTC ?? '9-15',
   IPTV_STREAM_TOKEN_TTL_SECS: positiveInt('IPTV_STREAM_TOKEN_TTL_SECS', 300),
   // TTL for LIVE grant tokens (the `live` .ts and `remux` index.m3u8 URLs). A
   // live session is UNBOUNDED and the player re-fetches the SAME tokenized

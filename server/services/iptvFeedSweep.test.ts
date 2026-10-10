@@ -9,15 +9,19 @@ import { openIptvDb, type IptvDb } from './iptvDb.js'
 import { FP_FRAME_BYTES } from './iptvFeedFingerprint.js'
 import { getFeedCheck, recordFeedCheck } from './iptvFeedChecks.js'
 import { _resetFeedCheckSchedulerForTests, type FeedCheckIo } from './iptvFeedVerify.js'
+import { _setViewerActivityForTests } from './iptvRemux.js'
 import {
   _resetFeedCheckSweepForTests,
   nextSweepChannel,
   rememberGuideScope,
   runFeedCheckSweep,
   sweepIdle,
+  sweepWindowOpen,
+  VIEWER_QUIET_MS,
 } from './iptvFeedSweep.js'
 
-const NOW = Date.parse('2026-10-10T05:00:00Z')
+// Inside the default sweep window (9-15 UTC).
+const NOW = Date.parse('2026-10-10T10:00:00Z')
 
 // [stream_id, num, name, guide id, category]
 const CHANNELS: Array<[number, number, string, string, number]> = [
@@ -94,6 +98,7 @@ describe('feed check sweep', () => {
     ;(env as { IPTV_FEED_CHECK: boolean }).IPTV_FEED_CHECK = true
     _resetFeedCheckSweepForTests()
     _resetFeedCheckSchedulerForTests()
+    _setViewerActivityForTests(0)
   })
 
   afterEach(() => {
@@ -149,6 +154,28 @@ describe('feed check sweep', () => {
       VALUES ('r1', 200163566, 'US: Showtime', 'Heat', ?, ?, 'scheduled', ?, ?)`)
       .run(new Date(NOW + 60_000).toISOString(), new Date(NOW + 3_600_000).toISOString(), new Date(NOW).toISOString(), new Date(NOW).toISOString())
     expect(sweepIdle(db.raw, NOW)).toBe(false)
+  })
+
+  it('waits out a quiet period after any viewer, since a gap between channel hops is not idle', () => {
+    _setViewerActivityForTests(NOW - 10 * 60_000)
+    expect(sweepIdle(db.raw, NOW)).toBe(false)
+    _setViewerActivityForTests(NOW - VIEWER_QUIET_MS)
+    expect(sweepIdle(db.raw, NOW)).toBe(true)
+  })
+
+  it('runs only in the overnight window, which may wrap midnight', () => {
+    const at = (hhmm: string): number => Date.parse(`2026-10-10T${hhmm}:00Z`)
+    expect(sweepWindowOpen(at('08:59'), '9-15')).toBe(false)
+    expect(sweepWindowOpen(at('09:00'), '9-15')).toBe(true)
+    expect(sweepWindowOpen(at('14:59'), '9-15')).toBe(true)
+    expect(sweepWindowOpen(at('15:00'), '9-15')).toBe(false)
+    expect(sweepWindowOpen(at('23:00'), '22-4')).toBe(true)
+    expect(sweepWindowOpen(at('03:00'), '22-4')).toBe(true)
+    expect(sweepWindowOpen(at('12:00'), '22-4')).toBe(false)
+    expect(sweepWindowOpen(at('12:00'), 'always')).toBe(false)
+    expect(sweepWindowOpen(at('12:00'), '9-9')).toBe(false)
+    // The 2026-10-10 game: 4 PM Eastern is outside the window.
+    expect(sweepIdle(db.raw, at('20:11'))).toBe(false)
   })
 
   it('does nothing when feed checks are turned off', async () => {

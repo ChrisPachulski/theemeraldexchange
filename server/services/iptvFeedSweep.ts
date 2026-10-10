@@ -8,13 +8,23 @@
 // guide order; each is checked once per verdict lifetime (iptvFeedChecks). Only
 // channels with another stream of their listing are checked (others can never
 // be confirmed). A run checks channels back to back with a gap, and stops the
-// moment a viewer or recording needs the provider.
+// moment a viewer or recording needs the provider. Runs happen only in the
+// overnight window (IPTV_FEED_SWEEP_HOURS_UTC) and only after VIEWER_QUIET_MS
+// with no viewer: a gap between two channel hops is not idle.
 
 import type Database from 'better-sqlite3'
 import { env } from '../env.js'
 import { createLogger } from './logger.js'
 import { credsFromEnv } from './xtream.js'
-import { channelIsDeadFeed, liveUpstreamCount, spawnAuxUpstream, UPSTREAM_USER_AGENT } from './iptvRemux.js'
+import {
+  channelIsDeadFeed,
+  lastViewerActivityAt,
+  liveUpstreamCount,
+  noteViewerActivity,
+  spawnAuxUpstream,
+  UPSTREAM_USER_AGENT,
+  viewerUpstreamCount,
+} from './iptvRemux.js'
 import { effectiveOf, feedCheckIsFresh, feedOverrides, getFeedCheck, listedEpgSql } from './iptvFeedChecks.js'
 import { checkFeedStandalone, feedCheckIo, runExclusiveFeedCheck, type FeedCheckIo } from './iptvFeedVerify.js'
 
@@ -25,6 +35,10 @@ const GUIDE_SCOPE_KEY = 'feed_check_guide_scope'
 const DEFAULT_GUIDE_LIMIT = 500
 /** Keep clear of a recording about to start: it would preempt a capture anyway. */
 const DVR_LEAD_MS = 3 * 60_000
+/** Quiet time after the last viewer activity before the sweep dials. Hopping
+ *  channels leaves moments with nothing streaming; a sweep starting in them
+ *  adds connections the provider punishes. */
+export const VIEWER_QUIET_MS = 30 * 60_000
 
 export interface GuideScope {
   categoryIds: number[]
@@ -112,9 +126,26 @@ function recordingStartsSoon(db: Database.Database, now: number): boolean {
   return row != null
 }
 
-/** Nothing is streaming or recording, and no recording is about to start. */
+/** True when `now` falls in a "start-end" UTC hour window (end exclusive,
+ *  wrapping midnight when start > end). A malformed window is closed. */
+export function sweepWindowOpen(now: number, hours = env.IPTV_FEED_SWEEP_HOURS_UTC): boolean {
+  const m = /^\s*(\d{1,2})\s*-\s*(\d{1,2})\s*$/.exec(hours)
+  if (!m) return false
+  const start = Number(m[1])
+  const end = Number(m[2])
+  if (start > 23 || end > 24 || start === end) return false
+  const hour = new Date(now).getUTCHours()
+  return start < end ? hour >= start && hour < end : hour >= start || hour < end
+}
+
+/** Inside the sweep window, nothing streaming or recording, no viewer for
+ *  VIEWER_QUIET_MS, and no recording about to start. */
 export function sweepIdle(db: Database.Database, now = Date.now()): boolean {
-  return liveUpstreamCount() === 0 && !recordingStartsSoon(db, now)
+  if (viewerUpstreamCount() > 0) noteViewerActivity(now)
+  return liveUpstreamCount() === 0
+    && now - lastViewerActivityAt() >= VIEWER_QUIET_MS
+    && sweepWindowOpen(now)
+    && !recordingStartsSoon(db, now)
 }
 
 let sweeping = false
