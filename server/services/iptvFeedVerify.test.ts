@@ -166,8 +166,29 @@ describe('checkLiveSession', () => {
     const result = await checkLiveSession(io, ref, () => true)
     expect(result.outcome.kind).toBe('unknown')
     expect(result.switchTo).toBeNull()
-    expect(captured).toEqual([22599])
+    // Nothing could settle it, so no connection is opened at all.
+    expect(captured).toEqual([])
     expect(getFeedCheck(db.raw, 200163566)?.verdict).toBe('inconclusive')
+  })
+
+  it('confirms the matched stream too, so it needs no check of its own', async () => {
+    const { db, io, ref } = harness({ session: SHO1, feeds: FEEDS })
+    await checkLiveSession(io, ref, () => true)
+    expect(getFeedCheck(db.raw, 5864)).toMatchObject({ verdict: 'match', listed_epg_id: 'showtime.us', matched_stream_id: 200163566 })
+  })
+
+  it('moves past a candidate whose own capture fails', async () => {
+    const { db, io, ref, captured } = harness({
+      session: SHO2,
+      feeds: FEEDS,
+      upstream: (id) => (id === 5864 ? fakeProc(null, 1) : fakeProc(FEEDS[id as keyof typeof FEEDS] ?? null)),
+    })
+    const result = await checkLiveSession(io, ref, () => true)
+    // 5864 failed, so the other Showtime stream goes next (it differs), then
+    // Showtime 2 matches.
+    expect(captured).toEqual([5864, 22597, 22599])
+    expect(result.outcome).toMatchObject({ kind: 'carries', epgId: 'showtime2.us' })
+    expect(getFeedCheck(db.raw, 200163566)?.verdict).toBe('mislabeled')
   })
 
   it('records nothing when a viewer preempts the capture', async () => {
@@ -222,6 +243,26 @@ describe('scheduleLiveFeedCheck', () => {
 })
 
 describe('checkFeedStandalone', () => {
+  it('records the subject inconclusive when its own capture fails', async () => {
+    const { db, io } = harness({
+      session: SHO2,
+      feeds: FEEDS,
+      upstream: (id) => (id === 200163566 ? fakeProc(null, 1) : fakeProc(FEEDS[id as keyof typeof FEEDS] ?? null)),
+    })
+    const outcome = await checkFeedStandalone(io, 200163566)
+    expect(outcome.kind).toBe('unknown')
+    expect(getFeedCheck(db.raw, 200163566)?.verdict).toBe('inconclusive')
+  })
+
+  it('gives up its first slot when no second one is free', async () => {
+    const subjectProc = fakeProc(null, null)
+    const { db, io } = harness({ session: SHO2, feeds: FEEDS, upstream: (id) => (id === 200163566 ? subjectProc : null) })
+    const outcome = await checkFeedStandalone(io, 200163566)
+    expect(outcome).toEqual({ kind: 'aborted', reason: 'no second free upstream slot' })
+    expect(subjectProc.kill).toHaveBeenCalledWith('SIGKILL')
+    expect(getFeedCheck(db.raw, 200163566)).toBeUndefined()
+  })
+
   it('captures subject and candidate side by side', async () => {
     const { db, io, captured } = harness({
       session: SHO2,

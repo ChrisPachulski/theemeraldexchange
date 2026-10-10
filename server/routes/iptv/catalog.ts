@@ -11,6 +11,7 @@ import { getAccountInfo } from '../../services/xtream.js'
 import { iptvDb } from '../../services/iptvDbSingleton.js'
 import { listCategories, listLive, listVod, listSeries, getVodDetail, getSeriesDetail } from '../../services/iptvCatalog.js'
 import { epgChannelWindow, epgGrid, epgNow, epgSearch } from '../../services/iptvEpgQuery.js'
+import { rememberGuideScope } from '../../services/iptvFeedSweep.js'
 import { KINDS } from './shared.js'
 
 export const iptv = new Hono<Env>()
@@ -118,6 +119,9 @@ iptv.get('/epg/grid', requireAuth, requireSection('live'), async (c) => {
     return c.json({ error: 'invalid_limit' }, 400)
   }
   const json = JSON.stringify(epgGrid(iptvDb(), from, to, { categoryId, categoryIds, q, hasEpgOnly, limit }))
+  // The app's guide (its curated categories, unfiltered): the channels the idle
+  // feed checks cover before anyone tunes them (iptvFeedSweep).
+  if (categoryIds?.length && hasEpgOnly && !q) rememberGuideScope(iptvDb().raw, categoryIds, limit)
   // The full has-EPG guide is ~28 MB of JSON (~14k channels x ~7 programmes).
   // gzip it (~12x → ~2 MB) so the client isn't pulling tens of MB on every
   // 30-min window refetch. Done inline (not as global middleware) so the

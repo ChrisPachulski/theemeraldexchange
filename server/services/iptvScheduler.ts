@@ -27,8 +27,9 @@ function reportSchedulerFailure(message: string, err: unknown): void {
 const DEFAULT_IPTV_SYNC_CRON = '0 */6 * * *'
 // Hard-delete tombstoned link rows older than 14 days at 03:00 local time.
 const TOMBSTONE_SWEEP_CRON = '0 3 * * *'
-// Idle feed check of one watched channel (iptvFeedSweep) every 15 minutes.
-const FEED_CHECK_SWEEP_CRON = '*/15 * * * *'
+// Idle feed checks (iptvFeedSweep): a run starts each minute unless one is
+// already going; it returns at once when anything is streaming.
+const FEED_CHECK_SWEEP_CRON = '* * * * *'
 
 /**
  * Register the recurring IPTV jobs and return the scheduled tasks so the
