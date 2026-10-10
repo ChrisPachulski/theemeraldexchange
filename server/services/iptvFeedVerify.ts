@@ -2,24 +2,28 @@
 // picture with other streams' (see iptvFeedFingerprint for why the picture is
 // the only ground truth), then correct the guide and the viewer's tune.
 //
-// On tune (checkLiveSession): once a viewer's remux session has some footage,
-// capture ~25s of one candidate stream through a spare upstream slot and compare
-// it with the session's own segments, so a comparison costs ONE extra provider
-// connection. Candidates (iptvFeedChecks.feedCheckCandidates): another stream of
-// the listed channel first, then related channels (Showtime 2 for Showtime), then
-// a second listed-channel stream. The first clear match decides which guide id
-// the stream carries. A stream carrying another channel is recorded 'mislabeled'
-// (the guide then lists that channel's programmes on it) and, when the viewer
-// picked it for its listing, the caller redirects them to a stream of the
-// listing they picked.
+// On tune (checkLiveSession): as soon as a viewer's remux session has its first
+// segments, capture ~15s of one candidate stream through a spare upstream slot
+// and compare it with the session's own segments, so a comparison costs ONE
+// extra provider connection. Candidates (iptvFeedChecks.feedCheckCandidates):
+// another stream of the listed channel first, then related channels (Showtime 2
+// for Showtime), then a second listed-channel stream. The first clear match
+// decides which guide id the stream carries. A stream carrying another channel
+// is recorded 'mislabeled' (the guide then lists that channel's programmes on
+// it) and, when the viewer picked it for its listing, the caller redirects them
+// to a stream of the listing they picked.
 //
 // Standalone (checkFeedStandalone, for the idle sweep and the CLI): no viewer
 // session, so subject and candidate are captured side by side (two slots).
 //
+// A stream with no other stream of its listing can never be confirmed or caught
+// (a related-channel match alone is symmetric, see compareAgainst), so it is
+// recorded inconclusive without opening any connection.
+//
 // Captures never outrank a viewer: they go through spawnAuxUpstream, which only
 // starts in a free slot, and any viewer or recording that needs the slot kills
-// them (preemptAuxUpstreams). A killed or failed capture aborts the check and
-// records nothing, so a later tune simply tries again.
+// them (preemptAuxUpstreams). A preempted check records nothing, so a later tune
+// or sweep simply tries again.
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
@@ -52,17 +56,22 @@ export const MATCH_SCORE = 0.85
 /** Below this: a different picture. Between the two: can't tell, stop. */
 export const NO_MATCH_SCORE = 0.6
 
-const CAPTURE_SECS = 25
+/** On tune the session's own footage spans the whole capture, so 15s (75
+ *  frames) aligns fully; side-by-side captures start at different provider
+ *  burst depths (measured up to 11s apart) and need the longer 25s. */
+const SESSION_CAPTURE_SECS = 15
+const STANDALONE_CAPTURE_SECS = 25
 const CAPTURE_TIMEOUT_MS = 60_000
 /** Session footage older than the capture start that may line up with it (the
  *  provider opens a feed with a burst from a few seconds back). Stays inside the
  *  remux's ~80s segment window. */
 const SESSION_LEAD_MS = 30_000
-/** Session age before a check starts, so it has footage to compare. */
-const SESSION_WARMUP_MS = 20_000
+/** Session age before a check starts: its first segments. */
+const SESSION_WARMUP_MS = 4_000
 /** Wait after a capture for the session to finish the segment covering it. */
-const FLUSH_MS = 4_000
-const BETWEEN_CAPTURES_MS = 3_000
+const FLUSH_MS = 2_500
+const SESSION_GAP_MS = 1_000
+const STANDALONE_GAP_MS = 3_000
 /** Frames kept per capture (two minutes). */
 const MAX_FRAME_BYTES = FP_FRAME_BYTES * FP_FPS * 120
 
@@ -94,18 +103,24 @@ export function classifyMatch(m: FingerprintMatch | null): CompareVerdict {
   return 'unsure'
 }
 
-/** Read a capture's stdout frames. ok=false when ffmpeg failed or was killed
- *  (preempted by a viewer, or past the timeout). */
-export function readFrames(proc: ChildProcess, timeoutMs: number): Promise<{ ok: boolean; frames: Uint8Array }> {
+export interface Capture {
+  ok: boolean
+  /** Killed by a signal: preempted by a viewer, or past the timeout. */
+  killed: boolean
+  frames: Uint8Array
+}
+
+/** Read a capture's stdout frames. ok=false when ffmpeg failed or was killed. */
+export function readFrames(proc: ChildProcess, timeoutMs: number): Promise<Capture> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = []
     let size = 0
     let settled = false
-    const finish = (ok: boolean): void => {
+    const finish = (ok: boolean, killed: boolean): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
-      resolve({ ok, frames: new Uint8Array(Buffer.concat(chunks)) })
+      resolve({ ok, killed, frames: new Uint8Array(Buffer.concat(chunks)) })
     }
     const timer = setTimeout(() => {
       try {
@@ -121,8 +136,8 @@ export function readFrames(proc: ChildProcess, timeoutMs: number): Promise<{ ok:
       size += chunk.length
     })
     proc.stderr?.resume()
-    proc.once('error', () => finish(false))
-    proc.once('close', (code) => finish(code === 0))
+    proc.once('error', () => finish(false, false))
+    proc.once('close', (code, signal) => finish(code === 0, signal != null))
   })
 }
 
@@ -171,26 +186,65 @@ function recordOutcome(db: Database.Database, streamId: number, listed: string |
   }
 }
 
-type SubjectFrames = (candidate: FeedCandidate) => Promise<{ subject: Uint8Array; candidate: Uint8Array } | string>
+/** The matched candidate carries the same picture as the subject, and its own
+ *  listing says so: confirm it too (a second sweep check of it would only
+ *  repeat this comparison). Leaves a fresh verdict alone. */
+function recordCorroboration(db: Database.Database, outcome: FeedCheckOutcome, subject: number, now: number): void {
+  if (outcome.kind !== 'carries' || outcome.cached || outcome.matchedStreamId == null) return
+  const candidate = outcome.matchedStreamId
+  if (listedEpgId(db, candidate) !== outcome.epgId) return
+  const prior = getFeedCheck(db, candidate)
+  if (prior && feedCheckIsFresh(prior, now)) return
+  recordFeedCheck(db, {
+    stream_id: candidate,
+    verdict: 'match',
+    listed_epg_id: outcome.epgId,
+    actual_epg_id: null,
+    matched_stream_id: subject,
+    score: outcome.score,
+  })
+}
+
+/** One comparison's footage, or why there is none: 'abort' ends the check
+ *  without a verdict (preempted, no slot, session gone); 'skip' drops just this
+ *  candidate (its own capture failed); 'subject' means the subject itself could
+ *  not be captured. */
+type Footage =
+  | { subject: Uint8Array; candidate: Uint8Array }
+  | { abort: string }
+  | { skip: string }
+  | { subject_failed: string }
 
 /** Walk the candidates until one clearly matches the subject's picture. */
 async function compareAgainst(
   io: FeedCheckIo,
   subject: number,
   candidates: FeedCandidate[],
-  frames: SubjectFrames,
+  footage: (candidate: FeedCandidate) => Promise<Footage>,
   stillWanted: () => boolean,
+  gapMs: number,
 ): Promise<FeedCheckOutcome> {
   let bestScore: number | null = null
   // A related channel's match alone is symmetric: the subject may carry that
   // channel, or that stream may carry the subject's. Only a stream of the
   // subject's own listing that clearly differs breaks the tie.
   let siblingDiffered = false
-  for (const [i, candidate] of candidates.entries()) {
-    if (i > 0) await io.sleep(BETWEEN_CAPTURES_MS)
-    if (!stillWanted()) return { kind: 'aborted', reason: 'session ended' }
-    const got = await frames(candidate)
-    if (typeof got === 'string') return { kind: 'aborted', reason: got }
+  const queue = [...candidates]
+  for (let first = true; queue.length > 0; first = false) {
+    const candidate = queue.shift()!
+    if (!first) await io.sleep(gapMs)
+    if (!stillWanted()) return { kind: 'aborted', reason: 'no longer wanted' }
+    const got = await footage(candidate)
+    if ('abort' in got) return { kind: 'aborted', reason: got.abort }
+    if ('subject_failed' in got) return { kind: 'unknown', reason: got.subject_failed, score: bestScore }
+    if ('skip' in got) {
+      log.info('feed compare skipped', { subject, candidate: candidate.streamId, reason: got.skip })
+      // A listed-channel stream is what makes any match decisive: try the next
+      // one before the related channels.
+      const next = queue.findIndex((c) => c.role === 'sibling')
+      if (candidate.role === 'sibling' && next > 0) queue.unshift(...queue.splice(next, 1))
+      continue
+    }
     const m = compareFingerprints(got.subject, got.candidate)
     const verdict = classifyMatch(m)
     log.info('feed compare', {
@@ -214,6 +268,15 @@ async function compareAgainst(
     if (candidate.role === 'sibling') siblingDiffered = true
   }
   return { kind: 'unknown', reason: candidates.length ? 'no candidate matched' : 'no candidate streams', score: bestScore }
+}
+
+const NO_SIBLING: FeedCheckOutcome = { kind: 'unknown', reason: 'no other stream of its listing to compare', score: null }
+
+/** Capture ~`seconds` of a stream through a spare upstream slot. */
+async function captureUpstream(io: FeedCheckIo, streamId: number, seconds: number): Promise<Capture | 'no slot'> {
+  const proc = io.spawnUpstream(liveCaptureArgs(io.upstreamUrlFor(String(streamId)), seconds, io.userAgent))
+  if (!proc) return 'no slot'
+  return readFrames(proc, CAPTURE_TIMEOUT_MS)
 }
 
 export interface LiveSessionRef {
@@ -246,9 +309,8 @@ export async function checkLiveSession(
   if (!intendedEpg) return { outcome: { kind: 'unknown', reason: 'no guide id', score: null }, intendedEpg, switchTo: null }
   const subject = ref.dialedStreamId
   const listed = listedEpgId(db, subject)
-  const candidates = (): FeedCandidate[] =>
-    feedCheckCandidates(db, subject, intendedEpg, { isDead: io.isDead, exclude: [ref.tunedStreamId] })
-  const switchTarget = (outcome: FeedCheckOutcome, list: FeedCandidate[]): number | null =>
+  const list = feedCheckCandidates(db, subject, intendedEpg, { isDead: io.isDead, exclude: [ref.tunedStreamId] })
+  const switchTarget = (outcome: FeedCheckOutcome): number | null =>
     outcome.kind === 'carries' && outcome.epgId !== intendedEpg
       ? (list.find((c) => c.role === 'sibling')?.streamId ?? null)
       : null
@@ -259,32 +321,36 @@ export async function checkLiveSession(
     const outcome: FeedCheckOutcome = carried
       ? { kind: 'carries', epgId: carried, matchedStreamId: prior.matched_stream_id, score: prior.score, cached: true }
       : { kind: 'unknown', reason: 'recently inconclusive', score: prior.score }
-    return { outcome, intendedEpg, switchTo: switchTarget(outcome, outcome.kind === 'carries' ? candidates() : []) }
+    return { outcome, intendedEpg, switchTo: switchTarget(outcome) }
+  }
+  if (!list.some((c) => c.role === 'sibling')) {
+    recordOutcome(db, subject, listed, NO_SIBLING)
+    return { outcome: NO_SIBLING, intendedEpg, switchTo: null }
   }
 
   while (io.now() - ref.startedAt < SESSION_WARMUP_MS) {
     if (!isActive()) return { outcome: { kind: 'aborted', reason: 'session ended' }, intendedEpg, switchTo: null }
-    await io.sleep(2_000)
+    await io.sleep(1_000)
   }
 
-  const list = candidates()
-  const frames: SubjectFrames = async (candidate) => {
+  const footage = async (candidate: FeedCandidate): Promise<Footage> => {
     const started = io.now()
-    const proc = io.spawnUpstream(liveCaptureArgs(io.upstreamUrlFor(String(candidate.streamId)), CAPTURE_SECS, io.userAgent))
-    if (!proc) return 'no free upstream slot'
-    const cand = await readFrames(proc, CAPTURE_TIMEOUT_MS)
-    if (!cand.ok) return 'candidate capture failed or was preempted'
+    const cand = await captureUpstream(io, candidate.streamId, SESSION_CAPTURE_SECS)
+    if (cand === 'no slot') return { abort: 'no free upstream slot' }
+    if (cand.killed) return { abort: 'candidate capture preempted' }
+    if (!cand.ok) return { skip: 'candidate capture failed' }
     await io.sleep(FLUSH_MS)
-    if (!isActive()) return 'session ended'
+    if (!isActive()) return { abort: 'session ended' }
     const files = sessionSegments(ref.dir, started - SESSION_LEAD_MS)
-    if (files.length === 0) return 'no session footage'
+    if (files.length === 0) return { abort: 'no session footage' }
     const subj = await readFrames(io.spawnLocal(segmentCaptureArgs(files)), CAPTURE_TIMEOUT_MS)
-    if (!subj.ok) return 'session footage unreadable'
+    if (!subj.ok) return { abort: 'session footage unreadable' }
     return { subject: subj.frames, candidate: cand.frames }
   }
-  const outcome = await compareAgainst(io, subject, list, frames, isActive)
+  const outcome = await compareAgainst(io, subject, list, footage, isActive, SESSION_GAP_MS)
   recordOutcome(db, subject, listed, outcome)
-  const switchTo = switchTarget(outcome, list)
+  recordCorroboration(db, outcome, subject, io.now())
+  const switchTo = switchTarget(outcome)
   log.info('feed check', { subject, tuned: ref.tunedStreamId, listed, intendedEpg, outcome, switchTo })
   return { outcome, intendedEpg, switchTo }
 }
@@ -296,25 +362,32 @@ export async function checkFeedStandalone(io: FeedCheckIo, streamId: number, sti
   if (!intendedEpg) return { kind: 'unknown', reason: 'no guide id', score: null }
   const listed = listedEpgId(db, streamId)
   const list = feedCheckCandidates(db, streamId, intendedEpg, { isDead: io.isDead })
-  const capture = (id: number): ChildProcess | null =>
-    io.spawnUpstream(liveCaptureArgs(io.upstreamUrlFor(String(id)), CAPTURE_SECS, io.userAgent))
-  const frames: SubjectFrames = async (candidate) => {
-    const subjectProc = capture(streamId)
-    if (!subjectProc) return 'no free upstream slot'
-    const candidateProc = capture(candidate.streamId)
+  if (!list.some((c) => c.role === 'sibling')) {
+    recordOutcome(db, streamId, listed, NO_SIBLING)
+    return NO_SIBLING
+  }
+  const spawnCapture = (id: number): ChildProcess | null =>
+    io.spawnUpstream(liveCaptureArgs(io.upstreamUrlFor(String(id)), STANDALONE_CAPTURE_SECS, io.userAgent))
+  const footage = async (candidate: FeedCandidate): Promise<Footage> => {
+    const subjectProc = spawnCapture(streamId)
+    if (!subjectProc) return { abort: 'no free upstream slot' }
+    const candidateProc = spawnCapture(candidate.streamId)
     if (!candidateProc) {
       subjectProc.kill('SIGKILL')
-      return 'no second free upstream slot'
+      return { abort: 'no second free upstream slot' }
     }
     const [subj, cand] = await Promise.all([
       readFrames(subjectProc, CAPTURE_TIMEOUT_MS),
       readFrames(candidateProc, CAPTURE_TIMEOUT_MS),
     ])
-    if (!subj.ok || !cand.ok) return 'capture failed or was preempted'
+    if (subj.killed || cand.killed) return { abort: 'capture preempted' }
+    if (!subj.ok) return { subject_failed: 'subject capture failed' }
+    if (!cand.ok) return { skip: 'candidate capture failed' }
     return { subject: subj.frames, candidate: cand.frames }
   }
-  const outcome = await compareAgainst(io, streamId, list, frames, stillWanted)
+  const outcome = await compareAgainst(io, streamId, list, footage, stillWanted, STANDALONE_GAP_MS)
   recordOutcome(db, streamId, listed, outcome)
+  recordCorroboration(db, outcome, streamId, io.now())
   log.info('feed check (standalone)', { subject: streamId, listed, intendedEpg, outcome })
   return outcome
 }
