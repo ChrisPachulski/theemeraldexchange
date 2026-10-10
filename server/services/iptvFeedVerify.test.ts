@@ -65,7 +65,8 @@ function seed(db: IptvDb): void {
   for (const [channel_id, title] of [['showtime.us', 'My Cousin Vinny'], ['showtime2.us', 'Blade Runner 2049'],
     ['showtimeextreme.us', 'Heat']]) {
     db.stmts.upsertEpg.run({
-      channel_id, start_utc: '2026-10-10T02:30:00Z', stop_utc: '2026-10-10T04:30:00Z', title, description: null,
+      // Airing whenever the test runs: the simulcast guard reads the guide at capture time.
+      channel_id, start_utc: '2026-01-01T00:00:00Z', stop_utc: '2099-01-01T00:00:00Z', title, description: null,
     })
   }
 }
@@ -155,6 +156,17 @@ describe('checkLiveSession', () => {
     expect(result.outcome.kind).toBe('unknown')
     expect(result.switchTo).toBeNull()
     expect(captured).toEqual([5864])
+    expect(getFeedCheck(db.raw, 200163566)?.verdict).toBe('inconclusive')
+  })
+
+  it('does not call a stream mislabeled when the related channel lists the same programme (simulcast)', async () => {
+    const { db, io, ref, captured } = harness({ session: SHO2, feeds: FEEDS })
+    // A live event both channels carry at once: a picture match proves nothing.
+    db.raw.prepare("UPDATE epg_programs SET title = 'Boxing Live' WHERE channel_id IN ('showtime.us', 'showtime2.us')").run()
+    const result = await checkLiveSession(io, ref, () => true)
+    expect(captured).toEqual([5864, 22599])
+    expect(result.outcome).toMatchObject({ kind: 'unknown', reason: expect.stringContaining('simulcast') })
+    expect(result.switchTo).toBeNull()
     expect(getFeedCheck(db.raw, 200163566)?.verdict).toBe('inconclusive')
   })
 

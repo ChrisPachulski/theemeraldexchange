@@ -89,6 +89,23 @@ export function feedCheckIsFresh(check: FeedCheck, now = Date.now()): boolean {
   return now - Date.parse(check.checked_at) < FRESH_MS[check.verdict]
 }
 
+/** True when both guide ids list a programme at `at` and the titles differ.
+ *  Only then does a picture match tell the two channels apart: East and West
+ *  feeds (and sister channels) carry the same live event at the same moment,
+ *  so a match while both list the same programme proves nothing. */
+export function listingsDiffer(db: Database.Database, a: string, b: string, at: Date): boolean {
+  const iso = at.toISOString()
+  const title = db.prepare(`SELECT title FROM epg_programs WHERE channel_id = ? AND start_utc <= ? AND stop_utc > ?
+    ORDER BY start_utc DESC LIMIT 1`)
+  const norm = (row: unknown): string | null => {
+    const t = (row as { title: string | null } | undefined)?.title
+    return t ? t.trim().toLowerCase() : null
+  }
+  const ta = norm(title.get(a, iso, iso))
+  const tb = norm(title.get(b, iso, iso))
+  return ta != null && tb != null && ta !== tb
+}
+
 /** The guide id a checked stream is known to carry, or null when unknown. */
 export function knownCarriedEpgId(check: FeedCheck | undefined, listed: string | null): string | null {
   if (!check || check.listed_epg_id !== listed) return null
