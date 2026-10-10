@@ -45,6 +45,7 @@ import {
   getFeedCheck,
   knownCarriedEpgId,
   listedEpgId,
+  listingsDiffer,
   recordFeedCheck,
   type FeedCandidate,
 } from './iptvFeedChecks.js'
@@ -57,10 +58,11 @@ export const MATCH_SCORE = 0.85
 export const NO_MATCH_SCORE = 0.6
 
 /** On tune the session's own footage spans the whole capture, so 15s (75
- *  frames) aligns fully; side-by-side captures start at different provider
- *  burst depths (measured up to 11s apart) and need the longer 25s. */
+ *  frames) aligns fully. Side-by-side captures of two sources start at
+ *  different provider burst depths and source delays (measured up to ~20s
+ *  apart on prod), so they run 40s: alignable up to ~32s apart. */
 const SESSION_CAPTURE_SECS = 15
-const STANDALONE_CAPTURE_SECS = 25
+const STANDALONE_CAPTURE_SECS = 40
 const CAPTURE_TIMEOUT_MS = 60_000
 /** Session footage older than the capture start that may line up with it (the
  *  provider opens a feed with a burst from a few seconds back). Stays inside the
@@ -219,6 +221,7 @@ type Footage =
 async function compareAgainst(
   io: FeedCheckIo,
   subject: number,
+  intendedEpg: string,
   candidates: FeedCandidate[],
   footage: (candidate: FeedCandidate) => Promise<Footage>,
   stillWanted: () => boolean,
@@ -234,6 +237,7 @@ async function compareAgainst(
     const candidate = queue.shift()!
     if (!first) await io.sleep(gapMs)
     if (!stillWanted()) return { kind: 'aborted', reason: 'no longer wanted' }
+    const capturedAt = new Date(io.now())
     const got = await footage(candidate)
     if ('abort' in got) return { kind: 'aborted', reason: got.abort }
     if ('subject_failed' in got) return { kind: 'unknown', reason: got.subject_failed, score: bestScore }
@@ -261,6 +265,9 @@ async function compareAgainst(
     if (verdict === 'same') {
       if (candidate.role === 'family' && !siblingDiffered) {
         return { kind: 'unknown', reason: 'matches a related channel with no listed stream to compare', score: bestScore }
+      }
+      if (candidate.role === 'family' && !listingsDiffer(io.db, intendedEpg, candidate.epgId, capturedAt)) {
+        return { kind: 'unknown', reason: 'matches a related channel listing the same programme (simulcast)', score: bestScore }
       }
       return { kind: 'carries', epgId: candidate.epgId, matchedStreamId: candidate.streamId, score: m!.score, cached: false }
     }
@@ -347,7 +354,7 @@ export async function checkLiveSession(
     if (!subj.ok) return { abort: 'session footage unreadable' }
     return { subject: subj.frames, candidate: cand.frames }
   }
-  const outcome = await compareAgainst(io, subject, list, footage, isActive, SESSION_GAP_MS)
+  const outcome = await compareAgainst(io, subject, intendedEpg, list, footage, isActive, SESSION_GAP_MS)
   recordOutcome(db, subject, listed, outcome)
   recordCorroboration(db, outcome, subject, io.now())
   const switchTo = switchTarget(outcome)
@@ -385,7 +392,7 @@ export async function checkFeedStandalone(io: FeedCheckIo, streamId: number, sti
     if (!cand.ok) return { skip: 'candidate capture failed' }
     return { subject: subj.frames, candidate: cand.frames }
   }
-  const outcome = await compareAgainst(io, streamId, list, footage, stillWanted, STANDALONE_GAP_MS)
+  const outcome = await compareAgainst(io, streamId, intendedEpg, list, footage, stillWanted, STANDALONE_GAP_MS)
   recordOutcome(db, streamId, listed, outcome)
   recordCorroboration(db, outcome, streamId, io.now())
   log.info('feed check (standalone)', { subject: streamId, listed, intendedEpg, outcome })
