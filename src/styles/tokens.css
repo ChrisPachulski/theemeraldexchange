@@ -139,6 +139,13 @@
   }
 }
 
+/* Tablets: the nav pills sit in their own row under the brand (TopNav.css). */
+@media (min-width: 521px) and (max-width: 1099px) {
+  :root {
+    --hero-pad-top: 148px;
+  }
+}
+
 @media (max-width: 520px) {
   :root {
     --pod-h: 48px;
