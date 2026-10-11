@@ -99,6 +99,24 @@
   box-shadow: 0 0 6px var(--text);
 }
 
+/* Resume bar along the poster's base while local playback is in progress. */
+.media-card__progress {
+  position: absolute;
+  left: var(--s-2);
+  right: var(--s-2);
+  bottom: var(--s-2);
+  height: 3px;
+  border-radius: 999px;
+  background: oklch(0 0 0 / 0.5);
+  overflow: hidden;
+}
+
+.media-card__progress > span {
+  display: block;
+  height: 100%;
+  background: var(--emerald);
+}
+
 .media-card__body {
   min-width: 0;
   display: grid;

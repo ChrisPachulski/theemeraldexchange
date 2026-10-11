@@ -132,3 +132,23 @@ test('genre filter narrows the grid, and a detail genre pill opens the filtered 
   await page.getByRole('combobox', { name: 'Filter by status' }).selectOption('announced')
   await expect(page.getByText('No Adventure movies in your library.')).toBeVisible()
 })
+
+test('library posters show watch state and Missing, and a resumable movie reads Resume', async ({ page }) => {
+  const grants = await setup(page, { watch: [watchRow('movie', 3, 600, 3200), watchRow('movie', 4, 7000, 7000, true)] })
+  await openLibrary(page, 'movies')
+  const card = (title: string) => page.getByRole('button', { name: title })
+  await expect(card('Alien')).toContainText('Watched')
+  await expect(card('Dune').locator('.media-card__progress > span')).toHaveAttribute('style', 'width: 19%;')
+  await expect(card('Dune')).not.toContainText('Watched')
+  await expect(card('Wanted')).toContainText('Missing')
+  await expect(card('Dune')).not.toContainText('Missing')
+
+  await card('Dune').click()
+  await page.getByRole('dialog', { name: 'Dune' }).getByRole('button', { name: 'Resume · 43 min left' }).click()
+  await page.getByRole('button', { name: 'Resume from 10:00' }).click()
+  await expect.poll(() => grants.map((g) => [g.kind, g.id, g.body.start_secs])[0]).toEqual(['movie', 3, 600])
+
+  await openLibrary(page, 'tv')
+  await expect(card('Other Show')).toContainText('Missing')
+  await expect(card('Test Show')).not.toContainText('Missing')
+})

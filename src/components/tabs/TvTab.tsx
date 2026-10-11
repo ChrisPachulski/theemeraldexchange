@@ -82,7 +82,12 @@ function buildSeriesMeta(item: SeriesSearchResult | Series): DetailMeta[] {
   if (stats?.seasonCount) rows.push({ label: 'Seasons', value: String(stats.seasonCount) })
   if (stats?.episodeCount) {
     const total = stats.totalEpisodeCount ?? stats.episodeCount
-    rows.push({ label: 'Episodes', value: total === stats.episodeCount ? String(stats.episodeCount) : `${stats.episodeCount} of ${total}` })
+    // In the library: downloaded of total, as Apple shows it. A Discover
+    // result has nothing on disk, so it keeps aired of total.
+    const value = 'id' in item
+      ? `${stats.episodeFileCount ?? 0} of ${total}`
+      : total === stats.episodeCount ? String(total) : `${stats.episodeCount} of ${total}`
+    rows.push({ label: 'Episodes', value })
   }
   if (stats?.sizeOnDisk && stats.sizeOnDisk > 0) {
     const gb = stats.sizeOnDisk / (1024 ** 3)
@@ -769,7 +774,8 @@ function LibraryResults({ query, letter, genre, loading, error, items, onCardCli
   return (
     <ResultGrid>
       {items.map((s) => {
-        const meta = [s.network, s.status]
+        // "Missing": aired but nothing downloaded yet.
+        const meta = [s.network, s.status, seriesAvailability(s) === 'missing' ? 'Missing' : null]
           .filter((x): x is string => Boolean(x))
           .join(' · ')
         return (

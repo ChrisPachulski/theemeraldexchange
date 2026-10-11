@@ -11,10 +11,14 @@ type Props = {
   /** Score chips (icon + value), in source order. */
   rating?: RatingPiece[]
   inLibrary?: boolean
+  /** Local playback finished: a Watched badge on the poster. */
+  watched?: boolean
+  /** Local playback in progress (0..1): a resume bar along the poster's base. */
+  progress?: number | null
   onClick?: () => void
 }
 
-export function MediaCard({ poster, title, year, meta, overview, rating, inLibrary, onClick }: Props) {
+export function MediaCard({ poster, title, year, meta, overview, rating, inLibrary, watched, progress, onClick }: Props) {
   // Metadata pieces are joined with the signature double-dash separator
   // (typographic punctuation per DESIGN.md). The year, when present, is
   // rendered as the first chip-aligned datum.
@@ -42,6 +46,17 @@ export function MediaCard({ poster, title, year, meta, overview, rating, inLibra
           <span className="media-card__badge">
             <span className="media-card__badge-dot" aria-hidden="true" />
             In library
+          </span>
+        )}
+        {watched && (
+          <span className="media-card__badge">
+            <span className="media-card__badge-dot" aria-hidden="true" />
+            Watched
+          </span>
+        )}
+        {progress != null && (
+          <span className="media-card__progress" aria-hidden="true">
+            <span style={{ width: `${Math.round(progress * 100)}%` }} />
           </span>
         )}
       </div>

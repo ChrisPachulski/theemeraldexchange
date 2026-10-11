@@ -29,6 +29,8 @@ import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { movieAvailability, radarr, type Movie, type MovieSearchResult } from '../../lib/api/radarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
+import type { WatchEntry } from '../../lib/api/media'
+import { resumeLabel, watchBadge } from '../../lib/watchState'
 import {
   filterAndSortLibrary,
   byTitleAsc,
@@ -212,6 +214,11 @@ export function MoviesTab() {
     viewing && typeof viewing.tmdbId === 'number'
       ? localMovieIdx.data?.get(viewing.tmdbId)
       : undefined
+  // A Radarr title's local watch row (posters' watched badge / resume bar).
+  const movieWatch = (tmdbId: number) => {
+    const id = localMovieIdx.data?.get(tmdbId)
+    return id == null ? undefined : mediaWatch.data?.get(`movie:${id}`)
+  }
   // Whether the viewed IN-LIBRARY movie has anything to play at all. An
   // announced/unreleased title is tracked by Radarr with no file — every
   // play affordance must give way to an availability note for it.
@@ -480,6 +487,7 @@ export function MoviesTab() {
             loading={library.isPending}
             error={library.error}
             items={filteredLibrary}
+            watchOf={(m) => movieWatch(m.tmdbId)}
             onCardClick={handleLibraryClick}
           />
         </>
@@ -579,6 +587,7 @@ export function MoviesTab() {
               }
             : undefined
         }
+        playDirectLabel={viewing ? resumeLabel(movieWatch(viewing.tmdbId)) : undefined}
         onAdd={sections.arr && viewing && !('id' in viewing) ? () => {
           const item = viewing as MovieSearchResult
           setViewing(null)
@@ -688,10 +697,11 @@ type LibraryProps = {
   loading: boolean
   error: unknown
   items: Movie[]
+  watchOf: (m: Movie) => WatchEntry | undefined
   onCardClick: (m: Movie) => void
 }
 
-function LibraryResults({ query, letter, genre, loading, error, items, onCardClick }: LibraryProps) {
+function LibraryResults({ query, letter, genre, loading, error, items, watchOf, onCardClick }: LibraryProps) {
   const ratings = useRatings(items.map((i) => i.imdbId))
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
@@ -721,7 +731,8 @@ function LibraryResults({ query, letter, genre, loading, error, items, onCardCli
   return (
     <ResultGrid>
       {items.map((m) => {
-        const meta = [m.studio, fmtRuntime(m.runtime), m.status]
+        // "Missing": released and tracked, but no file on disk yet.
+        const meta = [m.studio, fmtRuntime(m.runtime), m.status, movieAvailability(m) === 'missing' ? 'Missing' : null]
           .filter((x): x is string => Boolean(x))
           .join(' · ')
         return (
@@ -733,6 +744,7 @@ function LibraryResults({ query, letter, genre, loading, error, items, onCardCli
             meta={meta || undefined}
             overview={m.overview}
             rating={movieRatingPieces(m, ratings)}
+            {...watchBadge(watchOf(m))}
             onClick={() => onCardClick(m)}
           />
         )
