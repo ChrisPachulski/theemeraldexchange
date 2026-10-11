@@ -5,6 +5,7 @@ import { episodeCode } from './EpisodePicker'
 import type { StreamGrant } from '../../lib/api/iptv'
 import {
   mediaApi,
+  type MediaChapter,
   type MediaEpisode,
   type MediaMarker,
   type PlayableKind,
@@ -92,6 +93,7 @@ export type MediaPlayerViewProps = {
   videoEl?: HTMLVideoElement | null
   onVideoElement?: (video: HTMLVideoElement | null) => void
   markers?: ReadonlyArray<MediaMarker>
+  chapters?: ReadonlyArray<MediaChapter>
   episodeNav?: EpisodeNav | null
   /** "Up next" card over the credits: the next episode and seconds left. */
   upNext?: { episode: MediaEpisode; secondsLeft: number } | null
@@ -147,6 +149,7 @@ export function MediaPlayerView({
   videoEl,
   onVideoElement,
   markers,
+  chapters,
   episodeNav,
   upNext,
   onUpNextPlay,
@@ -232,6 +235,7 @@ export function MediaPlayerView({
               delivery={streamGrant.delivery === 'hls' ? 'hls' : 'progressive'}
               // Apple hides Skip while a binge overlay is up.
               markers={upNext || stillWatching ? undefined : markers}
+              chapters={chapters}
               episodeNav={episodeNav}
             />
           )}
@@ -349,6 +353,7 @@ export function MediaPlayer({
   const effectiveStartRef = useRef<number | null>(initialStartSecs)
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null)
   const [markerState, setMarkerState] = useState<{ id: number; items: MediaMarker[] } | null>(null)
+  const [chapterState, setChapterState] = useState<{ id: number; items: MediaChapter[] } | null>(null)
   // Binge state: the Up Next countdown (null = no card), the Still watching?
   // gate ('advance' = it is holding back an auto-advance), and refs for the
   // stable position callback.
@@ -462,6 +467,22 @@ export function MediaPlayer({
   }, [kind, id])
   const markers = markerState?.id === id ? markerState.items : undefined
 
+  // The file's embedded chapters, once per title (none, or an older
+  // media-core without the route, just means no Chapters list).
+  useEffect(() => {
+    let live = true
+    mediaApi
+      .chapters(kind, id)
+      .then((items) => {
+        if (live) setChapterState({ id, items })
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [kind, id])
+  const chapters = chapterState?.id === id ? chapterState.items : undefined
+
   // "Play again" (session lost or frozen) re-grants where playback stopped,
   // not where the session started.
   const retry = useCallback(() => {
@@ -535,6 +556,19 @@ export function MediaPlayer({
     setEffectiveStartSecs(targetSecs)
     setSessionKey((key) => key + 1)
   }, [])
+
+  // A Quality change mid-play re-grants at the current position (the server
+  // applies the cap per grant; Apple swaps its peak bitrate live), through the
+  // same re-grant as a below-floor seek. While the resume prompt is still up
+  // there is no session yet, and the first grant carries the new cap anyway.
+  const { maxBitrate } = usePlaybackPrefs()
+  const grantedCapRef = useRef(maxBitrate)
+  useEffect(() => {
+    if (grantedCapRef.current === maxBitrate) return
+    grantedCapRef.current = maxBitrate
+    if (effectiveStartRef.current == null) return
+    onSeekBeforeStart(Math.floor(latest.current.pos))
+  }, [maxBitrate, onSeekBeforeStart])
 
   // Final flush on unmount, and for the outgoing episode on an in-place swap,
   // so the resume point reflects where they actually stopped, not the last
@@ -758,6 +792,7 @@ export function MediaPlayer({
       videoEl={videoEl}
       onVideoElement={setVideoEl}
       markers={markers}
+      chapters={chapters}
       episodeNav={episodeNav}
       upNext={upNextSecs != null && nextEpisode ? { episode: nextEpisode, secondsLeft: upNextSecs } : null}
       onUpNextPlay={() => nextEpisode && pickEpisode(nextEpisode)}

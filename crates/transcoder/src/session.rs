@@ -127,6 +127,9 @@ pub struct StartOpts {
     /// low-bitrate source is never inflated past its own quality (see
     /// [`crate::args`]'s ladder). `None` → ladder applies uncapped.
     pub source_avg_kbps: Option<u32>,
+    /// The client's bitrate cap (kbps) from the grant's `max_bitrate`, when it
+    /// sent one: caps a video re-encode's peak. `None` → unchanged encode.
+    pub client_max_kbps: Option<u32>,
     /// Full source duration in seconds (from the file probe), or `None` when the
     /// probe found none. Lets native (AVPlayer) clients be served a complete VOD
     /// playlist with a finite timeline instead of the growing EVENT playlist
@@ -203,6 +206,8 @@ struct Session {
     source_profile: Option<String>,
     /// Source average bitrate (kbps), carried for respawn arg parity.
     source_avg_kbps: Option<u32>,
+    /// Client bitrate cap (kbps), carried for respawn arg parity.
+    client_max_kbps: Option<u32>,
     /// Full source duration (secs) for the native VOD-manifest synthesis.
     duration_secs: Option<i64>,
     /// Verified principal sub that created the session (owner-or-admin gate).
@@ -916,6 +921,7 @@ impl SessionManager {
         source_codec: Option<&str>,
         source_profile: Option<&str>,
         source_avg_kbps: Option<u32>,
+        client_max_kbps: Option<u32>,
         media_kind: &str,
         start_number: u64,
     ) -> Result<Child, StartError> {
@@ -940,6 +946,7 @@ impl SessionManager {
             media_kind,
             start_number,
             source_avg_kbps,
+            client_max_kbps,
         });
         let mut cmd = Command::new(&self.ffmpeg_bin);
         cmd.args(&args)
@@ -1314,6 +1321,7 @@ impl SessionManager {
                 opts.source_codec.as_deref(),
                 opts.source_profile.as_deref(),
                 opts.source_avg_kbps,
+                opts.client_max_kbps,
                 &opts.media_kind,
                 eff_start_number,
             )
@@ -1337,6 +1345,7 @@ impl SessionManager {
             source_codec: opts.source_codec,
             source_profile: opts.source_profile,
             source_avg_kbps: opts.source_avg_kbps,
+            client_max_kbps: opts.client_max_kbps,
             duration_secs: opts.duration_secs,
             owner: opts.owner,
             subtitle: opts.subtitle,
@@ -1957,6 +1966,7 @@ impl SessionManager {
             source_codec,
             source_profile,
             source_avg_kbps,
+            client_max_kbps,
             media_kind,
             prev_number,
         ) = {
@@ -1972,6 +1982,7 @@ impl SessionManager {
                 s.source_codec.clone(),
                 s.source_profile.clone(),
                 s.source_avg_kbps,
+                s.client_max_kbps,
                 s.info_kind.clone(),
                 s.start_number,
             )
@@ -2015,6 +2026,7 @@ impl SessionManager {
                 source_codec.as_deref(),
                 source_profile.as_deref(),
                 source_avg_kbps,
+                client_max_kbps,
                 &media_kind,
                 next_number,
             )
@@ -2272,7 +2284,9 @@ mod tests {
 
     /// Write a shell stub that imitates ffmpeg: it writes a fake index.m3u8 +
     /// one segment into the session dir (last arg ending in index.m3u8), then
-    /// sleeps so the supervisor sees a long-lived child. `mode` controls
+    /// sleeps so the supervisor sees a long-lived child. Only the main HLS
+    /// pipeline's argv lands in args.txt; the thumbnail/sidecar passes share
+    /// the dir and would otherwise clobber it. `mode` controls
     /// behavior: "run" sleeps forever, "crash_once"/"crash" exit non-zero.
     fn write_stub(dir: &std::path::Path, mode: &str) -> PathBuf {
         let path = dir.join("ffmpeg_stub.sh");
@@ -2285,7 +2299,7 @@ mod tests {
              d=$(dirname \"$last\")\n\
              mkdir -p \"$d\"\n\
              printf '%s' \"$$\" > \"$d/pid.txt\"\n\
-             printf '%s\\n' \"$@\" > \"$d/args.txt\"\n\
+             case \"$last\" in */index.m3u8) printf '%s\\n' \"$@\" > \"$d/args.txt\";; esac\n\
              case \"$last\" in *subtitles.vtt.partial)\n\
                printf 'WEBVTT\\n' > \"$last\"; exit 0;; esac\n\
              printf '#EXTM3U\\n#EXT-X-VERSION:3\\n' > \"$last\"\n\
@@ -2318,6 +2332,7 @@ mod tests {
     fn opts(input: &str) -> StartOpts {
         StartOpts {
             source_avg_kbps: None,
+            client_max_kbps: None,
             media_kind: "movie".into(),
             media_id: 7,
             sub: "plex:42".into(),
@@ -3147,6 +3162,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn client_bitrate_cap_reaches_the_encoder_and_survives_a_respawn() {
+        // The grant's cap must ride StartOpts -> Session -> every spawn's argv,
+        // or a seek would silently drop the viewer's Quality pick.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr
+            .start(StartOpts {
+                client_max_kbps: Some(4_000),
+                ..encode_opts_id("/lib/capped.mkv", 9)
+            })
+            .await
+            .unwrap();
+        let manifest = mgr.manifest_path(&id).await.unwrap();
+        wait_for(|| manifest.exists()).await;
+        let args = manifest.parent().unwrap().join("args.txt");
+        let capped = |a: &[String]| a.windows(2).any(|w| w[0] == "-maxrate" && w[1] == "3744k");
+        wait_for_args(&args, |a| capped(a)).await;
+
+        assert!(mgr.seek(&id, 60).await, "seek must succeed");
+        wait_for_args(&args, |a| {
+            capped(a) && a.windows(2).any(|w| w[0] == "-ss" && w[1] == "60")
+        })
+        .await;
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
     async fn idle_sweep_reaps_stale_session() {
         let tmp = tempfile::tempdir().unwrap();
         let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
@@ -3199,6 +3241,7 @@ mod tests {
     fn remux_opts_id(input: &str, media_id: i64) -> StartOpts {
         StartOpts {
             source_avg_kbps: None,
+            client_max_kbps: None,
             source_profile: None,
             media_id,
             ..opts(input)
@@ -3208,6 +3251,7 @@ mod tests {
     fn encode_opts_id(input: &str, media_id: i64) -> StartOpts {
         StartOpts {
             source_avg_kbps: None,
+            client_max_kbps: None,
             media_kind: "movie".into(),
             media_id,
             sub: "plex:42".into(),

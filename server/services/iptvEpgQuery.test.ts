@@ -93,10 +93,12 @@ describe('epg queries', () => {
     expect(rows).toEqual([
       expect.objectContaining({
         channel_stream_id: 10,
+        name: 'C1',
+        stream_icon: 'https://logos.example/c1.png',
         current: expect.objectContaining({ title: 'Now' }),
         next: expect.objectContaining({ title: 'Next' }),
       }),
-      { channel_stream_id: 30, current: null, next: null },
+      { channel_stream_id: 30, name: 'No EPG', stream_icon: null, current: null, next: null },
     ])
   })
 

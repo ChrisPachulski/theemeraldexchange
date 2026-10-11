@@ -29,6 +29,7 @@ use crate::{AppState, SCHEMA_VERSION};
 
 mod audiobooks;
 mod catalog;
+mod chapters;
 mod collections;
 mod health;
 mod library;
@@ -53,6 +54,7 @@ pub use subtitles::{SubtitleFileQuery, SubtitleLangBody};
 pub use watch::{WatchQuery, WatchUpsert};
 
 use self::audiobooks::{get_audiobook, list_audiobooks};
+use self::chapters::get_chapters;
 use self::collections::{
     add_collection_item, create_collection, delete_collection, delete_collection_item,
     get_collection, list_collections, rename_collection,
@@ -160,6 +162,7 @@ pub fn router(state: AppState) -> Router {
             "/markers",
             get(get_markers).put(put_marker).delete(delete_marker),
         )
+        .route("/chapters/{kind}/{id}", get(get_chapters))
         .route("/scan", post(trigger_scan))
         .route("/scan/status", get(scan_status))
         .layer(tower_http::timeout::TimeoutLayer::with_status_code(

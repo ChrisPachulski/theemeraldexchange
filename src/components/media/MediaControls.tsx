@@ -5,7 +5,7 @@ import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
 import { formatPlaybackTime } from './playbackSession'
 import { EpisodeList } from './EpisodePicker'
 import { PlaybackSettingsFields } from './PlaybackSettings'
-import type { MediaEpisode, MediaMarker } from '../../lib/api/media'
+import type { MediaChapter, MediaEpisode, MediaMarker } from '../../lib/api/media'
 import {
   SPEED_OPTIONS,
   getPlaybackPrefs,
@@ -314,6 +314,8 @@ type Props = {
   markers?: ReadonlyArray<MediaMarker>
   /** Episode prev/next + queue; its show also keys the remembered subtitle pick. */
   episodeNav?: EpisodeNav | null
+  /** The file's embedded chapters; the settings popover lists them (none = no list). */
+  chapters?: ReadonlyArray<MediaChapter>
 }
 
 export function MediaControls({
@@ -326,6 +328,7 @@ export function MediaControls({
   delivery,
   markers,
   episodeNav,
+  chapters,
 }: Props) {
   const [paused, setPaused] = useState(video.paused)
   const [muted, setMuted] = useState(video.muted)
@@ -849,6 +852,28 @@ export function MediaControls({
           </select>
         </label>
         <PlaybackSettingsFields />
+        {chapters && chapters.length > 0 && (
+          <section aria-label="Chapters">
+            <h3 className="media-controls__heading">Chapters</h3>
+            <ul className="media-episode-list">
+              {chapters.map((c, i) => (
+                <li key={i}>
+                  <button
+                    type="button"
+                    className="media-episode-list__item"
+                    onClick={(e) => {
+                      commitSeek(c.startSecs)
+                      e.currentTarget.closest<HTMLElement>('[popover]')?.hidePopover?.()
+                    }}
+                  >
+                    <span className="media-episode-list__title">{c.title || `Chapter ${i + 1}`}</span>
+                    <span className="media-episode-list__code">{formatPlaybackTime(c.startSecs)}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
       </div>
     </div>
   )

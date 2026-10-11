@@ -143,6 +143,21 @@ fn deny(reason: impl Into<String>) -> PlayDecision {
     }
 }
 
+/// Bandwidth gate: the file's average bitrate (bits/second) when it exceeds
+/// the client's `max_bitrate`, else `None`. The probe records no per-stream
+/// bitrate, so the whole-container average (size_bytes * 8 / duration) is the
+/// comparison; a file with no positive duration/size is never over (no
+/// average can be derived). Shared with the transcoder plan, which must not
+/// copy an over-cap stream, so "over the cap" means the same on both sides.
+pub fn over_bitrate_cap(file: &MediaFileRow, caps: &ClientCaps) -> Option<i64> {
+    let (max, duration) = (caps.max_bitrate?, file.duration_secs?);
+    if max <= 0 || duration <= 0 || file.size_bytes <= 0 {
+        return None;
+    }
+    let avg_bps = file.size_bytes.saturating_mul(8) / duration;
+    (avg_bps > max).then_some(avg_bps)
+}
+
 /// Decide whether `file` can be sent as-is to a client with `caps`.
 pub fn decide(file: &MediaFileRow, caps: &ClientCaps) -> PlayDecision {
     let container = match file.container.as_deref().map(str::trim) {
@@ -199,19 +214,8 @@ pub fn decide(file: &MediaFileRow, caps: &ClientCaps) -> PlayDecision {
         return deny(format!("height {height} exceeds client max {max}"));
     }
 
-    // Bandwidth gate: `max_bitrate` is bits/second; the probe records no
-    // per-stream bitrate, so the file's whole-container average
-    // (size_bytes * 8 / duration) is the comparison. Files missing a positive
-    // duration are not gated — no average can be derived.
-    if let (Some(max), Some(duration)) = (caps.max_bitrate, file.duration_secs)
-        && max > 0
-        && duration > 0
-        && file.size_bytes > 0
-    {
-        let avg_bps = file.size_bytes.saturating_mul(8) / duration;
-        if avg_bps > max {
-            return deny(format!("bitrate {avg_bps} exceeds client max {max}"));
-        }
+    if let (Some(avg_bps), Some(max)) = (over_bitrate_cap(file, caps), caps.max_bitrate) {
+        return deny(format!("bitrate {avg_bps} exceeds client max {max}"));
     }
 
     let hdr_label = file.hdr_format.as_deref().map(str::trim).unwrap_or("");

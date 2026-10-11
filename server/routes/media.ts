@@ -79,6 +79,10 @@ type Caps = {
   /** Client pipeline applies Dolby Vision RPUs itself (DV-capable Apple
    *  device). Gates DV direct-play and the transcoder's DV copy passthrough. */
   dolby_vision?: boolean
+  /** The viewer's Quality cap, bits/second (the web's Original/20/12/8/4/2
+   *  Mbps pick). A file over it re-encodes with its peak held under the cap;
+   *  absent (AVPlayer caps itself client-side) changes nothing. */
+  max_bitrate?: number
 }
 type PlaybackRequest = Partial<Caps> & { start_secs?: unknown; force_hls?: unknown }
 const DEFAULT_CAPS: Caps = {
@@ -104,6 +108,7 @@ function capsQuery(caps: Caps, startSecs?: number, forceTranscode = false): stri
   p.set('hls_fmp4_hevc', String(Boolean(caps.hls_fmp4_hevc)))
   if (caps.native_hls) p.set('native_hls', 'true')
   if (caps.dolby_vision) p.set('dolby_vision', 'true')
+  if (caps.max_bitrate !== undefined) p.set('max_bitrate', String(caps.max_bitrate))
   if (startSecs !== undefined) p.set('start_secs', String(startSecs))
   if (forceTranscode) p.set('force_transcode', 'true')
   return p.toString()
@@ -169,11 +174,15 @@ async function mediaAuth(c: Context<Env>, next: Next) {
   // /transcribe) share the `/subtitles/{kind}/{id}` prefix, so one guard here
   // covers them uniformly; `/subtitles/status` never matches (its first segment
   // is 'status', not movie|episode) and stays open, as it carries no content.
-  const subsMatch = subpath.match(/^\/subtitles\/(movie|episode)\/([^/?]+)/)
+  // Chapter lists (titles + times, and an ffprobe per uncached title) get the
+  // same gate.
+  const subsMatch =
+    subpath.match(/^\/subtitles\/(movie|episode)\/([^/?]+)/) ??
+    subpath.match(/^\/chapters\/(movie|episode|video)\/([^/?]+)/)
   if (subsMatch) {
     const authDenied = await requireAuth(c, async () => {})
     if (authDenied) return authDenied
-    const kind = subsMatch[1] as 'movie' | 'episode'
+    const kind = subsMatch[1] as 'movie' | 'episode' | 'video'
     if (await ratingBlocked(c.get('session'), kind, Number(subsMatch[2]))) {
       return c.json({ error: 'rating_blocked' }, 403)
     }
@@ -226,6 +235,10 @@ media.post('/playback/:kind/:id', async (c) => {
     hls_fmp4_hevc: Boolean(reqCaps.hls_fmp4_hevc),
     native_hls: Boolean(reqCaps.native_hls),
     dolby_vision: Boolean(reqCaps.dolby_vision),
+    max_bitrate:
+      typeof reqCaps.max_bitrate === 'number' && Number.isFinite(reqCaps.max_bitrate) && reqCaps.max_bitrate > 0
+        ? Math.floor(reqCaps.max_bitrate)
+        : undefined,
   }
   const startSecs =
     typeof reqCaps.start_secs === 'number' &&
@@ -269,6 +282,7 @@ media.post('/playback/:kind/:id', async (c) => {
           aac_max_channels: caps.aac_max_channels,
           hls_fmp4_hevc: caps.hls_fmp4_hevc,
           dolby_vision: caps.dolby_vision,
+          max_bitrate: caps.max_bitrate,
         }),
       },
       LAN_TIMEOUT_MS,

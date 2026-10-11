@@ -75,7 +75,7 @@ describe('airingNow', () => {
     channel_id: 'x', start_utc: start, stop_utc: stop, title, description: null,
   })
   const rows: EpgNowRow[] = [
-    { channel_stream_id: 1, current: prog('2026-10-10T20:00:00Z', '2026-10-10T21:00:00Z', 'News'), next: prog('2026-10-10T21:00:00Z', '2026-10-10T22:00:00Z', 'Movie') },
+    { channel_stream_id: 1, name: 'BBC One', stream_icon: 'https://logos.example/bbc.png', current: prog('2026-10-10T20:00:00Z', '2026-10-10T21:00:00Z', 'News'), next: prog('2026-10-10T21:00:00Z', '2026-10-10T22:00:00Z', 'Movie') },
     { channel_stream_id: 2, current: null, next: null },
   ]
 
@@ -83,6 +83,14 @@ describe('airingNow', () => {
     expect(airingNow(rows, at('2026-10-10T20:30:00Z')).map((a) => a.programme.title)).toEqual(['News'])
     expect(airingNow(rows, at('2026-10-10T21:10:00Z')).map((a) => a.programme.title)).toEqual(['Movie'])
     expect(airingNow(rows, at('2026-10-10T23:00:00Z'))).toEqual([])
+  })
+
+  it('carries the channel name and logo, null when the backend omits them', () => {
+    const [a] = airingNow(rows, at('2026-10-10T20:30:00Z'))
+    expect([a.channelName, a.channelIcon]).toEqual(['BBC One', 'https://logos.example/bbc.png'])
+    const bare: EpgNowRow[] = [{ channel_stream_id: 3, current: rows[0].current, next: null }]
+    const [b] = airingNow(bare, at('2026-10-10T20:30:00Z'))
+    expect([b.channelName, b.channelIcon]).toEqual([null, null])
   })
 
   it('formats time left', () => {

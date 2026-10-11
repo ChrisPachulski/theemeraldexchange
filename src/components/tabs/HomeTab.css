@@ -159,6 +159,28 @@
   color: var(--text-muted);
 }
 
+.home-live-tile__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-2);
+}
+
+.home-live-tile__logo {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+}
+
+.home-live-tile__channel {
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 720px) {
   .home__shelves {
     margin-inline: var(--s-3);

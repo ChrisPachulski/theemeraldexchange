@@ -8,7 +8,7 @@
 // the seek split (element seek in-session, re-grant below the floor).
 
 import '@testing-library/jest-dom/vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MediaControls } from './MediaControls'
 import type { MediaEpisode } from '../../lib/api/media'
@@ -372,5 +372,38 @@ describe('MediaControls parity controls', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Turn off subtitles' }))
     expect(showTrackMemory(5)).toEqual({ subtitleOff: true })
+  })
+
+  it('lists embedded chapters (untitled ones numbered) and seeks through the session split', () => {
+    const video = makeVideo()
+    const onSeekBelowOffset = vi.fn()
+    const chapters = [
+      { title: 'Opening', startSecs: 0, endSecs: 300 },
+      { title: null, startSecs: 1200, endSecs: 1800 },
+    ]
+    render(
+      <MediaControls
+        video={video}
+        offsetSecs={600}
+        totalDurationSecs={1800}
+        onSeekBelowOffset={onSeekBelowOffset}
+        chapters={chapters}
+      />,
+    )
+    // The settings popover is closed (hidden) until its button opens it.
+    const list = screen.getByRole('region', { name: 'Chapters', hidden: true })
+    // In-session: an element seek in session coordinates.
+    fireEvent.click(within(list).getByRole('button', { name: /Chapter 2\s*20:00/, hidden: true }))
+    expect(video.currentTime).toBe(600)
+    // Before this session's -ss floor: a re-grant at the chapter start.
+    fireEvent.click(within(list).getByRole('button', { name: /Opening\s*0:00/, hidden: true }))
+    expect(onSeekBelowOffset).toHaveBeenCalledWith(0)
+  })
+
+  it('shows no Chapters list when the file has none', () => {
+    render(
+      <MediaControls video={makeVideo()} offsetSecs={0} totalDurationSecs={100} onSeekBelowOffset={() => undefined} chapters={[]} />,
+    )
+    expect(screen.queryByRole('region', { name: 'Chapters', hidden: true })).toBeNull()
   })
 })
