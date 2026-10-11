@@ -543,8 +543,7 @@ async fn grant(
                 })
             });
             // An alt_audio session with extra tracks plays from its audio
-            // master. Asked of the SESSION, not this plan: a coalesced grant
-            // may land on a live session started without web renditions.
+            // master (a reused session always shares this grant's plan).
             let master_url = state.sessions.web_master(&session_id).await.map(|_| {
                 format!(
                     "/api/transcode/session/{session_id}/{}",
