@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { apiUrl } from '../../lib/api/base'
 import { LoadingPulse } from '../feedback/LoadingPulse'
-import { useAuth } from '../../lib/auth'
 import './UsersTab.css'
 
 type UserRow = {
@@ -40,7 +39,6 @@ async function fetchUsers(): Promise<UserRow[]> {
 }
 
 export function UsersTab() {
-  const { signOut } = useAuth()
   const q = useQuery({
     queryKey: ['users'],
     queryFn: fetchUsers,
@@ -65,27 +63,21 @@ export function UsersTab() {
   }
 
   if (q.error) {
-    const stale =
+    // A session with no Plex token can't read the plex.tv access list, and
+    // signing in again the same way won't add one, so point at the member
+    // list that works for every sign-in.
+    const noPlexToken =
       q.error instanceof UsersFetchError && q.error.code === 'no_plex_token'
-    if (stale) {
+    if (noPlexToken) {
       return (
         <section className="users-tab">
           <div className="users-tab__stale">
-            <p className="users-tab__stale-title">Your session is from an earlier build.</p>
+            <p className="users-tab__stale-title">Not available on this sign-in.</p>
             <p className="users-tab__stale-body">
-              The Users tab needs a Plex token attached to your session; sessions
-              issued before this feature shipped don't have one. Sign out and sign
-              back in to refresh it.
+              This sign-in doesn&apos;t carry a Plex token, so the Plex access list
+              can&apos;t load here. Manage members from Invites &amp; members in
+              the account menu.
             </p>
-            <button
-              type="button"
-              className="users-tab__stale-action"
-              onClick={() => {
-                void signOut().catch(() => {})
-              }}
-            >
-              Sign out &amp; re-authenticate
-            </button>
           </div>
         </section>
       )

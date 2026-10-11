@@ -1,6 +1,6 @@
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
-import { useAuth } from '../../lib/auth'
+import { authModeFromUser, useAuth } from '../../lib/auth'
 import { useSectionAccess } from '../../lib/hooks/usePolicy'
 import './HomeTab.css'
 
@@ -11,6 +11,7 @@ const ENTRIES: Entry[] = [
   { route: 'movies', label: 'Movies' },
   { route: 'live', label: 'Live', section: 'live' },
   { route: 'downloads', label: 'Downloader', section: 'downloads' },
+  // Plex-backed admin sessions only, as in TopNav.
   { route: 'users', label: 'Users', adminOnly: true },
 ]
 
@@ -60,10 +61,11 @@ function ChevronDown() {
 
 export function HomeTab() {
   const { transitionTo } = useNavTransition()
-  const { isAdmin } = useAuth()
+  const { isAdmin, user } = useAuth()
+  const plexAdmin = isAdmin && user !== null && authModeFromUser(user) === 'plex'
   const sections = useSectionAccess()
   const entries = ENTRIES.filter(
-    (e) => (!e.adminOnly || isAdmin) && (!e.section || sections[e.section]),
+    (e) => (!e.adminOnly || plexAdmin) && (!e.section || sections[e.section]),
   )
 
   return (

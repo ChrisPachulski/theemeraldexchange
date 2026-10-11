@@ -5,9 +5,6 @@ import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-qu
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { UsersTab } from './UsersTab'
 
-vi.mock('../../lib/auth', () => ({
-  useAuth: () => ({ signOut: vi.fn() }),
-}))
 vi.mock('../feedback/LoadingPulse', () => ({ LoadingPulse: () => null }))
 
 beforeEach(() => {
