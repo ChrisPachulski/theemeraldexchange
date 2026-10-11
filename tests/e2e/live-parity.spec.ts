@@ -252,12 +252,22 @@ test('an off-air channel shows Channel offline instead of a dead end', async ({ 
     }
     return false
   })
+  // DIAG (temporary): CI-only timeout; log manifest timing, console and modal text.
+  const t0 = Date.now()
+  const diag: string[] = []
+  page.on('request', (r) => { if (r.url().includes('index.m3u8')) diag.push(`${Date.now() - t0}ms manifest ${r.url().split('?')[1] ?? ''}`) })
+  page.on('console', (m) => diag.push(`${Date.now() - t0}ms console.${m.type()} ${m.text().slice(0, 200)}`))
   await page.goto('/#/live')
   await page.getByTitle('Watch US ABC live').click()
 
   // hls.js retries a 503 manifest a few times before surfacing it (~11 s).
   const card = page.getByRole('alert').filter({ hasText: 'Channel offline' })
-  await expect(card).toBeVisible({ timeout: 30_000 })
+  try {
+    await expect(card).toBeVisible({ timeout: 30_000 })
+  } finally {
+    const modal = await page.locator('[role="dialog"]').allInnerTexts().catch(() => [])
+    console.log(`DIAG offline ${Date.now() - t0}ms\n${diag.join('\n')}\nMODAL ${JSON.stringify(modal)}`)
+  }
   expect(kills).toContain(`live:${ABC.stream_id}`)
   await card.getByRole('button', { name: 'Open guide' }).click()
   await expect(page.getByRole('region', { name: 'Channel guide' })).toBeVisible()

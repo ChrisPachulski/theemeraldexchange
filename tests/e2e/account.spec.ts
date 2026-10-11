@@ -63,7 +63,8 @@ test('revoking a device and signing out everywhere both ask first', async ({ pag
     }))
   })
   await openMenu(page, REGULAR_USER)
-  await page.getByText('Paired devices').click()
+  // exact: the closed disclosure's status line reads "No paired devices" until the list loads.
+  await page.getByText('Paired devices', { exact: true }).click()
 
   // Scoped to the menu: the closing dialog keeps its own Revoke in the DOM.
   const menu = page.getByRole('menu')
