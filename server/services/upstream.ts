@@ -29,7 +29,10 @@ export const WAN_TIMEOUT_MS = 10_000
 //     routinely takes 20–60s (Sonarr's own UI waits this long). The 15s LAN
 //     budget aborts it mid-flight (observed: `release 502 15180ms`). Kept
 //     under the client's 60s abort so the backend returns a real result or
-//     error before the client gives up.
+//     error before the client gives up. A grab (POST /release) shares this
+//     budget: the *arr fetches the release from the indexer before handing
+//     it to the download client, and on a loaded NAS that outlives 15s
+//     while the grab still goes through.
 export const SEARCH_TIMEOUT_MS = 50_000
 
 // Thrown by a service helper when its integration has no credentials

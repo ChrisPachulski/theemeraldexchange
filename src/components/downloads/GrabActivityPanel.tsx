@@ -19,6 +19,7 @@ const STATUS_LABEL: Record<GrabEventType, string> = {
   planned_size_exceeds_free_space: 'low disk space',
   grab_succeeded: 'grabbed',
   grab_failed: 'grab failed',
+  grab_unconfirmed: 'unconfirmed',
 }
 
 // Pill modifier — emerald success / red failure / amber empty-or-rejected
@@ -33,6 +34,7 @@ const STATUS_TONE: Record<GrabEventType, 'ok' | 'err' | 'warn' | 'info'> = {
   planned_size_exceeds_free_space: 'warn',
   grab_succeeded: 'ok',
   grab_failed: 'err',
+  grab_unconfirmed: 'warn',
 }
 
 const GB = 1024 * 1024 * 1024
@@ -67,7 +69,8 @@ function buildDetail(e: GrabEvent): string {
     case 'planned_size_exceeds_free_space':
       return `${e.eligible ?? 0} eligible · insufficient free space`
     case 'grab_succeeded':
-    case 'grab_failed': {
+    case 'grab_failed':
+    case 'grab_unconfirmed': {
       const parts: string[] = []
       if (e.release) {
         const r = e.release
