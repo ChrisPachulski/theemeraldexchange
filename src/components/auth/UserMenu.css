@@ -302,6 +302,10 @@
   background: color-mix(in oklch, var(--danger) 12%, transparent);
 }
 
+.user-menu__signout--danger {
+  color: var(--danger);
+}
+
 .user-menu__signout-error {
   margin: var(--s-2) var(--s-1) 0;
   color: var(--danger);

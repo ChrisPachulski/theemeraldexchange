@@ -38,6 +38,9 @@ export type Limits = {
   sonarrEnabled?: boolean
   radarrEnabled?: boolean
   sabEnabled?: boolean
+  /** DELETE /api/account/self is mounted. Absent on older backends, which
+   *  have no self-service deletion, so the UserMenu hides the button. */
+  accountDeletionEnabled?: boolean
 }
 
 const DEFAULT_LIMITS: Limits = {
