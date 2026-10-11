@@ -55,7 +55,14 @@ export function watchlistPoster(path: string | undefined): string | null {
   return path.startsWith('http') ? path : `${TMDB_POSTER_BASE}${path}`
 }
 
-export type Airing = { streamId: number; programme: EpgProgrammeDto; startMs: number; stopMs: number }
+export type Airing = {
+  streamId: number
+  channelName: string | null
+  channelIcon: string | null
+  programme: EpgProgrammeDto
+  startMs: number
+  stopMs: number
+}
 
 /** Each channel's programme on air at `nowMs`: `current`, or `next` once the
  *  cached `current` has ended, so the row stays right between refetches. */
@@ -67,7 +74,14 @@ export function airingNow(rows: EpgNowRow[], nowMs: number): Airing[] {
       const startMs = Date.parse(programme.start_utc)
       const stopMs = Date.parse(programme.stop_utc)
       if (startMs <= nowMs && nowMs < stopMs) {
-        out.push({ streamId: row.channel_stream_id, programme, startMs, stopMs })
+        out.push({
+          streamId: row.channel_stream_id,
+          channelName: row.name || null,
+          channelIcon: row.stream_icon || null,
+          programme,
+          startMs,
+          stopMs,
+        })
         break
       }
     }

@@ -232,8 +232,12 @@ function LiveNowShelf() {
             className="home-live-tile"
             onClick={() => openIntent('live', a.streamId)}
           >
-            <strong className="iptv-prog-results__live">LIVE</strong>
-            <span className="home-live-tile__title">{a.programme.title?.trim() || 'Live TV'}</span>
+            <span className="home-live-tile__head">
+              {a.channelIcon && <img className="home-live-tile__logo" src={a.channelIcon} alt="" loading="lazy" />}
+              <strong className="iptv-prog-results__live">LIVE</strong>
+            </span>
+            <span className="home-live-tile__title">{a.programme.title?.trim() || a.channelName || 'Live TV'}</span>
+            {a.channelName && <span className="home-live-tile__channel">{a.channelName}</span>}
             <span className="home-live-tile__caption">On now · {timeLeft(a.stopMs, nowMs)} left</span>
             <span className="home-shelf__progress" aria-hidden="true">
               <span style={{ width: `${Math.round(((nowMs - a.startMs) / (a.stopMs - a.startMs)) * 100)}%` }} />

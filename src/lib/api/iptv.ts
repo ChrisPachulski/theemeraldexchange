@@ -188,6 +188,9 @@ export type EpgProgrammeDto = {
 
 export type EpgNowRow = {
   channel_stream_id: number
+  /** Channel name + logo (absent from backends that predate them). */
+  name?: string
+  stream_icon?: string | null
   current: EpgProgrammeDto | null
   next: EpgProgrammeDto | null
 }

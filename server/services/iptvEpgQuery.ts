@@ -11,6 +11,10 @@ export interface EpgProgramme {
 
 export interface EpgNowRow {
   channel_stream_id: number
+  /** Channel name + logo so a now/next tile can say WHICH channel is airing
+   *  the programme (Home "On now") without a second lookup by id. */
+  name: string
+  stream_icon: string | null
   current: EpgProgramme | null
   next: EpgProgramme | null
 }
@@ -30,6 +34,8 @@ export interface EpgGridRow {
 
 type ChannelEpgRow = {
   stream_id: number
+  name: string
+  stream_icon: string | null
   epg_channel_id: string | null
 }
 
@@ -49,7 +55,7 @@ export function epgNow(db: IptvDb, channelStreamIds: number[], at: Date = new Da
 
   const placeholders = ids.map(() => '?').join(',')
   const channels = db.raw.prepare(`
-    SELECT stream_id, ${EPG_JOIN_ID} AS epg_channel_id
+    SELECT stream_id, name, stream_icon, ${EPG_JOIN_ID} AS epg_channel_id
     FROM channels
     WHERE stream_id IN (${placeholders})
   `).all(...ids) as ChannelEpgRow[]
@@ -69,11 +75,12 @@ export function epgNow(db: IptvDb, channelStreamIds: number[], at: Date = new Da
     .map((streamId) => {
       const channel = channelByStreamId.get(streamId)
       if (!channel) return null
-      if (!channel.epg_channel_id) return { channel_stream_id: streamId, current: null, next: null }
+      const base = { channel_stream_id: streamId, name: channel.name, stream_icon: channel.stream_icon }
+      if (!channel.epg_channel_id) return { ...base, current: null, next: null }
 
       const current = (programmeStmt.get(channel.epg_channel_id, iso, iso) as EpgProgramme | undefined) ?? null
       const next = (nextStmt.get(channel.epg_channel_id, iso) as EpgProgramme | undefined) ?? null
-      return { channel_stream_id: streamId, current, next }
+      return { ...base, current, next }
     })
     .filter((row): row is EpgNowRow => row != null)
 }

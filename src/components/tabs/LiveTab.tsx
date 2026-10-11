@@ -6,6 +6,7 @@ import {
   iptvApi,
   type ChannelDto,
   type EpgGridDto,
+  type EpgNowRow,
   type EpgProgrammeDto,
   type PagedDto,
   type EpgSearchHit,
@@ -248,9 +249,18 @@ export default function LiveTab() {
     }
   })
 
-  // Home's "On now" row tunes a channel via `#/live/<streamId>`. epg/now carries
-  // no channel name, hence the generic player title.
-  useIntent('live', true, (ref) => void playChannel({ stream_id: Number(ref), name: 'Live TV' }))
+  // Home's "On now" row tunes a channel via `#/live/<streamId>`. The epg/now rows
+  // that row rendered are still cached and carry the channel name, which titles
+  // the player as Apple's does.
+  useIntent('live', true, (ref) => {
+    const streamId = Number(ref)
+    let name = 'Live TV'
+    for (const [, rows] of queryClient.getQueriesData<EpgNowRow[]>({ queryKey: ['iptv', 'epg', 'now'] })) {
+      const hit = rows?.find((r) => r.channel_stream_id === streamId)?.name
+      if (hit) name = hit
+    }
+    void playChannel({ stream_id: streamId, name })
+  })
 
   // Shared by the per-channel guide modal and the grid guide. Mirrors
   // playChannel's concurrency handling so a 429 surfaces the kick-a-session
