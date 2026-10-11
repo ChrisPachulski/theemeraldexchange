@@ -54,7 +54,7 @@
 /* The shell owns top spacing (clears the fixed TopNav brand band) and
    the sub-nav strip. The inner LiveTab / VodTab / IptvSeriesTab views
    render below, with no top padding of their own. */
-.iptv-shell { padding-top: 4rem; }
+.iptv-shell { padding-top: var(--hero-pad-top); }
 .iptv-shell__subnav {
   display: flex; gap: .5rem; justify-content: center;
   padding: .5rem 1rem 1rem;
@@ -210,25 +210,58 @@ div.iptv-conn-modal__empty p { margin: 0 0 .5rem; }
 /* Padding-bottom leaves room for the sticky toolbar so the last grid
    row isn't permanently hidden behind it. Top padding is owned by the
    shell above; no need to clear TopNav twice. */
-.iptv-tab { padding: 0 1rem 5rem; }
+/* A column at least the viewport tall, so the toolbar docks at the bottom even
+   when a search leaves only a few rows above it. */
+.iptv-tab {
+  padding: 0 1rem 5rem;
+  display: flex; flex-direction: column;
+  min-height: calc(100dvh - var(--hero-pad-top));
+}
 /* Toolbar is sticky to the viewport bottom so search + category + the
    m3u export button stay reachable while the channel grid scrolls. */
 .iptv-tab__toolbar {
   position: sticky; bottom: 0; z-index: 50;
-  display: flex; gap: .5rem; padding: .75rem 1rem;
-  margin: 1rem -1rem -5rem;
-  background: rgba(14, 22, 18, 0.92);
-  backdrop-filter: blur(8px);
-  border-top: 1px solid rgba(255, 255, 255, .08);
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2);
+  padding: var(--s-3) var(--s-4);
+  margin: auto -1rem -5rem;
+  background: color-mix(in oklch, var(--surface) 88%, transparent);
+  backdrop-filter: blur(10px) saturate(140%);
+  border-top: 1px solid var(--border);
+  box-shadow: inset 0 1px 0 var(--frost);
 }
-.iptv-tab__search { flex: 1; padding: .5rem; }
-.iptv-tab__category { padding: .5rem; }
-.iptv-tab__guide-cats {
-  padding: .5rem .9rem; border-radius: 4px; cursor: pointer; white-space: nowrap;
-  border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.08); color: #f5f5f5;
+.iptv-tab__search {
+  flex: 1 1 16rem; min-width: 0; min-height: 40px; padding: var(--s-2) var(--s-4);
+  font: inherit; color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: var(--r-pod);
 }
-.iptv-tab__guide-cats:hover { background: rgba(255,255,255,.14); }
-.iptv-tab__guide-cats[aria-pressed="true"] { border-color: rgba(127,224,176,.5); background: rgba(29,92,64,.55); color: #7fe0b0; }
+.iptv-tab__search::placeholder { color: var(--text-subtle); }
+.iptv-tab__search:focus { outline: none; border-color: var(--emerald); box-shadow: 0 0 0 4px var(--emerald-ghost); }
+.iptv-tab__category {
+  min-height: 40px; padding: var(--s-2) var(--s-3); color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md);
+}
+/* Toolbar actions (Guide categories, Live preview, Export M3U, Recordings) as
+   secondary pills; the Guide/Channels/Favorites toggle keeps its own style. */
+.iptv-tab__guide-cats, .iptv-tab__toolbar > button {
+  min-height: 40px; padding: var(--s-2) var(--s-4); border-radius: var(--r-pod); cursor: pointer; white-space: nowrap;
+  font-family: var(--font-display); font-size: var(--t-xs); font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow); text-transform: uppercase;
+  color: var(--text-muted); background: var(--surface-2); border: 1px solid var(--border);
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.iptv-tab__guide-cats:hover, .iptv-tab__toolbar > button:hover { color: var(--text); border-color: var(--emerald); }
+.iptv-tab__guide-cats[aria-pressed="true"] { border-color: var(--hairline-emerald); background: var(--emerald-bg); color: var(--emerald); }
+.iptv-tab__guide-cats:focus-visible, .iptv-tab__toolbar > button:focus-visible { outline: 2px solid var(--emerald); outline-offset: 2px; }
+/* Phones: the search gets its own full row above the controls instead of the
+   toolbar pushing the whole page sideways. */
+@media (max-width: 520px) {
+  .iptv-tab__search { order: -1; flex-basis: 100%; }
+  .iptv-tab__guide-cats, .iptv-tab__toolbar > button, .iptv-tab__category { min-height: 36px; padding: var(--s-1) var(--s-3); }
+}
+/* The preview starts after resting a pointer on a programme: no hover, no use. */
+@media (hover: none) {
+  .iptv-tab__live-preview { display: none; }
+}
 /* Guide-categories picker (reuses .iptv-guide-modal shell). */
 .iptv-guide-cats__reset {
   margin: 0 1rem .5rem; padding: .4rem .8rem; align-self: flex-start; cursor: pointer;
@@ -375,7 +408,7 @@ div.iptv-tab__status p { margin: 0 0 .5rem; }
 }
 .iptv-channel-card[role="button"], .iptv-poster-card[role="button"], .iptv-series-detail__episode[role="button"] { cursor: pointer; }
 /* A tune is minting its grant: every other play affordance is a no-op until it lands. */
-.iptv-tab[aria-busy="true"] :is(.iptv-channel-card, .epg-guide__chan-play, .epg-guide__prog, .iptv-prog-results__item, .iptv-mini-guide__card) { cursor: progress; }
+.iptv-tab[aria-busy="true"] :is(.iptv-channel-card, .epg-guide__chan-play, .epg-guide__prog, .iptv-prog-card__feed, .iptv-mini-guide__card) { cursor: progress; }
 .iptv-channel-card[role="button"]:focus-visible, .iptv-poster-card[role="button"]:focus-visible, .iptv-series-detail__episode[role="button"]:focus-visible { outline: 2px solid #79d7ff; outline-offset: 2px; }
 .iptv-player-modal { position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,.85); display:flex; flex-direction:column; align-items:center; justify-content:center; }
 .iptv-player-modal__header { width:100%; max-width:960px; display:flex; justify-content:space-between; align-items:center; padding:.5rem 1rem; color:#fff; }
@@ -442,22 +475,60 @@ div.iptv-guide-modal__status p { margin:0 0 .5rem; }
   .iptv-guide-list__item { grid-template-columns: minmax(0, 1fr) auto; gap:.35rem .6rem; }
   .iptv-guide-list__time { grid-column: 1 / -1; }
 }
-/* Programme search hits above the guide/cards (Apple Live -> Search "Programs"). */
-.iptv-prog-results { margin:.5rem 0 .75rem; }
-.iptv-prog-results__head { margin:0 0 .4rem; font-size:.78rem; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-dim,#9a9a9a); }
-.iptv-prog-results__head span { margin-left:.4rem; font-weight:400; }
-.iptv-prog-results__list { list-style:none; margin:0; padding:0; display:grid; gap:.4rem; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); max-height:14rem; overflow-y:auto; }
-.iptv-prog-results__item {
-  width:100%; text-align:left; display:flex; flex-direction:column; gap:.2rem; padding:.5rem .7rem; cursor:pointer;
-  background:#101814; border:1px solid rgba(255,255,255,.1); border-radius:6px; color:#f5f5f5;
+/* Programme search hits above the guide/cards (Apple Live -> Search "Programs"),
+   one ice-block card per airing with its feeds as pills. */
+.iptv-prog-results { margin: 0 0 var(--s-5); }
+.iptv-prog-results__head {
+  margin: 0 0 var(--s-3); font-family: var(--font-display); font-size: var(--t-xs); font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow); text-transform: uppercase; color: var(--text-subtle);
 }
-.iptv-prog-results__item:hover { border-color:rgba(127,224,176,.45); background:#15211b; }
-.iptv-prog-results__item:focus-visible { outline:2px solid #79d7ff; outline-offset:2px; }
-.iptv-prog-results__title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.iptv-prog-results__meta { display:flex; gap:.5rem; align-items:center; min-width:0; font-size:.8rem; color:var(--text-dim,#9a9a9a); }
-.iptv-prog-results__live { color:#7fe0b0; font-size:.68rem; letter-spacing:.06em; }
-.iptv-prog-results__chan { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.iptv-prog-results__time { flex-shrink:0; margin-left:auto; font-variant-numeric:tabular-nums; }
+.iptv-prog-results__count { margin-left: var(--s-2); font-family: var(--font-mono); color: var(--emerald); font-variant-numeric: tabular-nums; }
+.iptv-prog-results__feeds { margin-left: var(--s-2); }
+.iptv-prog-results__list {
+  list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-3);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
+}
+.iptv-prog-card {
+  display: flex; flex-direction: column; gap: var(--s-2); min-width: 0;
+  padding: var(--s-3) var(--s-4); border-radius: var(--r-lg);
+  background: var(--surface); border: 1px solid var(--border); box-shadow: var(--elev-card);
+}
+.iptv-prog-card--live { border-color: var(--hairline-emerald); }
+/* A library hit: the whole card opens the title. */
+.iptv-prog-card--link {
+  width: 100%; height: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
+}
+.iptv-prog-card--link:hover { background: var(--surface-2); border-color: var(--emerald); }
+.iptv-prog-card--link:focus-visible { outline: 2px solid var(--emerald); outline-offset: 2px; }
+.iptv-prog-card__when {
+  margin: 0; font-family: var(--font-display); font-size: var(--t-xs); font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow); text-transform: uppercase; color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.iptv-prog-card__live { color: var(--emerald); }
+.iptv-prog-card__live::before {
+  content: ''; display: inline-block; width: 6px; height: 6px; margin: 0 var(--s-2) 1px 0; border-radius: 50%;
+  background: var(--emerald); box-shadow: 0 0 6px var(--emerald); vertical-align: middle;
+}
+.iptv-prog-card__sep { font-family: var(--font-mono); color: var(--text-subtle); letter-spacing: 0; }
+.iptv-prog-card__title {
+  margin: 0; font-family: var(--font-display); font-size: var(--t-md); font-weight: var(--w-title);
+  line-height: 1.2; letter-spacing: var(--tr-tight); color: var(--text);
+  display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.iptv-prog-card__feeds { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: auto; padding-top: var(--s-1); }
+.iptv-prog-card__feed, .iptv-prog-card__more {
+  max-width: 100%; min-height: 32px; padding: var(--s-1) var(--s-3); border-radius: var(--r-pod); cursor: pointer;
+  font-size: var(--t-sm); color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: border-color var(--dur-fast) var(--ease), background-color var(--dur-fast) var(--ease);
+}
+.iptv-prog-card--live .iptv-prog-card__feed:first-child { background: var(--emerald-ghost); border-color: var(--hairline-emerald); }
+.iptv-prog-card__feed:hover { border-color: var(--emerald); background: var(--emerald-ghost); }
+.iptv-prog-card__more { color: var(--text-muted); background: transparent; }
+.iptv-prog-card__more:hover { color: var(--text); border-color: var(--text-subtle); }
+.iptv-prog-card__feed:focus-visible, .iptv-prog-card__more:focus-visible { outline: 2px solid var(--emerald); outline-offset: 2px; }
 /* ── View toggle (Channels / Guide) — sits in the IPTV toolbar ───────── */
 .iptv-tab__viewtoggle { display:inline-flex; border:1px solid rgba(255,255,255,.14); border-radius:999px; overflow:hidden; flex-shrink:0; }
 .iptv-tab__viewtoggle button { background:transparent; color:var(--text-dim,#bbb); border:0; padding:.5rem .9rem; font-size:.8rem; letter-spacing:.03em; text-transform:uppercase; cursor:pointer; }
@@ -541,8 +612,14 @@ div.iptv-guide-modal__status p { margin:0 0 .5rem; }
   color:#ffd58a; background:rgba(255,190,80,.08); border:1px solid rgba(255,190,80,.25); border-radius:6px;
 }
 /* Guide wrapper: pinned now/next detail pane above, scrollable grid below. */
-.epg-guide-wrap { display:flex; flex-direction:column; height:calc(100dvh - 12.5rem); min-height:380px; gap:.5rem; }
-.epg-guide-wrap .epg-guide { flex:1; height:auto; min-height:0; }
+/* Capped at the viewport below the nav and toolbar, but only as tall as its
+   rows: a search that leaves three channels gets a three-row guide, not a
+   screen-high empty box. */
+.epg-guide-wrap {
+  display:flex; flex-direction:column; gap:.5rem;
+  max-height:max(380px, calc(100dvh - var(--hero-pad-top) - 6rem));
+}
+.epg-guide-wrap .epg-guide { flex:0 1 auto; height:auto; min-height:0; }
 
 /* Pinned detail pane (Apple-guide now/next slab, hover/focus driven). */
 .epg-detail {
@@ -550,8 +627,9 @@ div.iptv-guide-modal__status p { margin:0 0 .5rem; }
   background:#101814; border:1px solid rgba(255,255,255,.1); border-radius:6px;
   padding:.55rem .8rem; display:flex; flex-direction:column; gap:.3rem;
 }
-.epg-detail--empty { flex-direction:row; align-items:center; justify-content:space-between; color:var(--text-dim,#9a9a9a); }
-.epg-detail__hint { font-size:.9rem; }
+.epg-detail--empty { flex-direction:row; align-items:center; gap:.5rem; color:var(--text-dim,#9a9a9a); }
+/* Pushes Replay + Jump to live together to the right edge. */
+.epg-detail__hint { font-size:.9rem; margin-right:auto; }
 .epg-detail__head { display:flex; align-items:center; gap:.5rem; }
 .epg-detail__chan-num { font-variant-numeric:tabular-nums; font-weight:700; color:#7fe0b0; font-size:.85rem; }
 .epg-detail__chan-name { font-weight:600; color:#cfeede; font-size:.9rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:40%; }

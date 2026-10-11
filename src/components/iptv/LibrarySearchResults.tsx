@@ -81,17 +81,22 @@ export function LibrarySearchResults({ q }: { q: string }) {
             hits.length > 0 && (
               <section key={label} className="iptv-prog-results" aria-label={`Library ${label}`}>
                 <h2 className="iptv-prog-results__head">
-                  {label} <span>{hits.length}</span>
+                  {label} <span className="iptv-prog-results__count">{hits.length}</span>
                 </h2>
                 <ul className="iptv-prog-results__list">
                   {hits.map((hit) => (
                     <li key={hit.key}>
-                      <button type="button" className="iptv-prog-results__item" onClick={hit.open}>
-                        <span className="iptv-prog-results__title">{hit.title}</span>
-                        <span className="iptv-prog-results__meta">
-                          <span className="iptv-prog-results__chan">Library</span>
-                          {hit.year != null && <span className="iptv-prog-results__time">{hit.year}</span>}
+                      <button type="button" className="iptv-prog-card iptv-prog-card--link" onClick={hit.open}>
+                        <span className="iptv-prog-card__when">
+                          Library
+                          {hit.year != null && (
+                            <>
+                              {' '}
+                              <span className="iptv-prog-card__sep" aria-hidden="true">--</span> {hit.year}
+                            </>
+                          )}
                         </span>
+                        <span className="iptv-prog-card__title">{hit.title}</span>
                       </button>
                     </li>
                   ))}

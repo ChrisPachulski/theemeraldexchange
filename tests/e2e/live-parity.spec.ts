@@ -199,7 +199,8 @@ test('a programme hit opens the real channel’s schedule on the matched program
   })
   await page.goto('/#/live')
   await page.getByPlaceholder('Search channels and programs…').fill('football')
-  await page.getByRole('button', { name: /Sunday Night Football/ }).click()
+  await expect(page.getByRole('region', { name: 'Matching programs' })).toContainText('Sunday Night Football')
+  await page.getByRole('button', { name: 'Show US NBC in the guide' }).click()
 
   const dialog = page.getByRole('dialog', { name: 'US NBC guide' })
   await expect(dialog).toBeVisible()
