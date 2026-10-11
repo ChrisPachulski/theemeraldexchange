@@ -56,3 +56,16 @@ export function useIptvEpgChannel(channelId: number | null, fromIso: string, toI
     staleTime: 60_000,
   })
 }
+
+// The server rejects terms under 2 chars (a 1-char LIKE scans every programme).
+export const EPG_SEARCH_MIN_CHARS = 2
+
+export function useIptvEpgSearch(q: string, fromIso: string, toIso: string, limit?: number) {
+  const term = q.trim()
+  return useQuery({
+    queryKey: ['iptv', 'epg', 'search', term, fromIso, toIso, limit ?? null],
+    queryFn: () => iptvApi.epgSearch(term, fromIso, toIso, limit),
+    staleTime: 60_000,
+    enabled: term.length >= EPG_SEARCH_MIN_CHARS,
+  })
+}

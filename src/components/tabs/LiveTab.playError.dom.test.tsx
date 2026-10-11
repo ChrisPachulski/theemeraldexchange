@@ -48,6 +48,8 @@ vi.mock('../../lib/hooks/useIptvCategories', () => ({ useIptvCategories: () => (
 vi.mock('../../lib/hooks/useIptvEpg', () => ({
   useIptvEpgNow: () => ({ data: [] }),
   useIptvEpgChannel: () => ({ data: [], isLoading: false, error: null }),
+  useIptvEpgSearch: () => ({ data: undefined, isLoading: false, error: null }),
+  EPG_SEARCH_MIN_CHARS: 2,
 }))
 vi.mock('../../lib/hooks/useIptvLive', () => ({
   useIptvLive: () => ({ data: { items: [CHANNEL], total: 1 }, isLoading: false, error: null, isFetching: false }),
