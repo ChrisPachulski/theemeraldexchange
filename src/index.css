@@ -122,6 +122,8 @@
 }
 .iptv-conn-row__kick:hover { background: #c84747; }
 .iptv-conn-row__kick:disabled { opacity: .6; cursor: wait; }
+.iptv-conn-row__error { grid-column: 1 / -1; margin: 0; font-size: .8rem; color: var(--text-error, #ff7b7b); }
+div.iptv-conn-modal__empty p { margin: 0 0 .5rem; }
 
 /* ── IPTV Tab shared styles ─────────────────────────────────────────── */
 /* Padding-bottom leaves room for the sticky toolbar so the last grid
@@ -213,6 +215,8 @@ div.iptv-tab__status p { margin: 0 0 .5rem; }
   border-radius: 0; pointer-events: none;
 }
 .iptv-channel-card[role="button"], .iptv-poster-card[role="button"], .iptv-series-detail__episode[role="button"] { cursor: pointer; }
+/* A tune is minting its grant: every other play affordance is a no-op until it lands. */
+.iptv-tab[aria-busy="true"] :is(.iptv-channel-card, .epg-guide__chan-play, .epg-guide__prog, .iptv-prog-results__item, .iptv-mini-guide__card) { cursor: progress; }
 .iptv-channel-card[role="button"]:focus-visible, .iptv-poster-card[role="button"]:focus-visible, .iptv-series-detail__episode[role="button"]:focus-visible { outline: 2px solid #79d7ff; outline-offset: 2px; }
 .iptv-player-modal { position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,.85); display:flex; flex-direction:column; align-items:center; justify-content:center; }
 .iptv-player-modal__header { width:100%; max-width:960px; display:flex; justify-content:space-between; align-items:center; padding:.5rem 1rem; color:#fff; }
@@ -224,10 +228,18 @@ div.iptv-tab__status p { margin: 0 0 .5rem; }
 .iptv-guide-modal__close { background:none; border:0; color:#fff; font-size:1.5rem; line-height:1; cursor:pointer; }
 .iptv-guide-modal__status { margin:0; padding:1rem; color:var(--text-dim,#aaa); }
 .iptv-guide-modal__status--error { color:var(--text-error,#ff7b7b); }
+div.iptv-guide-modal__status p { margin:0 0 .5rem; }
 .iptv-guide-list { list-style:none; margin:0; padding:0; overflow:auto; }
 .iptv-guide-list__item { display:grid; grid-template-columns: 9.5rem minmax(0, 1fr) auto; gap:.75rem; align-items:center; padding:.55rem 1rem; border-bottom:1px solid rgba(255,255,255,.08); }
 .iptv-guide-list__time { color:var(--text-dim,#aaa); font-size:.85rem; }
+.iptv-guide-list__info { min-width:0; display:flex; flex-direction:column; gap:.15rem; }
 .iptv-guide-list__title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.iptv-guide-list__desc {
+  color:var(--text-dim,#aaa); font-size:.8rem; line-height:1.3;
+  display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+}
+/* The programme a search hit opened the guide on. */
+.iptv-guide-list__item--selected { background:rgba(61,220,151,.08); box-shadow:inset 3px 0 0 #3ddc97; }
 .iptv-guide-list__catchup { padding:.3rem .55rem; border-radius:4px; border:1px solid rgba(255,255,255,.2); background:#1d6f4f; color:#fff; cursor:pointer; }
 .iptv-guide-list__catchup:disabled { opacity:.6; cursor:wait; }
 .iptv-guide-list__note { color:var(--text-dim,#888); font-size:.82rem; white-space:nowrap; }

@@ -1,11 +1,14 @@
 // src/components/tabs/LiveTab.tsx
-import { type KeyboardEvent, useEffect, useMemo, useState } from 'react'
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import IptvPlayer from '../player/IptvPlayer'
 import EpgGuide, { type GuideChannel } from './EpgGuide'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   iptvApi,
   type ChannelDto,
+  type EpgGridDto,
   type EpgProgrammeDto,
+  type PagedDto,
   type EpgSearchHit,
   type SourceUnavailableError,
   type StreamGrant,
@@ -90,11 +93,11 @@ function formatGuideTime(iso: string): string {
 
 export default function LiveTab() {
   const [q, setQ] = useState('')
-  const [view, setView] = useState<'cards' | 'guide'>('guide')
+  const [view, setView] = useState<'cards' | 'guide' | 'favorites'>('guide')
   const [categoryId, setCategoryId] = useState<number | undefined>(undefined)
   const [offset, setOffset] = useState(0)
   const [playing, setPlaying] = useState<{ grant: StreamGrant; title: string; itemId: string; live?: boolean } | null>(null)
-  const [guideFor, setGuideFor] = useState<(GuideChannel & { untilIso?: string }) | null>(null)
+  const [guideFor, setGuideFor] = useState<(GuideChannel & { untilIso?: string; selectedStart?: string }) | null>(null)
   const [concurrencyError, setConcurrencyError] = useState<ConcurrencyLimitPayload | null>(null)
   const [playError, setPlayError] = useState<PlayFailure | null>(null)
   const [pendingPlay, setPendingPlay] = useState<(() => Promise<void>) | null>(null)
@@ -109,6 +112,23 @@ export default function LiveTab() {
   const list = useIptvLive({ q: debounced, categoryId, limit, offset })
   const favs = useIptvFavoriteSet()
   const toggleFavorite = useToggleIptvFavorite()
+  const queryClient = useQueryClient()
+  // One grant per tap (Apple's in-flight tune guard): a double click must not
+  // mint two upstream sessions on a 2-connection plan. The ref is the guard
+  // (synchronous); the state only drives the busy cursor.
+  const tuningRef = useRef(false)
+  const [tuning, setTuning] = useState(false)
+  const guardTune = async (tune: () => Promise<void>) => {
+    if (tuningRef.current) return
+    tuningRef.current = true
+    setTuning(true)
+    try {
+      await tune()
+    } finally {
+      tuningRef.current = false
+      setTuning(false)
+    }
+  }
   const reportPosition = useReportPosition('live', playing?.itemId ?? '')
 
   // Release the upstream concurrency slot whenever the active channel changes
@@ -148,8 +168,33 @@ export default function LiveTab() {
     () => new Set([...favs].filter((k) => k.startsWith('live:')).map((k) => Number(k.slice('live:'.length)))),
     [favs],
   )
-  const visibleChannels = useMemo(() => list.data?.items ?? [], [list.data])
-  const visibleIds = useMemo(() => visibleChannels.map((c) => c.stream_id), [visibleChannels])
+  // A favorite row is just an id and the server has no lookup by id, so names and
+  // logos come from any channel page or guide grid already loaded this session
+  // (Apple's FavoritesList resolves from one channel page), else "Channel N".
+  const favoriteChannels = (): ChannelDto[] => {
+    const known = new Map<number, ChannelDto>()
+    for (const [, page] of queryClient.getQueriesData<PagedDto<ChannelDto>>({ queryKey: ['iptv', 'live'] })) {
+      for (const c of page?.items ?? []) known.set(c.stream_id, c)
+    }
+    for (const [, rows] of queryClient.getQueriesData<EpgGridDto[]>({ queryKey: ['iptv', 'epg', 'grid'] })) {
+      for (const r of rows ?? []) if (!known.has(r.stream_id)) known.set(r.stream_id, { ...r, category_id: null })
+    }
+    return [...favStreamIds].map(
+      (id) =>
+        known.get(id) ?? {
+          stream_id: id,
+          num: 0,
+          name: `Channel ${id}`,
+          stream_icon: null,
+          epg_channel_id: null,
+          category_id: null,
+          tv_archive: 0,
+          tv_archive_duration: null,
+        },
+    )
+  }
+  const visibleChannels = view === 'favorites' ? favoriteChannels() : (list.data?.items ?? [])
+  const visibleIds = visibleChannels.map((c) => c.stream_id)
   const nowEpg = useIptvEpgNow(visibleIds)
   const count = visibleChannels.length
   const total = list.data?.total ?? 0
@@ -166,7 +211,7 @@ export default function LiveTab() {
     return rows
   }, [nowEpg.data])
 
-  const playChannel = async (stream: { stream_id: number; name: string }) => {
+  const playChannel = (stream: { stream_id: number; name: string }) => guardTune(async () => {
     setPlayError(null)
     const attempt = async () => {
       const grant = await iptvApi.grantLive(stream.stream_id.toString())
@@ -186,12 +231,12 @@ export default function LiveTab() {
       // (with source_unavailable alternatives when the server sent them).
       setPlayError(playFailureFromError(err))
     }
-  }
+  })
 
   // Shared by the per-channel guide modal and the grid guide. Mirrors
   // playChannel's concurrency handling so a 429 surfaces the kick-a-session
   // modal instead of throwing.
-  const playCatchup = async (channel: GuideChannel, programme: EpgProgrammeDto) => {
+  const playCatchup = (channel: GuideChannel, programme: EpgProgrammeDto) => guardTune(async () => {
     setPlayError(null)
     const attempt = async () => {
       const grant = await iptvApi.grantCatchup(channel.id, programme.start_utc, programmeDurationMin(programme))
@@ -208,6 +253,22 @@ export default function LiveTab() {
       }
       setPlayError(playFailureFromError(err))
     }
+  })
+
+  // A programme hit carries no archive metadata; resolve its real channel so the
+  // guide's catch-up rows are right (Apple SearchScreen.openProgram), then open
+  // the guide scrolled to the hit.
+  const showHitInGuide = async (hit: EpgSearchHit) => {
+    const page = await iptvApi.listLive({ q: hit.channelName, limit: 100 }).catch(() => null)
+    const c = page?.items.find((ch) => ch.stream_id === hit.streamId)
+    setGuideFor({
+      id: hit.streamId,
+      name: hit.channelName,
+      archiveDays: c ? Math.max(0, c.tv_archive_duration ?? 7) : 0,
+      canCatchup: c?.tv_archive === 1,
+      untilIso: hit.programme.stop_utc,
+      selectedStart: hit.programme.start_utc,
+    })
   }
 
   const handleCardKeyDown = (event: KeyboardEvent, stream: ChannelDto) => {
@@ -218,7 +279,7 @@ export default function LiveTab() {
   }
 
   return (
-    <section className="iptv-tab">
+    <section className="iptv-tab" aria-busy={tuning || undefined}>
       {playError && (
         <div className="iptv-tab__status iptv-tab__status--error" role="alert">
           <p>{playError.message}</p>
@@ -241,15 +302,7 @@ export default function LiveTab() {
       <ProgrammeResults
         q={debounced}
         onPlayLive={(hit) => void playChannel({ stream_id: hit.streamId, name: hit.channelName })}
-        onShowInGuide={(hit) =>
-          setGuideFor({
-            id: hit.streamId,
-            name: hit.channelName,
-            archiveDays: 0,
-            canCatchup: false,
-            untilIso: hit.programme.stop_utc,
-          })
-        }
+        onShowInGuide={(hit) => void showHitInGuide(hit)}
       />
       {view === 'guide' ? (
         <EpgGuide
@@ -266,8 +319,11 @@ export default function LiveTab() {
         />
       ) : (
       <>
-      {list.isLoading && <p className="iptv-tab__status">Loading…</p>}
-      {list.error && <p className="iptv-tab__status iptv-tab__status--error">Failed to load channels.</p>}
+      {view === 'cards' && list.isLoading && <p className="iptv-tab__status">Loading…</p>}
+      {view === 'cards' && list.error && <p className="iptv-tab__status iptv-tab__status--error">Failed to load channels.</p>}
+      {view === 'favorites' && visibleChannels.length === 0 && (
+        <p className="iptv-tab__status">No favorite channels yet. Star a channel in Channels or the Guide.</p>
+      )}
 
       <ul className="iptv-channel-grid">
         {visibleChannels.map((c) => {
@@ -301,7 +357,7 @@ export default function LiveTab() {
                 : <div className="iptv-channel-card__icon iptv-channel-card__icon--placeholder" aria-hidden />}
               <div className="iptv-channel-card__body">
                 <div className="iptv-channel-card__meta">
-                  <span className="iptv-channel-card__num">{c.num}</span>
+                  <span className="iptv-channel-card__num">{c.num || ''}</span>
                   <span className="iptv-channel-card__name">{c.name}</span>
                 </div>
                 <div className="iptv-channel-card__epg">
@@ -331,7 +387,7 @@ export default function LiveTab() {
         })}
       </ul>
 
-      {total > limit && (
+      {view === 'cards' && total > limit && (
         <nav className="iptv-tab__pager" aria-label="Channel pages">
           <span className="iptv-tab__page-count">
             {pageStart}-{pageEnd} of {total}
@@ -364,6 +420,14 @@ export default function LiveTab() {
             onClick={() => setView('cards')}
           >
             Channels
+          </button>
+          <button
+            type="button"
+            className={view === 'favorites' ? 'is-active' : ''}
+            aria-pressed={view === 'favorites'}
+            onClick={() => setView('favorites')}
+          >
+            Favorites
           </button>
         </div>
         <input
@@ -430,7 +494,12 @@ export default function LiveTab() {
         <ChannelGuide
           channel={guideFor}
           untilIso={guideFor.untilIso}
+          selectedStart={guideFor.selectedStart}
           onClose={() => setGuideFor(null)}
+          onPlayLive={async () => {
+            await playChannel({ stream_id: guideFor.id, name: guideFor.name })
+            setGuideFor(null)
+          }}
           onPlayCatchup={async (programme) => {
             await playCatchup(guideFor, programme)
             setGuideFor(null)
@@ -588,13 +657,18 @@ function GuideCategorySettings({
 function ChannelGuide({
   channel,
   untilIso,
+  selectedStart,
   onClose,
+  onPlayLive,
   onPlayCatchup,
 }: {
   channel: GuideChannel
   // Extends the window past the default 4h so an upcoming search hit is listed.
   untilIso?: string
+  // A programme search hit to scroll to and highlight.
+  selectedStart?: string
   onClose: () => void
+  onPlayLive: () => Promise<void>
   onPlayCatchup: (programme: EpgProgrammeDto) => Promise<void>
 }) {
   const modalRef = useModalA11y<HTMLDivElement>(onClose)
@@ -611,14 +685,19 @@ function ChannelGuide({
   }, [openedAt, untilIso])
   const epg = useIptvEpgChannel(channel.id, fromIso, toIso)
   const archiveCutoff = openedAt - channel.archiveDays * 24 * 3600_000
+  const selectedMs = selectedStart ? new Date(selectedStart).getTime() : NaN
+  const selectedRef = useRef<HTMLLIElement | null>(null)
+  useEffect(() => {
+    selectedRef.current?.scrollIntoView({ block: 'center' })
+  }, [epg.data])
 
-  const handleCatchup = async (programme: EpgProgrammeDto) => {
+  const handlePlay = async (programme: EpgProgrammeDto, play: () => Promise<void>) => {
     setError(null)
     setPendingStart(programme.start_utc)
     try {
-      await onPlayCatchup(programme)
+      await play()
     } catch {
-      setError('Failed to start catchup.')
+      setError('Couldn’t start playback.')
     } finally {
       setPendingStart(null)
     }
@@ -642,7 +721,13 @@ function ChannelGuide({
         </header>
 
         {epg.isLoading && <p className="iptv-guide-modal__status">Loading guide…</p>}
-        {epg.error && <p className="iptv-guide-modal__status iptv-guide-modal__status--error">Failed to load guide.</p>}
+        {epg.error && (
+          // A failed fetch must not read as "no programmes" — offer a real retry.
+          <div className="iptv-guide-modal__status iptv-guide-modal__status--error" role="alert">
+            <p>Couldn’t load the guide.</p>
+            <button type="button" className="iptv-tab__retry" onClick={() => void epg.refetch()}>Retry</button>
+          </div>
+        )}
         {error && <p className="iptv-guide-modal__status iptv-guide-modal__status--error">{error}</p>}
 
         {!epg.isLoading && !epg.error && (epg.data ?? []).length === 0 && (
@@ -657,17 +742,36 @@ function ChannelGuide({
             const isCurrent = Number.isFinite(start) && Number.isFinite(stop) && start <= openedAt && stop > openedAt
             const isFuture = Number.isFinite(start) && start > openedAt
             const inArchive = channel.canCatchup && isPast && start >= archiveCutoff
+            const isSelected = start === selectedMs
+            const description = programme.description?.trim()
 
             return (
-              <li className="iptv-guide-list__item" key={`${programme.channel_id}:${programme.start_utc}`}>
+              <li
+                ref={isSelected ? selectedRef : undefined}
+                className={'iptv-guide-list__item' + (isSelected ? ' iptv-guide-list__item--selected' : '')}
+                key={`${programme.channel_id}:${programme.start_utc}`}
+              >
                 <span className="iptv-guide-list__time">{formatGuideTime(programme.start_utc)}</span>
-                <span className="iptv-guide-list__title">{epgTitle(programme.title)}</span>
+                <span className="iptv-guide-list__info">
+                  <span className="iptv-guide-list__title">{epgTitle(programme.title)}</span>
+                  {description && <span className="iptv-guide-list__desc">{description}</span>}
+                </span>
+                {isCurrent && (
+                  <button
+                    className="iptv-guide-list__catchup"
+                    type="button"
+                    disabled={pendingStart === programme.start_utc}
+                    onClick={() => void handlePlay(programme, onPlayLive)}
+                  >
+                    Watch live
+                  </button>
+                )}
                 {inArchive && (
                   <button
                     className="iptv-guide-list__catchup"
                     type="button"
                     disabled={pendingStart === programme.start_utc}
-                    onClick={() => void handleCatchup(programme)}
+                    onClick={() => void handlePlay(programme, () => onPlayCatchup(programme))}
                   >
                     Catchup
                   </button>
@@ -675,7 +779,6 @@ function ChannelGuide({
                 {!inArchive && isPast && (
                   <span className="iptv-guide-list__note">{channel.canCatchup ? '(beyond archive)' : '(no archive)'}</span>
                 )}
-                {isCurrent && <span className="iptv-guide-list__note">(now)</span>}
                 {isFuture && <span className="iptv-guide-list__note">(upcoming)</span>}
               </li>
             )
