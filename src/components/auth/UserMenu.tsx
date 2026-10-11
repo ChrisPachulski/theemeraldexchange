@@ -10,6 +10,7 @@ import { DevicesPanel } from './DevicesPanel'
 import { InvitesPanel } from './InvitesPanel'
 import { LinkDeviceModal } from './LinkDeviceModal'
 import { PreferencesPanel } from './PreferencesPanel'
+import { PlaybackSettings } from '../media/PlaybackSettings'
 import './UserMenu.css'
 
 // Trigger pill in the top-right cluster + dropdown panel for the
@@ -198,6 +199,7 @@ export function UserMenu() {
 
           <hr className="user-menu__divider" />
           <PreferencesPanel />
+          <PlaybackSettings />
 
           <hr className="user-menu__divider" />
           <button

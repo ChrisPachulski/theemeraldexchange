@@ -336,3 +336,39 @@ describe('SidecarSubtitleTrack reload retry', () => {
     expect(track()).toBe(settled)
   })
 })
+
+describe('IptvPlayer (mounted) — progressive direct play', () => {
+  const progressiveGrant: StreamGrant = { delivery: 'progressive', url: '/api/media/stream/movie/9?t=tok' }
+
+  it('escalates once the browser reports it cannot decode the file', () => {
+    const onDeliveryStruggling = vi.fn()
+    render(<IptvPlayer grant={progressiveGrant} onDeliveryStruggling={onDeliveryStruggling} />)
+    const video = screen.getByTestId('iptv-player-video')
+
+    // A network abort is not a decode failure: no escalation.
+    Object.defineProperty(video, 'error', { configurable: true, value: { code: 2 } })
+    video.dispatchEvent(new Event('error'))
+    expect(onDeliveryStruggling).not.toHaveBeenCalled()
+
+    Object.defineProperty(video, 'error', { configurable: true, value: { code: 3 } }) // MEDIA_ERR_DECODE
+    video.dispatchEvent(new Event('error'))
+    expect(onDeliveryStruggling).toHaveBeenCalledOnce()
+  })
+
+  it('selects the preferred audio language once the native tracks are known', () => {
+    render(<IptvPlayer grant={progressiveGrant} preferredAudioLanguage="es" />)
+    const video = screen.getByTestId('iptv-player-video')
+    const tracks = [
+      { label: 'English', language: 'en', enabled: true },
+      { label: 'Español', language: 'spa', enabled: false },
+    ]
+    Object.defineProperty(video, 'audioTracks', {
+      configurable: true,
+      value: Object.assign({ length: 2 }, tracks),
+    })
+    act(() => {
+      video.dispatchEvent(new Event('loadedmetadata'))
+    })
+    expect(tracks.map((t) => t.enabled)).toEqual([false, true])
+  })
+})

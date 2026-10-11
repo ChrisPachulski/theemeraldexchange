@@ -1,15 +1,52 @@
+/* eslint-disable react-refresh/only-export-components -- the episode label
+   formatters are shared with TvTab and the player; fast-refresh is irrelevant
+   for pure functions. */
 import { useMediaEpisodes } from '../../lib/hooks/useMediaLibrary'
 import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import type { MediaEpisode } from '../../lib/api/media'
 import './EpisodePicker.css'
 
+export function episodeCode(ep: Pick<MediaEpisode, 'season' | 'episode'>): string {
+  return `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')}`
+}
+
 /** Format an episode label like "Show — S02E05 · Title". The em dash here is
  *  a SEPARATOR between data fields (show vs episode code), not prose copy —
  *  DESIGN.md's em-dash law governs sentence punctuation; this is the same
  *  glyph-as-delimiter idiom as the stat-table '—' placeholders. */
-function episodeLabel(showTitle: string, ep: MediaEpisode): string {
-  const code = `S${String(ep.season).padStart(2, '0')}E${String(ep.episode).padStart(2, '0')}`
+export function episodeLabel(showTitle: string, ep: MediaEpisode): string {
+  const code = episodeCode(ep)
   return ep.title ? `${showTitle} — ${code} · ${ep.title}` : `${showTitle} — ${code}`
+}
+
+/** The episode rows, shared by this picker and the player's queue popover.
+ *  `currentId` marks the playing episode (aria-current). */
+export function EpisodeList({
+  episodes,
+  currentId,
+  onPick,
+}: {
+  episodes: ReadonlyArray<MediaEpisode>
+  currentId?: number
+  onPick: (ep: MediaEpisode) => void
+}) {
+  return (
+    <ul className="media-episode-list">
+      {episodes.map((ep) => (
+        <li key={ep.id}>
+          <button
+            type="button"
+            className="media-episode-list__item"
+            aria-current={ep.id === currentId ? 'true' : undefined}
+            onClick={() => onPick(ep)}
+          >
+            <span className="media-episode-list__code">{episodeCode(ep)}</span>
+            <span className="media-episode-list__title">{ep.title ?? 'Untitled'}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
 }
 
 type Props = {
@@ -58,22 +95,10 @@ export function EpisodePicker({ showId, showTitle, onClose, onPlay }: Props) {
         <p className="iptv-tab__status">No episodes scanned for this show.</p>
       )}
       {episodes.data && episodes.data.items.length > 0 && (
-        <ul className="media-episode-list">
-          {episodes.data.items.map((ep) => (
-            <li key={ep.id}>
-              <button
-                type="button"
-                className="media-episode-list__item"
-                onClick={() => onPlay(ep, episodeLabel(showTitle, ep))}
-              >
-                <span className="media-episode-list__code">
-                  S{String(ep.season).padStart(2, '0')}E{String(ep.episode).padStart(2, '0')}
-                </span>
-                <span className="media-episode-list__title">{ep.title ?? 'Untitled'}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <EpisodeList
+          episodes={episodes.data.items}
+          onPick={(ep) => onPlay(ep, episodeLabel(showTitle, ep))}
+        />
       )}
     </div>
   )

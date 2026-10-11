@@ -3,6 +3,7 @@
    unit-tested directly; fast-refresh is irrelevant for these pure functions. */
 import { useEffect, useRef, useState } from 'react'
 import type { StreamGrant } from '../../lib/api/iptv'
+import { preferredTrackIndex } from '../../lib/playbackPrefs'
 import './IptvPlayer.css'
 
 export type TrackOption = {
@@ -97,8 +98,12 @@ export type IptvPlayerProps = {
   /** Progressive delivery only: fired ONCE when the stream has genuinely
    *  struggled (≥2 confirmed stall episodes in 120 s, user seeks excluded).
    *  The owner is expected to re-grant with buffered (HLS) delivery at the
-   *  current position. Absent prop = no escalation (IPTV unaffected). */
+   *  current position. Absent prop = no escalation (IPTV unaffected). Also
+   *  fired when the browser can't decode the progressive file at all. */
   onDeliveryStruggling?: () => void
+  /** Audio language to select when the element exposes several audio tracks
+   *  (Safari's native audioTracks). Absent = keep the engine's pick (IPTV). */
+  preferredAudioLanguage?: string
 }
 
 export function labelForTrack(track: { name?: string; lang?: string; label?: string; language?: string }, index: number): string {
@@ -770,6 +775,7 @@ export default function IptvPlayer({
   onLiveLost,
   finite = false,
   onDeliveryStruggling,
+  preferredAudioLanguage,
 }: IptvPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const hlsRef = useRef<HlsPlayer | null>(null)
@@ -805,6 +811,13 @@ export default function IptvPlayer({
 
     const onLoadedMetadata = () => {
       updateNativeTracks()
+      // The viewer's audio language (playbackPrefs), applied once the native
+      // track list is known. hls.js grants carry a single audio rendition.
+      const audio = (video as VideoWithTracks).audioTracks
+      if (preferredAudioLanguage && audio && audio.length > 1) {
+        const i = preferredTrackIndex(Array.from({ length: audio.length }, (_, k) => audio[k]), preferredAudioLanguage)
+        if (i >= 0 && applyAudioTrack(null, video, i) !== null) setSelectedAudio(i)
+      }
       if (startPositionSecs && Number.isFinite(startPositionSecs) && startPositionSecs > 0) {
         video.currentTime = startPositionSecs
       }
@@ -826,7 +839,7 @@ export default function IptvPlayer({
       video.removeEventListener('playing', onVideoPlaying)
       video.removeEventListener('loadedmetadata', onLoadedMetadata)
     }
-  }, [onEnded, onPlaying, onPositionUpdate, startPositionSecs])
+  }, [onEnded, onPlaying, onPositionUpdate, startPositionSecs, preferredAudioLanguage])
 
   useEffect(() => {
     const videoElement = videoRef.current
@@ -871,16 +884,25 @@ export default function IptvPlayer({
             onEscalate: onDeliveryStruggling,
             isCancelled: () => cancelled,
           })
+          // A file the browser can't decode (or a container/codec it rejects)
+          // leaves a dead player; the transcoder's HLS path can still play it.
+          // MediaError codes 3 (MEDIA_ERR_DECODE) and 4 (MEDIA_ERR_SRC_NOT_SUPPORTED).
+          const onVideoError = () => {
+            const code = video.error?.code
+            if (!cancelled && (code === 3 || code === 4)) onDeliveryStruggling()
+          }
           video.addEventListener('waiting', escalator.onStall)
           video.addEventListener('stalled', escalator.onStall)
           video.addEventListener('playing', escalator.onProgress)
           video.addEventListener('timeupdate', escalator.onProgress)
+          video.addEventListener('error', onVideoError)
           cleanupEngine = () => {
             escalator.cleanup()
             video.removeEventListener('waiting', escalator.onStall)
             video.removeEventListener('stalled', escalator.onStall)
             video.removeEventListener('playing', escalator.onProgress)
             video.removeEventListener('timeupdate', escalator.onProgress)
+            video.removeEventListener('error', onVideoError)
           }
         }
         if (autoPlay) safePlay(video)

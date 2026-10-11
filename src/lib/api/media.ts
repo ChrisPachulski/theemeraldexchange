@@ -262,6 +262,11 @@ export type PlaybackGrant = {
   subtitle?: PlaybackSubtitle | null
 }
 
+/** An intro/credits window (media-core markers, title-scoped). */
+export type MediaMarker = { type: 'intro' | 'credits'; startSecs: number; endSecs: number }
+
+type RawMarkerRow = { marker_type: 'intro' | 'credits'; start_secs: number; end_secs: number }
+
 /** A persisted watch-progress row (camelCase-normalised from media-core). */
 export type WatchEntry = {
   mediaKind: PlayableKind
@@ -765,6 +770,12 @@ export const mediaApi = {
     if (forceHls) body.force_hls = true
     return post<RawPlaybackGrant, PlaybackRequest>(`/playback/${kind}/${id}`, body).then(absolutizeGrant)
   },
+
+  /** Skip Intro / Skip Credits windows for one title (empty when none set). */
+  markers: (kind: PlayableKind, id: number, req?: RequestOpts): Promise<MediaMarker[]> =>
+    get<{ items?: RawMarkerRow[] }>('/markers', { media_kind: kind, media_id: id }, req).then((r) =>
+      (r.items ?? []).map((m) => ({ type: m.marker_type, startSecs: m.start_secs, endSecs: m.end_secs })),
+    ),
 
   /** The current user's watch-progress rows. */
   watch: (req?: RequestOpts) =>

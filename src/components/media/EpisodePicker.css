@@ -51,3 +51,9 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* The playing episode in the player's queue popover. */
+.media-episode-list__item[aria-current='true'],
+.media-episode-list__item[aria-current='true'] .media-episode-list__code {
+  color: var(--emerald);
+}

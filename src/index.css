@@ -213,6 +213,71 @@ div.iptv-tab__status p { margin: 0 0 .5rem; }
 /* Resume-or-start-over prompt before a resumable title plays (MediaPlayer). */
 .media-resume p { margin: 0 0 .75rem; }
 .media-resume__choices { display: flex; gap: .5rem; flex-wrap: wrap; }
+/* Up next card over the credits (MediaPlayer binge flow), bottom-right. */
+.media-up-next {
+  position: absolute; right: var(--s-5); bottom: 7rem; z-index: 2;
+  display: flex; gap: var(--s-4); align-items: center; max-width: min(28rem, calc(100% - 2rem));
+  padding: var(--s-4); color: var(--text);
+  background: color-mix(in oklch, var(--surface) 96%, transparent);
+  border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--elev-card);
+}
+.media-up-next p { margin: 0; }
+.media-up-next__text { display: grid; gap: var(--s-1); min-width: 0; }
+.media-up-next__eyebrow {
+  font-size: var(--t-xs); font-weight: 600; letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase; color: var(--emerald);
+}
+.media-up-next__title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-up-next__count { font-size: var(--t-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.media-up-next__actions { display: grid; gap: var(--s-2); flex: none; }
+.media-up-next__secondary {
+  padding: .4rem .9rem; border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--border); background: transparent; color: var(--text-muted);
+}
+.media-up-next__secondary:hover { color: var(--text); }
+/* Phone: the wrapped control bar would hide the card, so it spans the
+   free strip under the centred player instead. */
+@media (max-width: 640px) {
+  .media-up-next { bottom: var(--s-4); left: var(--s-4); right: var(--s-4); max-width: none; }
+}
+/* Still watching? gate: dims the whole player while playback is paused. */
+.media-still-watching {
+  position: absolute; inset: 0; z-index: 3;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s-2);
+  color: var(--text-muted); text-align: center; background: rgb(0 0 0 / 0.72);
+}
+.media-still-watching p { margin: 0; }
+.media-still-watching .media-resume__choices { margin-top: var(--s-3); justify-content: center; }
+.media-still-watching__title { font-size: var(--t-lg, 1.25rem); font-weight: 700; color: var(--text); }
+/* Subtitle appearance from the playback prefs (data-subtitle-style and the
+   --cue-* variables are set on the modal only when overridden). Fallbacks
+   match the browser's own cue styling. */
+.iptv-player-modal[data-subtitle-style] video::cue {
+  font-size: var(--cue-size, 100%);
+  color: var(--cue-color, #fff);
+  background-color: var(--cue-bg, rgb(0 0 0 / 0.8));
+}
+/* Playback settings fields: account-menu disclosure and the player popover. */
+.playback-settings__fields { display: grid; gap: var(--s-2); }
+.playback-settings__row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-3);
+  font-size: var(--t-sm); color: var(--text);
+}
+.playback-settings__row select {
+  max-width: 11rem; padding: .25rem .4rem; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-sm, 6px);
+}
+.playback-settings__row input[type='checkbox'] { width: 1.1rem; height: 1.1rem; accent-color: var(--emerald); }
+.playback-settings__preview {
+  margin: var(--s-1) 0 0; padding: var(--s-3); text-align: center; border-radius: var(--r-sm, 6px);
+  background: linear-gradient(135deg, oklch(0.35 0.05 158), oklch(0.22 0.03 230));
+}
+.playback-settings__preview span {
+  padding: 0 .25em;
+  font-size: var(--cue-size, 100%);
+  color: var(--cue-color, #fff);
+  background-color: var(--cue-bg, rgb(0 0 0 / 0.8));
+}
 .iptv-tab__pager {
   display: flex; gap: .5rem; align-items: center; justify-content: flex-end; margin-top: 1rem;
 }
