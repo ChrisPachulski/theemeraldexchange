@@ -10,6 +10,7 @@
 // grid stays smooth across the full has-EPG set (~11.5k channels).
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ReplayButton } from '../nav/ReplayButton'
+import { ProgrammeDialog } from '../iptv/ProgrammeDialog'
 import { type EpgGridDto, type EpgProgrammeDto } from '../../lib/api/iptv'
 import { useIptvEpgGrid } from '../../lib/hooks/useIptvEpg'
 import { blockWidth, visibleRowRange } from '../../lib/epgLayout'
@@ -81,6 +82,7 @@ function progressFraction(p: EpgProgrammeDto, nowMs: number): number | null {
 }
 
 type ActiveCell = { streamId: number; progIndex: number | null }
+type FutureSelection = { row: EpgGridDto; programme: EpgProgrammeDto }
 
 export default function EpgGuide({
   categoryId,
@@ -168,6 +170,7 @@ export default function EpgGuide({
   // pane (the Channels-DVR / Apple-guide pattern) so the cells stay compact and
   // never balloon to reveal a synopsis.
   const [active, setActive] = useState<ActiveCell | null>(null)
+  const [future, setFuture] = useState<FutureSelection | null>(null)
   const activeDetail = useMemo(() => {
     if (!active) return null
     const row = rows.find((r) => r.stream_id === active.streamId)
@@ -309,12 +312,16 @@ export default function EpgGuide({
               onToggleFavorite={onToggleFavorite}
               onPlayLive={onPlayLive}
               onPlayCatchup={onPlayCatchup}
+              onSelectFuture={(programme) => setFuture({ row, programme })}
             />
           ))}
           <div style={{ height: bottomPad }} aria-hidden />
         </div>
       </div>
       </div>
+      {future && (
+        <ProgrammeDialog channel={future.row} programme={future.programme} onClose={() => setFuture(null)} />
+      )}
     </div>
   )
 }
@@ -394,6 +401,7 @@ function GuideRow({
   onToggleFavorite,
   onPlayLive,
   onPlayCatchup,
+  onSelectFuture,
 }: {
   row: EpgGridDto
   windowStartMs: number
@@ -404,6 +412,7 @@ function GuideRow({
   onToggleFavorite?: (streamId: number, isFav: boolean) => void
   onPlayLive: (channel: { stream_id: number; name: string }) => void
   onPlayCatchup: (channel: GuideChannel, programme: EpgProgrammeDto) => void
+  onSelectFuture: (programme: EpgProgrammeDto) => void
 }) {
   const channel: GuideChannel = {
     id: row.stream_id,
@@ -473,8 +482,10 @@ function GuideRow({
 
           const isLive = start <= nowMs && stop > nowMs
           const isPast = stop <= nowMs
+          const isFuture = start > nowMs
           const canCatchup = channel.canCatchup && isPast && start >= archiveCutoff
-          const interactive = isLive || canCatchup
+          // A future block opens its details (and Record): touch has no hover pane.
+          const interactive = isLive || canCatchup || isFuture
 
           return (
             <button
@@ -491,14 +502,15 @@ function GuideRow({
               // aria-disabled (not `disabled`) for non-interactive blocks: a truly
               // disabled button fires no hover/focus, which would stop the detail
               // pane from updating when you move over a past programme. onClick
-              // already no-ops unless live/catch-up.
+              // already no-ops unless live/catch-up/future.
               aria-disabled={!interactive}
-              title={`${p.title ?? 'Programme'} · ${programmeDurationMin(p)} min${canCatchup ? ' · catch up' : ''}`}
+              title={`${p.title ?? 'Programme'} · ${programmeDurationMin(p)} min${canCatchup ? ' · catch up' : ''}${isFuture ? ' · details' : ''}`}
               onMouseEnter={() => onActivate({ streamId: row.stream_id, progIndex: i })}
               onFocus={() => onActivate({ streamId: row.stream_id, progIndex: i })}
               onClick={() => {
                 if (isLive) onPlayLive({ stream_id: row.stream_id, name: row.name })
                 else if (canCatchup) onPlayCatchup(channel, p)
+                else if (isFuture) onSelectFuture(p)
               }}
             >
               <span className="epg-guide__prog-title">{p.title ?? '—'}</span>

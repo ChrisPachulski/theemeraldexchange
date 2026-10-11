@@ -32,11 +32,13 @@ import {
   readGuideCategoryNames,
   writeGuideCategoryNames,
 } from '../../lib/guideCategories'
+import { useDvrEnabled } from '../../lib/hooks/useDvr'
 import type { CategoryDto } from '../../lib/api/iptv'
 import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import { ConnectionsWidget } from '../iptv/ConnectionsWidget'
 import { LibrarySearchResults } from '../iptv/LibrarySearchResults'
 import { LivePlayerModal, type LivePlaying } from '../iptv/LivePlayerModal'
+import { RecordingsPanel } from '../iptv/RecordingsPanel'
 import {
   concurrencyPayloadFromError,
   type ConcurrencyLimitPayload,
@@ -108,6 +110,8 @@ export default function LiveTab() {
   // US+sports default. Held in state so toggling re-renders the guide immediately.
   const [guideNames, setGuideNames] = useState(() => readGuideCategoryNames())
   const [showGuideCats, setShowGuideCats] = useState(false)
+  const [showRecordings, setShowRecordings] = useState(false)
+  const dvrEnabled = useDvrEnabled()
   const debounced = useDebounced(q, 250)
   const cats = useIptvCategories('live')
   const limit = 100
@@ -490,8 +494,23 @@ export default function LiveTab() {
         {exportMsg && (
           <span className="iptv-tab__status" role="status">{exportMsg}</span>
         )}
+        {dvrEnabled && (
+          <button type="button" className="iptv-tab__guide-cats" onClick={() => setShowRecordings(true)}>
+            Recordings
+          </button>
+        )}
         <ConnectionsWidget />
       </footer>
+
+      {showRecordings && (
+        <RecordingsPanel
+          onClose={() => setShowRecordings(false)}
+          onPlay={(grant, rec) => {
+            setShowRecordings(false)
+            setPlaying({ grant, title: rec.title, itemId: rec.id, recording: true })
+          }}
+        />
+      )}
 
       {showGuideCats && (
         <GuideCategorySettings
@@ -542,7 +561,10 @@ export default function LiveTab() {
                 }
               : undefined
           }
-          onPositionUpdate={(positionSecs, durationSecs) => reportPosition(positionSecs, durationSecs, false)}
+          onPositionUpdate={(positionSecs, durationSecs) => {
+            // A recording has no IPTV history row (history is channels and VOD).
+            if (!playing.recording) reportPosition(positionSecs, durationSecs, false)
+          }}
         />
       )}
 

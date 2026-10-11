@@ -171,6 +171,41 @@
 .iptv-conn-row__error { grid-column: 1 / -1; margin: 0; font-size: .8rem; color: var(--text-error, #ff7b7b); }
 div.iptv-conn-modal__empty p { margin: 0 0 .5rem; }
 
+/* DVR: the guide's future-programme dialog and the Recordings panel (both on
+   the .iptv-conn-modal shell). */
+.dvr-sheet { display: flex; flex-direction: column; gap: .6rem; padding: 1rem; overflow: auto; }
+.dvr-sheet p { margin: 0; }
+.dvr-sheet__channel { color: #7fe0b0; font-size: .85rem; font-weight: 600; }
+.dvr-sheet__time { color: var(--text-dim, #9a9a9a); font-size: .85rem; font-variant-numeric: tabular-nums; }
+.dvr-sheet__desc { color: var(--text-dim, #bdbdbd); font-size: .9rem; line-height: 1.4; }
+.dvr-sheet__title { margin: 0; font-size: 1.05rem; }
+.dvr-sheet__note { color: var(--text-dim, #9a9a9a); font-size: .85rem; }
+.dvr-sheet__note--ok { color: #7fe0b0; }
+.dvr-sheet__note--error { color: var(--text-error, #ff7b7b); }
+.dvr-sheet__action {
+  align-self: flex-start; padding: .45rem 1.1rem; border-radius: 4px; cursor: pointer; font-weight: 600;
+  border: 1px solid rgba(127, 224, 176, .5); background: #1d6f4f; color: #fff;
+}
+.dvr-sheet__action:disabled { opacity: .6; cursor: default; }
+.dvr-sheet__action--danger { border-color: rgba(255, 99, 99, .5); background: #b03a3a; }
+.dvr-sheet__back { align-self: flex-start; padding: 0; border: 0; background: none; color: #7fe0b0; cursor: pointer; }
+.dvr-sheet__facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .35rem 1rem; margin: 0; font-size: .9rem; }
+.dvr-sheet__facts dt { color: var(--text-dim, #9a9a9a); }
+.dvr-sheet__facts dd { margin: 0; overflow-wrap: anywhere; }
+.dvr-row {
+  width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem .75rem; align-items: center;
+  padding: .7rem 1rem; border: 0; border-top: 1px solid rgba(255, 255, 255, .06);
+  background: none; color: inherit; text-align: left; cursor: pointer;
+}
+.dvr-row:hover { background: rgba(255, 255, 255, .05); }
+.dvr-row__title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dvr-row__meta { grid-column: 1; color: var(--text-dim, #888); font-size: .78rem; }
+.dvr-row__badge {
+  grid-column: 2; grid-row: 1 / span 2; padding: .15rem .5rem; border-radius: 999px; font-size: .72rem;
+  border: 1px solid rgba(255, 255, 255, .18); color: var(--text-dim, #bbb);
+}
+.dvr-row__badge--ready { border-color: rgba(127, 224, 176, .5); color: #7fe0b0; }
+
 /* ── IPTV Tab shared styles ─────────────────────────────────────────── */
 /* Padding-bottom leaves room for the sticky toolbar so the last grid
    row isn't permanently hidden behind it. Top padding is owned by the
@@ -484,6 +519,7 @@ div.iptv-guide-modal__status p { margin:0 0 .5rem; }
 .epg-guide__prog--past { opacity:.6; }
 .epg-guide__prog--past:not(.epg-guide__prog--static) { opacity:.92; cursor:pointer; border-color:rgba(127,224,176,.35); }
 .epg-guide__prog:not(.epg-guide__prog--static):hover { border-color:rgba(255,255,255,.3); }
+.epg-guide__prog:not(.epg-guide__prog--static) { cursor:pointer; }
 .epg-guide__prog:focus-visible { outline:2px solid #79d7ff; outline-offset:1px; }
 
 /* A failed refetch keeps the painted grid under this bar (Apple's "may be out of date"). */

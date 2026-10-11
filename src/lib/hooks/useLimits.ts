@@ -46,6 +46,9 @@ export type Limits = {
   /** DELETE /api/account/self is mounted. Absent on older backends, which
    *  have no self-service deletion, so the UserMenu hides the button. */
   accountDeletionEnabled?: boolean
+  /** /api/dvr is mounted (DVR_ENABLED with IPTV on). Record and Recordings
+   *  show only when true; absent on older backends, so DVR stays hidden. */
+  dvrEnabled?: boolean
 }
 
 const DEFAULT_LIMITS: Limits = {

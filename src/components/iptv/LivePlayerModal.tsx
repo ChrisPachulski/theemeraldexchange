@@ -6,7 +6,8 @@ import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import { MiniGuide } from './MiniGuide'
 import { OFFLINE_REPROBE_MS, RECONNECT_ATTEMPTS, reconnectWaitMs } from './liveReconnect'
 
-export type LivePlaying = { grant: StreamGrant; title: string; itemId: string; live?: boolean }
+// `recording`: a DVR recording (a finite .ts, played like catch-up).
+export type LivePlaying = { grant: StreamGrant; title: string; itemId: string; live?: boolean; recording?: boolean }
 
 type Cover =
   | { kind: 'reconnecting'; attempt: number }
