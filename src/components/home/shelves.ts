@@ -43,6 +43,26 @@ export function titleKey(title: string): string {
   return parts.join(' ')
 }
 
+type Cert = string | null | undefined
+
+/** Library certifications by {@link titleKey}. Watch rows carry no rating, so
+ *  a capped profile matches them by title; every entry sharing a key is kept
+ *  (a remake, or the same title in two years) rather than the last one winning. */
+export function certsByTitle(items: Iterable<{ title: string; certification?: Cert }>): Map<string, Cert[]> {
+  const map = new Map<string, Cert[]>()
+  for (const item of items) {
+    const key = titleKey(item.title)
+    map.set(key, [...(map.get(key) ?? []), item.certification])
+  }
+  return map
+}
+
+/** A title passes only if every rating its key matched does; no match is
+ *  unrated, which a cap fails closed. */
+export function titleAllowed(certs: Map<string, Cert[]>, title: string, allows: (c: Cert) => boolean): boolean {
+  return (certs.get(titleKey(title)) ?? [undefined]).every((c) => allows(c))
+}
+
 /** Where a Watchlist row opens: its tab, by the id the row stores (TMDB for a
  *  movie, TVDB for a show). The tab resolves it library-first. */
 export function watchlistIntent(e: Pick<WatchlistEntry, 'kind' | 'id'>): [IntentRoute, string] {
