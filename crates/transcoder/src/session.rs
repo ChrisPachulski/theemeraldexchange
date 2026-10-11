@@ -1825,6 +1825,15 @@ impl SessionManager {
         if tokio::fs::try_exists(&jpg).await.unwrap_or(false) {
             return true;
         }
+        // Conversions run one at a time: they sit outside the transcode caps,
+        // so a burst of misses must queue rather than start an ffmpeg each, and
+        // a waiter for the same frame then finds its JPEG already made.
+        // ponytail: one global permit; a small pool if scrubbing ever queues visibly.
+        static CONVERT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        let _permit = CONVERT.acquire().await.expect("semaphore never closed");
+        if tokio::fs::try_exists(&jpg).await.unwrap_or(false) {
+            return true;
+        }
         let ts = jpg.with_file_name(format!("{stem}.ts"));
         if !tokio::fs::try_exists(&ts).await.unwrap_or(false) {
             return false;
@@ -2898,6 +2907,47 @@ mod tests {
         wait_for(|| !process_alive(pid_a)).await;
         assert!(mgr.is_empty().await);
         assert_eq!(mgr.limiter().active(), (0, 0), "the single slot is freed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_thumbnail_misses_convert_once() {
+        // A burst of requests for one thumbnail must not start an ffmpeg each
+        // (the conversions bypass the transcode caps): they queue, the rest
+        // find the JPEG already made.
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = tmp.path().join("jpg_stub.sh");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\n\
+             for a in \"$@\"; do last=\"$a\"; done\n\
+             d=$(dirname \"$last\")\n\
+             mkdir -p \"$d\"\n\
+             case \"$last\" in *.partial)\n\
+               echo x >> \"$d/jpg_calls\"; sleep 0.2; printf JPEG > \"$last\"; exit 0;; esac\n\
+             printf '#EXTM3U\\n' > \"$last\"\n\
+             sleep 30\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mgr = Arc::new(manager_with_stub(&tmp, stub));
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let ts = mgr.asset_path(&id, "thumb_00001.ts").await.unwrap();
+        std::fs::write(&ts, b"ts").unwrap();
+
+        let mut set = tokio::task::JoinSet::new();
+        for _ in 0..20 {
+            let (mgr, id) = (mgr.clone(), id.clone());
+            set.spawn(async move { mgr.thumb_jpeg(&id, "thumb_00001.jpg").await });
+        }
+        while let Some(ok) = set.join_next().await {
+            assert!(ok.unwrap(), "every request gets the thumbnail");
+        }
+        let calls = std::fs::read_to_string(ts.with_file_name("jpg_calls"))
+            .unwrap()
+            .lines()
+            .count();
+        assert_eq!(calls, 1, "20 concurrent misses ran {calls} conversions");
+        mgr.stop(&id).await;
     }
 
     #[tokio::test]
