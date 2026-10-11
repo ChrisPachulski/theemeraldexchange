@@ -5,6 +5,7 @@ import { ApiKeySettings } from './ApiKeySettings'
 import { DevicesPanel } from './DevicesPanel'
 import { InvitesPanel } from './InvitesPanel'
 import { LinkDeviceModal } from './LinkDeviceModal'
+import { PlaybackSettings } from '../media/PlaybackSettings'
 import './UserMenu.css'
 
 // Trigger pill in the top-right cluster + dropdown panel for the
@@ -149,6 +150,9 @@ export function UserMenu() {
 
           <hr className="user-menu__divider" />
           <DevicesPanel />
+
+          <hr className="user-menu__divider" />
+          <PlaybackSettings />
 
           <hr className="user-menu__divider" />
           <button
