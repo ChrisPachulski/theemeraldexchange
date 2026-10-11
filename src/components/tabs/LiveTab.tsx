@@ -30,13 +30,17 @@ import {
   formatGuideCategoryNames,
   isAdultCategory,
   readGuideCategoryNames,
+  readGuidePreview,
   writeGuideCategoryNames,
+  writeGuidePreview,
 } from '../../lib/guideCategories'
+import { useDvrEnabled } from '../../lib/hooks/useDvr'
 import type { CategoryDto } from '../../lib/api/iptv'
 import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import { ConnectionsWidget } from '../iptv/ConnectionsWidget'
 import { LibrarySearchResults } from '../iptv/LibrarySearchResults'
 import { LivePlayerModal, type LivePlaying } from '../iptv/LivePlayerModal'
+import { RecordingsPanel } from '../iptv/RecordingsPanel'
 import {
   concurrencyPayloadFromError,
   type ConcurrencyLimitPayload,
@@ -108,6 +112,9 @@ export default function LiveTab() {
   // US+sports default. Held in state so toggling re-renders the guide immediately.
   const [guideNames, setGuideNames] = useState(() => readGuideCategoryNames())
   const [showGuideCats, setShowGuideCats] = useState(false)
+  const [guidePreview, setGuidePreview] = useState(() => readGuidePreview())
+  const [showRecordings, setShowRecordings] = useState(false)
+  const dvrEnabled = useDvrEnabled()
   const debounced = useDebounced(q, 250)
   const cats = useIptvCategories('live')
   const limit = 100
@@ -329,6 +336,7 @@ export default function LiveTab() {
           }
           onPlayLive={(channel) => void playChannel(channel)}
           onPlayCatchup={(channel, programme) => void playCatchup(channel, programme)}
+          livePreview={guidePreview && !playing}
         />
       ) : (
       <>
@@ -475,6 +483,20 @@ export default function LiveTab() {
             Guide categories
           </button>
         )}
+        {view === 'guide' && (
+          <button
+            type="button"
+            className="iptv-tab__guide-cats"
+            aria-pressed={guidePreview}
+            onClick={() => {
+              setGuidePreview(!guidePreview)
+              writeGuidePreview(!guidePreview)
+            }}
+            title="Play a muted preview after resting on a live programme"
+          >
+            Live preview
+          </button>
+        )}
         <button type="button" onClick={async () => {
           // LOW-17: no blocking alert(); surface success/failure inline so a
           // failed generatePlaylist() isn't a silent unhandled rejection.
@@ -490,8 +512,23 @@ export default function LiveTab() {
         {exportMsg && (
           <span className="iptv-tab__status" role="status">{exportMsg}</span>
         )}
+        {dvrEnabled && (
+          <button type="button" className="iptv-tab__guide-cats" onClick={() => setShowRecordings(true)}>
+            Recordings
+          </button>
+        )}
         <ConnectionsWidget />
       </footer>
+
+      {showRecordings && (
+        <RecordingsPanel
+          onClose={() => setShowRecordings(false)}
+          onPlay={(grant, rec) => {
+            setShowRecordings(false)
+            setPlaying({ grant, title: rec.title, itemId: rec.id, recording: true })
+          }}
+        />
+      )}
 
       {showGuideCats && (
         <GuideCategorySettings
@@ -542,7 +579,10 @@ export default function LiveTab() {
                 }
               : undefined
           }
-          onPositionUpdate={(positionSecs, durationSecs) => reportPosition(positionSecs, durationSecs, false)}
+          onPositionUpdate={(positionSecs, durationSecs) => {
+            // A recording has no IPTV history row (history is channels and VOD).
+            if (!playing.recording) reportPosition(positionSecs, durationSecs, false)
+          }}
         />
       )}
 

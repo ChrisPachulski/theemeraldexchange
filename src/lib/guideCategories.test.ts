@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { CategoryDto } from './api/iptv'
 import {
   defaultGuideSelection,
@@ -8,6 +8,8 @@ import {
   isAdultCategory,
   isDefaultGuideCategory,
   parseGuideCategoryNames,
+  readGuidePreview,
+  writeGuidePreview,
 } from './guideCategories'
 
 function cat(category_id: number, name: string): CategoryDto {
@@ -91,5 +93,20 @@ describe('guide category prefs (stored by name)', () => {
 
   it('is empty (the guide fails closed) when nothing qualifies', () => {
     expect(effectiveGuideCategoryIds('', [cat(1, 'UK| News'), cat(2, 'XXX')])).toEqual([])
+  })
+})
+
+describe('guide live-preview pref', () => {
+  it('defaults off, round-trips, and stays off when storage throws', () => {
+    const map = new Map<string, string>()
+    vi.stubGlobal('localStorage', { getItem: (k: string) => map.get(k) ?? null, setItem: (k: string, v: string) => void map.set(k, v) })
+    expect(readGuidePreview()).toBe(false)
+    writeGuidePreview(true)
+    expect(readGuidePreview()).toBe(true)
+    writeGuidePreview(false)
+    expect(readGuidePreview()).toBe(false)
+    vi.stubGlobal('localStorage', { getItem: () => { throw new Error('denied') }, setItem: () => { throw new Error('denied') } })
+    expect(() => writeGuidePreview(true)).not.toThrow()
+    expect(readGuidePreview()).toBe(false)
   })
 })

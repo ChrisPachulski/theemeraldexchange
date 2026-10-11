@@ -109,3 +109,23 @@ export function writeGuideCategoryNames(stored: string): void {
     /* storage unavailable — selection just isn't persisted this session */
   }
 }
+
+// Muted live preview in the guide's detail pane (Apple GuideLivePreviewPref):
+// opt-in, default off, so browsing never mints grants unasked.
+export const GUIDE_PREVIEW_KEY = 'guide.livePreview'
+
+export function readGuidePreview(): boolean {
+  try {
+    return localStorage.getItem(GUIDE_PREVIEW_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function writeGuidePreview(on: boolean): void {
+  try {
+    localStorage.setItem(GUIDE_PREVIEW_KEY, on ? '1' : '0')
+  } catch {
+    /* storage unavailable — the toggle just isn't persisted */
+  }
+}

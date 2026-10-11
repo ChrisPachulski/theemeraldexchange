@@ -56,6 +56,18 @@ describe('iptvApi', () => {
     expect(url).not.toContain('client=avplayer')
   })
 
+  it('grantLive marks a guide preview with intent=preview', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ url: '/api/iptv/stream/live/1/remux/index.m3u8?t=x', delivery: 'hls' }), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await iptvApi.grantLive('1', { intent: 'preview' })
+
+    expect(fetchMock.mock.calls[0][0]).toContain('/api/iptv/stream/live/1/grant?client=avplayer&intent=preview')
+  })
+
   it('vodDetail throws on 404 with a typed error', async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'not_found' }), { status: 404 }))
 
