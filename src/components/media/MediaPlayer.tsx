@@ -557,6 +557,19 @@ export function MediaPlayer({
     setSessionKey((key) => key + 1)
   }, [])
 
+  // A Quality change mid-play re-grants at the current position (the server
+  // applies the cap per grant; Apple swaps its peak bitrate live), through the
+  // same re-grant as a below-floor seek. While the resume prompt is still up
+  // there is no session yet, and the first grant carries the new cap anyway.
+  const { maxBitrate } = usePlaybackPrefs()
+  const grantedCapRef = useRef(maxBitrate)
+  useEffect(() => {
+    if (grantedCapRef.current === maxBitrate) return
+    grantedCapRef.current = maxBitrate
+    if (effectiveStartRef.current == null) return
+    onSeekBeforeStart(Math.floor(latest.current.pos))
+  }, [maxBitrate, onSeekBeforeStart])
+
   // Final flush on unmount, and for the outgoing episode on an in-place swap,
   // so the resume point reflects where they actually stopped, not the last
   // throttled tick. (The session's stop fires from the session effect's own

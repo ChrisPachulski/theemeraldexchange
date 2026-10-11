@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react'
 import {
   PICKER_LANGUAGES,
+  QUALITY_OPTIONS,
   SUBTITLE_BACKGROUNDS,
   SUBTITLE_COLORS,
   SUBTITLE_MODES,
@@ -12,14 +13,14 @@ import {
 } from '../../lib/playbackPrefs'
 
 // Device-local playback settings (Apple Settings -> Playback): autoplay next
-// episode, when subtitles turn on, preferred subtitle/audio language, and
+// episode, the streaming Quality cap, when subtitles turn on, preferred subtitle/audio language, and
 // subtitle appearance with a live preview. The fields render inside the
 // player's settings popover; PlaybackSettings wraps them as the account-menu
 // disclosure.
 
 const LANGUAGE_OPTIONS = PICKER_LANGUAGES.map((code) => ({ value: code, label: languageName(code) }))
 
-function PrefSelect<K extends string>({
+function PrefSelect<K extends string | number>({
   label,
   value,
   options,
@@ -33,9 +34,12 @@ function PrefSelect<K extends string>({
   return (
     <label className="playback-settings__row">
       <span>{label}</span>
-      <select value={value} onChange={(e) => onChange(e.target.value as K)}>
+      <select
+        value={String(value)}
+        onChange={(e) => onChange(options.find((o) => String(o.value) === e.target.value)?.value ?? value)}
+      >
         {options.map((o) => (
-          <option key={o.value} value={o.value}>
+          <option key={o.value} value={String(o.value)}>
             {o.label}
           </option>
         ))}
@@ -56,6 +60,12 @@ export function PlaybackSettingsFields() {
           onChange={(e) => setPlaybackPrefs({ autoplayNext: e.target.checked })}
         />
       </label>
+      <PrefSelect
+        label="Quality"
+        value={prefs.maxBitrate}
+        options={QUALITY_OPTIONS}
+        onChange={(maxBitrate) => setPlaybackPrefs({ maxBitrate })}
+      />
       <PrefSelect
         label="Subtitles"
         value={prefs.subtitleMode}

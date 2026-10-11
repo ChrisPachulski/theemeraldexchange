@@ -19,6 +19,9 @@ export type PlaybackPrefs = {
   subtitleSize: SubtitleSize
   subtitleColor: SubtitleColor
   subtitleBackground: SubtitleBackground
+  /** Peak streaming bitrate cap, bits/s; 0 = Original (uncapped). The server
+   *  re-encodes anything over it with its peak held under the cap. */
+  maxBitrate: number
 }
 
 // Apple defaults: autoplay on, English audio + subtitle language, subtitles
@@ -32,6 +35,7 @@ export const DEFAULT_PLAYBACK_PREFS: PlaybackPrefs = {
   subtitleSize: 'normal',
   subtitleColor: 'white',
   subtitleBackground: 'default',
+  maxBitrate: 0,
 }
 
 export const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2]
@@ -56,6 +60,15 @@ export const SUBTITLE_BACKGROUNDS: ReadonlyArray<{ value: SubtitleBackground; la
   { value: 'none', label: 'None' },
   { value: 'translucent', label: 'Translucent' },
   { value: 'solid', label: 'Solid' },
+]
+/** Apple's StreamQualityCap options and labels. */
+export const QUALITY_OPTIONS: ReadonlyArray<{ value: number; label: string }> = [
+  { value: 0, label: 'Original (Max)' },
+  { value: 20_000_000, label: '20 Mbps' },
+  { value: 12_000_000, label: '12 Mbps' },
+  { value: 8_000_000, label: '8 Mbps' },
+  { value: 4_000_000, label: '4 Mbps' },
+  { value: 2_000_000, label: '2 Mbps' },
 ]
 /** Curated picker list (Apple's TrackPreferences.pickerLanguages). Matching is
  *  canonical, so any track language still matches; this is only what's offered. */
@@ -109,6 +122,7 @@ export function parsePlaybackPrefs(raw: string | null): PlaybackPrefs {
     subtitleSize: oneOf(o.subtitleSize, SUBTITLE_SIZES, d.subtitleSize),
     subtitleColor: oneOf(o.subtitleColor, SUBTITLE_COLORS, d.subtitleColor),
     subtitleBackground: oneOf(o.subtitleBackground, SUBTITLE_BACKGROUNDS, d.subtitleBackground),
+    maxBitrate: oneOf(o.maxBitrate, QUALITY_OPTIONS, d.maxBitrate),
   }
 }
 

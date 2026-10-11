@@ -8,6 +8,7 @@ import { throwApiError, ApiError } from './errors'
 import { apiUrl } from './base'
 import { withTimeout, type RequestOpts } from './timeout'
 import { notifySessionExpiredResponse } from '../sessionExpiry'
+import { getPlaybackPrefs } from '../playbackPrefs'
 
 const BASE = '/api/media'
 
@@ -228,6 +229,8 @@ type PlaybackRequest = PlaybackCaps & {
    *  The transcoder resolves these to a lossless copy-remux session; sent by
    *  the player's stall-escalation path. */
   force_hls?: boolean
+  /** The viewer's Quality cap (bits/s); omitted for Original. */
+  max_bitrate?: number
 }
 
 /** What the backend hands back: a tokenised URL the <video>/hls.js player can
@@ -773,6 +776,8 @@ export const mediaApi = {
       body.start_secs = Math.floor(startPositionSecs)
     }
     if (forceHls) body.force_hls = true
+    const { maxBitrate } = getPlaybackPrefs()
+    if (maxBitrate > 0) body.max_bitrate = maxBitrate
     return post<RawPlaybackGrant, PlaybackRequest>(`/playback/${kind}/${id}`, body).then(absolutizeGrant)
   },
 

@@ -130,3 +130,25 @@ test('the settings popover lists the file\'s chapters and a pick seeks there', a
   // The pick closes the popover.
   await expect(chapters).toBeHidden()
 })
+
+test('a Quality pick re-grants at the playhead with the cap, and later grants keep it', async ({ page }) => {
+  const grants = await mockEpisode(page)
+  await openEpisode(page)
+  expect(grants[0]).not.toHaveProperty('max_bitrate')
+
+  await page.getByRole('button', { name: 'Forward 30 seconds' }).click()
+  await expect.poll(() => video(page).evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThanOrEqual(30)
+  const before = grants.length
+  await page.getByRole('button', { name: 'Playback settings' }).click()
+  await page.getByLabel('Quality').selectOption({ label: '4 Mbps' })
+
+  await expect.poll(() => grants.length).toBeGreaterThan(before)
+  const regrant = grants[grants.length - 1]
+  expect(regrant.max_bitrate).toBe(4_000_000)
+  expect(regrant.start_secs).toBeGreaterThanOrEqual(30)
+
+  // Persisted: a fresh play of the title asks for the same cap.
+  await page.reload()
+  await openEpisode(page)
+  expect(grants[grants.length - 1].max_bitrate).toBe(4_000_000)
+})

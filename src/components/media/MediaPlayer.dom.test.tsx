@@ -16,6 +16,7 @@ import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MediaPlayer } from './MediaPlayer'
 import { HEARTBEAT_INTERVAL_MS } from './playbackSession'
+import { setPlaybackPrefs } from '../../lib/playbackPrefs'
 import type { MediaEpisode, PlaybackGrant } from '../../lib/api/media'
 
 const { playbackMock, heartbeatMock, stopMock, flushWatchMock, markersMock, chaptersMock, reportMock, engineProps } = vi.hoisted(() => ({
@@ -446,6 +447,20 @@ describe('MediaPlayer (mounted) — retry resumes where playback stopped', () =>
     render(<MediaPlayer kind="episode" id={42} title="S01E07" onClose={() => {}} />)
     await flush()
     expect(markersMock).toHaveBeenCalledExactlyOnceWith('episode', 42)
+  })
+
+  it('a Quality change mid-play re-grants at the current position', async () => {
+    playbackMock.mockResolvedValue(progressiveGrant())
+    render(<MediaPlayer kind="movie" id={9} title="300" onClose={() => {}} />)
+    await flush()
+    act(() => engineProps.current?.onPositionUpdate?.(1234.5, 7200))
+    expect(playbackMock).toHaveBeenCalledTimes(1)
+
+    act(() => setPlaybackPrefs({ maxBitrate: 4_000_000 }))
+    await flush()
+    expect(playbackMock).toHaveBeenCalledTimes(2)
+    expect(playbackMock).toHaveBeenLastCalledWith('movie', 9, undefined, 1234, false)
+    localStorage.clear()
   })
 
   it('fetches the title\'s chapters once', async () => {

@@ -15,7 +15,9 @@
 //!
 //! Snapshot-tested per plan and per kind.
 
-use crate::plan::{AudioOp, SegmentFormat, SubtitleOp, TranscodePlan, VideoOp};
+use crate::plan::{
+    AudioOp, DOWNMIX_AAC_BITRATE_KBPS, SegmentFormat, SubtitleOp, TranscodePlan, VideoOp,
+};
 
 /// Hardware encoder family, selected from `TRANSCODER_HW_ENCODER`, with
 /// `TRANSCODER_FORCE_CPU=1` pinning `Cpu` regardless of that value (§4.4).
@@ -110,6 +112,32 @@ fn h264_bitrate_kbps(height: Option<i64>, source_avg_kbps: Option<u32>) -> u32 {
     }
 }
 
+/// `(-b:v, -maxrate, -bufsize)` kbps for an H.264 re-encode. Without a client
+/// cap this is the ladder's own envelope (1.5x peak, 3x buffer), unchanged.
+/// A client cap (the web's Quality pick, bits/s / 1000) bounds the PEAK, as
+/// Apple's `preferredPeakBitRate` does: `-maxrate` stays at or under the cap
+/// less an allowance for the audio, the target never exceeds it, and the VBV
+/// buffer is one second (= maxrate). Measured on incompressible content with
+/// 2 s segments, that holds every segment at ~maxrate; a 2x buffer let
+/// segments overshoot a 4 Mbps cap by 25%.
+fn h264_rate_control(
+    height: Option<i64>,
+    source_avg_kbps: Option<u32>,
+    client_max_kbps: Option<u32>,
+) -> (u32, u32, u32) {
+    let br = h264_bitrate_kbps(height, source_avg_kbps);
+    let Some(cap) = client_max_kbps else {
+        return (br, br + br / 2, br * 3);
+    };
+    // ponytail: a fixed allowance for the largest single AAC track we encode;
+    // a COPIED high-bitrate audio track can still push the total over the cap.
+    // Floored so a nonsense tiny cap can't starve the encoder into garbage.
+    let video_cap = cap.saturating_sub(DOWNMIX_AAC_BITRATE_KBPS).max(500);
+    let br = br.min(video_cap);
+    let maxrate = (br + br / 2).min(video_cap);
+    (br, maxrate, maxrate)
+}
+
 /// DRM render node used for VAAPI hardware encode. Must match the device mapped
 /// into the transcoder container in docker-compose.yml; change both together if
 /// the host enumerates the iGPU at a different node. (QSV auto-selects the lone
@@ -195,6 +223,10 @@ pub struct ArgSpec<'a> {
     /// the re-encode bitrate ladder (see [`h264_bitrate_kbps`]); `None` leaves
     /// the ladder uncapped.
     pub source_avg_kbps: Option<u32>,
+    /// The client's bitrate cap (kbps) from the grant, when it sent one. Caps
+    /// a video re-encode's peak (see [`h264_rate_control`]); `None` (every
+    /// client that sends no cap) leaves the ladder exactly as it was.
+    pub client_max_kbps: Option<u32>,
 }
 
 /// Build the ffmpeg argument vector for a transcode plan (software-decode path).
@@ -244,6 +276,7 @@ pub fn ffmpeg_args_hw(
         media_kind: "movie",
         start_number: 0,
         source_avg_kbps: None,
+        client_max_kbps: None,
     })
 }
 
@@ -264,6 +297,7 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         media_kind,
         start_number,
         source_avg_kbps,
+        client_max_kbps,
     } = *spec;
     let (video, audio, subtitle, segment_format, audio_index, extra_audio) = match plan {
         TranscodePlan::DirectPlay { .. } => return Vec::new(),
@@ -543,13 +577,17 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
             // made the >1080p arm unreachable — an unscaled 4K re-encode got
             // the 1080p rate and looked like mud. The source's own average
             // bitrate caps the ladder so a lean source isn't inflated.
-            let br = h264_bitrate_kbps(scale_to_height.or(*source_height), source_avg_kbps);
+            let (br, maxrate, bufsize) = h264_rate_control(
+                scale_to_height.or(*source_height),
+                source_avg_kbps,
+                client_max_kbps,
+            );
             push(&mut a, "-b:v");
             a.push(format!("{br}k"));
             push(&mut a, "-maxrate");
-            a.push(format!("{}k", br + br / 2));
+            a.push(format!("{maxrate}k"));
             push(&mut a, "-bufsize");
-            a.push(format!("{}k", br * 3));
+            a.push(format!("{bufsize}k"));
 
             // Force a keyframe at every HLS segment boundary. The encoder's
             // native GOP can be far longer than a segment (h264_vaapi defaults to
@@ -628,13 +666,17 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
                     "fast"
                 },
             );
-            let br = h264_bitrate_kbps(scale_to_height.or(*source_height), source_avg_kbps);
+            let (br, maxrate, bufsize) = h264_rate_control(
+                scale_to_height.or(*source_height),
+                source_avg_kbps,
+                client_max_kbps,
+            );
             push(&mut a, "-b:v");
             a.push(format!("{br}k"));
             push(&mut a, "-maxrate");
-            a.push(format!("{}k", br + br / 2));
+            a.push(format!("{maxrate}k"));
             push(&mut a, "-bufsize");
-            a.push(format!("{}k", br * 3));
+            a.push(format!("{bufsize}k"));
             push(&mut a, "-force_key_frames");
             a.push(format!("expr:gte(t,n_forced*{HLS_SEGMENT_SECS})"));
 
@@ -1159,6 +1201,7 @@ mod tests {
         let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
         let args = ffmpeg_args_for(&ArgSpec {
             source_avg_kbps: None,
+            client_max_kbps: None,
             plan: &plan,
             input: "/in.mkv",
             session_dir: "/tmp/s",
@@ -1787,6 +1830,7 @@ mod tests {
             media_kind: "movie",
             start_number: 0,
             source_avg_kbps: Some(4_000),
+            client_max_kbps: None,
         })
         .join(" ");
         assert!(j.contains("-b:v 3600k"), "source cap must apply: {j}");
@@ -1803,9 +1847,78 @@ mod tests {
             media_kind: "movie",
             start_number: 0,
             source_avg_kbps: Some(40_000),
+            client_max_kbps: None,
         })
         .join(" ");
         assert!(j.contains("-b:v 10000k"), "rich source keeps ladder: {j}");
+    }
+
+    #[test]
+    fn client_cap_bounds_the_peak_and_absent_cap_is_unchanged() {
+        // No cap: the ladder's own envelope (pinned by the tests above).
+        assert_eq!(
+            h264_rate_control(Some(1080), None, None),
+            (10_000, 15_000, 30_000)
+        );
+        assert_eq!(
+            h264_rate_control(Some(720), Some(2_000), None),
+            (1_800, 2_700, 5_400)
+        );
+        // A generous cap keeps the ladder's target and peak; only the buffer
+        // tightens to one second so no segment bursts past the cap.
+        assert_eq!(
+            h264_rate_control(Some(1080), None, Some(20_000)),
+            (10_000, 15_000, 15_000)
+        );
+        // 12 Mbps: the peak is held to the cap less the audio allowance.
+        assert_eq!(
+            h264_rate_control(Some(1080), None, Some(12_000)),
+            (10_000, 11_744, 11_744)
+        );
+        // 2 Mbps: target and peak both at the video share of the cap.
+        assert_eq!(
+            h264_rate_control(Some(1080), None, Some(2_000)),
+            (1_744, 1_744, 1_744)
+        );
+        // A nonsense cap floors instead of starving the encoder.
+        assert_eq!(
+            h264_rate_control(Some(1080), None, Some(100)),
+            (500, 500, 500)
+        );
+
+        // And it reaches the argv of both H.264 encode paths.
+        for video in [
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+                source_height: Some(1080),
+            },
+            VideoOp::EncodeDolbyVision {
+                scale_to_height: None,
+                source_height: Some(1080),
+            },
+        ] {
+            let plan = transcode(video, AudioOp::Copy, SubtitleOp::None);
+            let j = ffmpeg_args_for(&ArgSpec {
+                plan: &plan,
+                input: "/in.mkv",
+                session_dir: "/tmp/s",
+                start_secs: 0,
+                encoder: HwEncoder::Cpu,
+                hw_decode: false,
+                source_codec: None,
+                media_kind: "movie",
+                start_number: 0,
+                source_avg_kbps: None,
+                client_max_kbps: Some(4_000),
+            })
+            .join(" ");
+            assert!(
+                j.contains("-b:v 3744k -maxrate 3744k -bufsize 3744k"),
+                "{j}"
+            );
+        }
     }
 
     #[test]
@@ -1934,6 +2047,7 @@ mod tests {
         let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
         ffmpeg_args_for(&ArgSpec {
             source_avg_kbps: None,
+            client_max_kbps: None,
             plan: &plan,
             input: "/in.mkv",
             session_dir: "/tmp/s",
@@ -1951,6 +2065,7 @@ mod tests {
         let plan = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
         let spec = |n: u64| ArgSpec {
             source_avg_kbps: None,
+            client_max_kbps: None,
             plan: &plan,
             input: "/in.mkv",
             session_dir: "/tmp/s",
@@ -2134,6 +2249,7 @@ mod tests {
             media_kind: "movie",
             start_number: 0,
             source_avg_kbps: None,
+            client_max_kbps: None,
         });
         let j = args.join(" ");
         let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
@@ -2169,6 +2285,7 @@ mod tests {
             media_kind: "movie",
             start_number: 0,
             source_avg_kbps: None,
+            client_max_kbps: None,
         });
         let joined = args.join(" ");
         let vf = args
@@ -2208,6 +2325,7 @@ mod tests {
             media_kind: "movie",
             start_number: 0,
             source_avg_kbps: None,
+            client_max_kbps: None,
         });
         let j = args.join(" ");
         assert!(j.contains("-hwaccel vaapi"), "hevc keeps VAAPI decode: {j}");

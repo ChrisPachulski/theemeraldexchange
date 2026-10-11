@@ -24,7 +24,7 @@
 //! test, and `ffmpeg_args` (in [`crate::args`]) turns a plan into a concrete
 //! invocation. No real transcode happens here.
 
-use media_core::capability::{ClientCaps, decide};
+use media_core::capability::{ClientCaps, decide, over_bitrate_cap};
 use media_core::models::{AudioTrack, MediaFileRow, SubtitleTrack};
 use serde::Serialize;
 
@@ -412,6 +412,12 @@ fn plan_transcode_ops_with(
     // burned), so subtitles no longer force a video re-encode on their own. ──
     let (subtitle, burn_index) = plan_subtitle(file);
 
+    // A client bitrate cap (the web's Quality pick) the source exceeds: a copy
+    // would ship the source's own bitrate, so the video must be re-encoded
+    // (the args builder caps that encode's rate). No cap advertised → false,
+    // and every decision below is unchanged.
+    let over_cap = over_bitrate_cap(file, caps).is_some();
+
     // ── Dolby Vision ─────────────────────────────────────────────────────────
     // DV (especially Profile 5: single-layer, no HDR10-compatible base) cannot
     // be stream-copied into a plain HLS that AVPlayer decodes — it fails with
@@ -442,6 +448,7 @@ fn plan_transcode_ops_with(
             && matches!(codec_lc.as_str(), "hevc" | "h265")
             && matches!(dv_profile, Some(5 | 8))
             && !needs_scale
+            && !over_cap
         {
             let dv_profile = dv_profile.expect("matched Some above");
             return TranscodePlan::Transcode {
@@ -526,6 +533,7 @@ fn plan_transcode_ops_with(
         && !needs_scale
         && !tone_map
         && burn_index.is_none()
+        && !over_cap
     {
         VideoOp::Copy
     } else {
@@ -1975,6 +1983,73 @@ mod tests {
                 );
             }
             other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    /// A ~10 Mbps direct-play-eligible h264/AAC mp4 (9 GB over 2 h).
+    fn ten_mbps_h264() -> MediaFileRow {
+        let mut f = file(
+            Some("mp4"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![aac(1)],
+            vec![],
+        );
+        f.size_bytes = 9_000_000_000;
+        f
+    }
+
+    #[test]
+    fn no_bitrate_cap_keeps_direct_play_and_copy() {
+        // Flag absent = old behaviour: no cap advertised, the plan is exactly
+        // what it was before the cap existed.
+        let f = ten_mbps_h264();
+        let caps = caps_h264_1080_sdr();
+        assert!(plan_transcode(&f, &caps).is_direct_play());
+        match plan_transcode_forced(&f, &caps) {
+            TranscodePlan::Transcode { video, .. } => assert_eq!(video, VideoOp::Copy),
+            other => panic!("expected copy-remux, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bitrate_cap_below_the_source_forces_a_reencode() {
+        // A copy would ship the source's 10 Mbps past a 4 Mbps Quality pick,
+        // whether media-core handed it off as over-cap or as forced HLS.
+        let f = ten_mbps_h264();
+        let caps = ClientCaps {
+            max_bitrate: Some(4_000_000),
+            ..caps_h264_1080_sdr()
+        };
+        for plan in [plan_transcode(&f, &caps), plan_transcode_forced(&f, &caps)] {
+            match plan {
+                TranscodePlan::Transcode {
+                    video,
+                    audio,
+                    segment_format,
+                    ..
+                } => {
+                    assert!(matches!(video, VideoOp::EncodeH264 { .. }), "{video:?}");
+                    assert_eq!(audio, AudioOp::Copy, "the cap only touches video");
+                    assert_eq!(segment_format, SegmentFormat::MpegTs);
+                }
+                other => panic!("expected a re-encode, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn bitrate_cap_above_the_source_changes_nothing() {
+        let f = ten_mbps_h264();
+        let caps = ClientCaps {
+            max_bitrate: Some(20_000_000),
+            ..caps_h264_1080_sdr()
+        };
+        assert!(plan_transcode(&f, &caps).is_direct_play());
+        match plan_transcode_forced(&f, &caps) {
+            TranscodePlan::Transcode { video, .. } => assert_eq!(video, VideoOp::Copy),
+            other => panic!("expected copy-remux, got {other:?}"),
         }
     }
 }

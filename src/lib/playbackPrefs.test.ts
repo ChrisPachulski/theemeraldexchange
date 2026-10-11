@@ -33,6 +33,13 @@ describe('playback prefs storage', () => {
     )
   })
 
+  it('keeps only an offered Quality cap, defaulting to Original', () => {
+    expect(DEFAULT_PLAYBACK_PREFS.maxBitrate).toBe(0)
+    expect(parsePlaybackPrefs(JSON.stringify({ maxBitrate: 8_000_000 })).maxBitrate).toBe(8_000_000)
+    expect(parsePlaybackPrefs(JSON.stringify({ maxBitrate: 5_000_000 })).maxBitrate).toBe(0)
+    expect(parsePlaybackPrefs(JSON.stringify({ maxBitrate: '8000000' })).maxBitrate).toBe(0)
+  })
+
   it('persists a patch and returns a stable snapshot until it changes', () => {
     const before = getPlaybackPrefs()
     expect(getPlaybackPrefs()).toBe(before)

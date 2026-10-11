@@ -237,6 +237,23 @@ describe('mediaApi playback + watch', () => {
     expect(body.start_secs).toBe(95)
   })
 
+  it('playback() sends the Quality cap only when one is picked', async () => {
+    const grant = { delivery: 'progressive', url: '/api/media/stream/movie/7?t=TOK', durationSecs: 1200 }
+    fetchMock.mockResolvedValueOnce(jsonRes(grant)).mockResolvedValueOnce(jsonRes(grant))
+    const stored = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => stored.get(k) ?? null,
+      setItem: (k: string, v: string) => void stored.set(k, v),
+    })
+
+    await mediaApi.playback('movie', 7, browserCaps())
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).not.toHaveProperty('max_bitrate')
+
+    stored.set('eex.playback', JSON.stringify({ maxBitrate: 4_000_000 }))
+    await mediaApi.playback('movie', 7, browserCaps())
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1].body)).max_bitrate).toBe(4_000_000)
+  })
+
   it('playback() absolutizes the HLS manifest + heartbeat + stop urls', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonRes({

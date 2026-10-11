@@ -481,6 +481,13 @@ async fn grant(
         }
         _ => None,
     };
+    // The client's Quality pick (bits/s on the wire), capping the re-encode's
+    // peak. Absent for every client that doesn't send one (AVPlayer caps
+    // itself client-side), which leaves the encode untouched.
+    let client_max_kbps = caps
+        .max_bitrate
+        .filter(|bps| *bps > 0)
+        .and_then(|bps| u32::try_from(bps / 1000).ok());
     let plan = if force_transcode {
         plan_transcode_forced(&row, &caps)
     } else {
@@ -513,6 +520,7 @@ async fn grant(
         source_codec,
         source_profile,
         source_avg_kbps,
+        client_max_kbps,
         duration_secs: row.duration_secs,
         owner,
         subtitle: sidecar.clone(),

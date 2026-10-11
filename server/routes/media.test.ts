@@ -1003,4 +1003,52 @@ describe('media playback grant', () => {
     expect(res.status).toBe(200)
     expect(String(mockFetchTimed.mock.calls[1][0])).not.toContain('native_hls')
   })
+
+  // The web Quality cap must reach both media-core hops (the capability grant
+  // and the stream handoff the transcoder plans from); a client that sends
+  // none — every Apple client — must reach them exactly as before.
+  it.each([
+    [{ max_bitrate: 4_000_000 }, 4_000_000],
+    [{ max_bitrate: 7_999_999.6 }, 7_999_999],
+    [{}, undefined],
+    [{ max_bitrate: 0 }, undefined],
+    [{ max_bitrate: 'lots' }, undefined],
+  ] as const)('forwards max_bitrate %j as %s', async (reqBody, forwarded) => {
+    mockFetchTimed
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ directPlay: false, file: { duration_secs: 100 } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            transcode: true,
+            sessionId: 's',
+            manifestUrl: '/api/transcode/session/s/index.m3u8',
+            heartbeatUrl: '/api/transcode/session/s/heartbeat',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValue(
+        new Response('#EXTM3U\n#EXTINF:6.0,\nseg_00000.ts\n', {
+          status: 200,
+          headers: { 'Content-Type': 'application/vnd.apple.mpegurl' },
+        }),
+      )
+
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify(reqBody),
+    })
+
+    expect(res.status).toBe(200)
+    const grantBody = JSON.parse(String((mockFetchTimed.mock.calls[0][1] as RequestInit).body))
+    expect(grantBody.max_bitrate).toBe(forwarded)
+    const handoff = new URL(String(mockFetchTimed.mock.calls[1][0]))
+    expect(handoff.searchParams.get('max_bitrate')).toBe(forwarded === undefined ? null : String(forwarded))
+  })
 })
