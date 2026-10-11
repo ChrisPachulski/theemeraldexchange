@@ -135,6 +135,19 @@ pub(crate) const VAAPI_RENDER_NODE: &str = "/dev/dri/renderD128";
 /// target just floors at the source GOP).
 pub(crate) const HLS_SEGMENT_SECS: u32 = 2;
 
+/// Output timestamp offset (`-output_ts_offset`) shared by the main pipeline
+/// and its alternate-audio rendition pass on an `alt_audio` session. ffmpeg
+/// shifts each HLS output so its FIRST packet starts at zero, and that first
+/// packet differs per output: the video's B-frame dts lead (or, on a resumed
+/// copy-remux, the keyframe before `-ss`) in the main stream versus the AAC
+/// priming in an audio-only rendition — measured 60 ms apart from 0 and seconds
+/// apart on a resume. hls.js places alternate audio by PTS against the main
+/// stream, so that skew plays out as A/V drift. Pushing both outputs this far
+/// positive means neither is shifted, so source time maps to the same PTS in
+/// both. Larger than any realistic source GOP; the player's timeline is
+/// unaffected (hls.js rebases on the first fragment's PTS).
+pub(crate) const ALT_AUDIO_TS_OFFSET_SECS: u32 = 30;
+
 /// Is this media kind a LIVE source (an unbounded stream with no EOF)?
 ///
 /// Live streams must keep `omit_endlist`: ffmpeg only "ends" a live remux when
@@ -265,7 +278,7 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         start_number,
         source_avg_kbps,
     } = *spec;
-    let (video, audio, subtitle, segment_format, audio_index, extra_audio) = match plan {
+    let (video, audio, subtitle, segment_format, audio_index, extra_audio, alt_audio) = match plan {
         TranscodePlan::DirectPlay { .. } => return Vec::new(),
         TranscodePlan::Transcode {
             video,
@@ -274,6 +287,7 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
             segment_format,
             audio_index,
             extra_audio,
+            alt_audio,
             ..
         } => (
             video,
@@ -282,6 +296,7 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
             *segment_format,
             *audio_index,
             extra_audio,
+            alt_audio,
         ),
     };
     let fmp4 = segment_format == SegmentFormat::Fmp4;
@@ -725,6 +740,13 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         push(&mut a, "webvtt");
     }
 
+    // Alternate-audio renditions are separate ffmpeg outputs; share their
+    // timestamp origin (see ALT_AUDIO_TS_OFFSET_SECS). Absent otherwise.
+    if !alt_audio.is_empty() {
+        push(&mut a, "-output_ts_offset");
+        a.push(ALT_AUDIO_TS_OFFSET_SECS.to_string());
+    }
+
     // ── HLS muxer (§4.2; mirrors iptvRemux.ts) ──────────────────────────────
     push(&mut a, "-f");
     push(&mut a, "hls");
@@ -1014,6 +1036,7 @@ mod tests {
             segment_format: SegmentFormat::MpegTs,
             audio_index: 0,
             extra_audio: Vec::new(),
+            alt_audio: Vec::new(),
             reason: "test".into(),
         }
     }
@@ -1065,6 +1088,24 @@ mod tests {
              -hls_playlist_type event \
              -hls_segment_filename /tmp/sess/seg_%05d.ts /tmp/sess/index.m3u8"
         );
+    }
+
+    #[test]
+    fn alt_audio_plan_only_adds_the_shared_ts_offset() {
+        // Web renditions never ride in-band (no extra -map); the main pipeline
+        // differs from the flag-absent args ONLY by the shared timestamp offset.
+        let plain = transcode(VideoOp::Copy, AudioOp::Copy, SubtitleOp::None);
+        let mut with_alt = plain.clone();
+        if let TranscodePlan::Transcode { alt_audio, .. } = &mut with_alt {
+            alt_audio.push((1, AudioOp::Copy));
+        }
+        let base = ffmpeg_args(&plain, "/lib/m.mkv", "/tmp/sess", 0, HwEncoder::Cpu).join(" ");
+        let alt = ffmpeg_args(&with_alt, "/lib/m.mkv", "/tmp/sess", 0, HwEncoder::Cpu).join(" ");
+        assert_eq!(
+            alt,
+            base.replace(" -f hls ", " -output_ts_offset 30 -f hls ")
+        );
+        assert!(!alt.contains("0:a:1"), "{alt}");
     }
 
     #[test]
@@ -1819,6 +1860,7 @@ mod tests {
             segment_format: SegmentFormat::Fmp4,
             audio_index: 0,
             extra_audio: Vec::new(),
+            alt_audio: Vec::new(),
             reason: "container mkv not supported by client".into(),
         };
         let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi).join(" ");
@@ -1850,6 +1892,7 @@ mod tests {
                 segment_format: SegmentFormat::Fmp4,
                 audio_index: 0,
                 extra_audio: Vec::new(),
+                alt_audio: Vec::new(),
                 reason: "dv passthrough".into(),
             };
             let j = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Vaapi).join(" ");

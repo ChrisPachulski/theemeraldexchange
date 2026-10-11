@@ -372,27 +372,45 @@ impl Session {
         else {
             return Vec::new();
         };
-        if extra_audio.is_empty() {
-            return Vec::new();
-        }
-        let mut out = Vec::with_capacity(extra_audio.len() + 1);
-        out.push(rendition_from(
-            self.audio_tracks.get(*audio_index),
-            *audio_index,
-            true,
-            None,
-        ));
-        for (idx, _op) in extra_audio {
-            out.push(rendition_from(
-                self.audio_tracks.get(*idx),
-                *idx,
-                false,
-                Some(*idx),
-            ));
-        }
-        dedupe_rendition_names(&mut out);
-        out
+        audio_group(&self.audio_tracks, *audio_index, extra_audio)
     }
+
+    /// The `alt_audio` (hls.js) twin of [`Self::alt_audio_renditions`]: the
+    /// plan's `alt_audio` tracks, each an `audio_{n}.m3u8` written by the web
+    /// rendition pass. Not gated on the resume offset — that pass seeks with the
+    /// main pipeline and shares its timestamp origin, so a resumed session lines
+    /// up too. Empty without the flag or for a single-audio title.
+    fn web_audio_renditions(&self) -> Vec<AudioRendition> {
+        let TranscodePlan::Transcode {
+            audio_index,
+            alt_audio,
+            ..
+        } = &self.plan
+        else {
+            return Vec::new();
+        };
+        audio_group(&self.audio_tracks, *audio_index, alt_audio)
+    }
+}
+
+/// One `aud` group: the primary track in-band (`DEFAULT=YES`, no URI) and each
+/// of `extras` as its own `audio_{n}.m3u8` rendition, names made unique. Empty
+/// when there are no extras (a lone in-band track needs no group).
+fn audio_group(
+    tracks: &[AudioTrack],
+    primary: usize,
+    extras: &[(usize, crate::plan::AudioOp)],
+) -> Vec<AudioRendition> {
+    if extras.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(extras.len() + 1);
+    out.push(rendition_from(tracks.get(primary), primary, true, None));
+    for (idx, _op) in extras {
+        out.push(rendition_from(tracks.get(*idx), *idx, false, Some(*idx)));
+    }
+    dedupe_rendition_names(&mut out);
+    out
 }
 
 /// Force every rendition in an alternate-audio group to a DISTINCT `NAME`, as
@@ -1319,6 +1337,24 @@ impl SessionManager {
             )
             .await?;
 
+        // Alternate-audio renditions for an `alt_audio` (hls.js) client: ONE
+        // detached pass segments every extra track, seeked to the same `eff`
+        // and stamped with the same ts offset as the main child, so hls.js
+        // lines them up with the video even on a resumed session. Best-effort
+        // like the passes above: a failure leaves only the in-band primary.
+        if let TranscodePlan::Transcode { alt_audio, .. } = &opts.plan
+            && !alt_audio.is_empty()
+        {
+            let args = crate::trickplay::audio_renditions_args(
+                &opts.input_path,
+                &dir.to_string_lossy(),
+                alt_audio,
+                eff_start,
+                crate::args::ALT_AUDIO_TS_OFFSET_SECS,
+            );
+            self.spawn_one_shot(&session_id, &dir, args, "web audio rendition");
+        }
+
         let (ctl_tx, ctl_rx) = mpsc::unbounded_channel();
         let session = Session {
             info_kind: opts.media_kind,
@@ -1685,47 +1721,127 @@ impl SessionManager {
                 *audio_index,
                 op,
             );
-            let mut cmd = Command::new(&self.ffmpeg_bin);
-            cmd.args(&args)
-                .current_dir(dir)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::piped())
-                .kill_on_drop(true);
-            let id = session_id.to_string();
-            let index = *audio_index;
-            tokio::spawn(async move {
-                let mut child = match spawn_retrying_etxtbsy(&mut cmd).await {
-                    Ok(child) => child,
-                    Err(e) => {
-                        tracing::warn!(session = %id, index, error = %e, "failed to spawn audio rendition pass");
-                        return;
-                    }
-                };
-                let stderr = child.stderr.take();
-                if let Some(stderr) = stderr {
-                    use tokio::io::{AsyncBufReadExt, BufReader};
-                    let mut lines = BufReader::new(stderr).lines();
-                    while let Ok(Some(line)) = lines.next_line().await {
-                        let trimmed = line.trim();
-                        if !trimmed.is_empty() {
-                            tracing::warn!(session = %id, index, "audio rendition ffmpeg: {trimmed}");
-                        }
-                    }
-                }
-                match child.wait().await {
-                    Ok(status) if status.success() => {
-                        tracing::debug!(session = %id, index, "audio rendition complete")
-                    }
-                    Ok(status) => {
-                        tracing::warn!(session = %id, index, %status, "audio rendition pass exited non-zero")
-                    }
-                    Err(e) => {
-                        tracing::warn!(session = %id, index, error = %e, "audio rendition pass could not be awaited")
-                    }
-                }
-            });
+            self.spawn_one_shot(session_id, dir, args, "audio rendition");
         }
+    }
+
+    /// Run one detached, best-effort ffmpeg pass in `dir`: stderr drained into
+    /// the log tagged `what`, the child reaped, any failure logged and
+    /// otherwise ignored — `start` never waits on it.
+    fn spawn_one_shot(
+        &self,
+        session_id: &str,
+        dir: &std::path::Path,
+        args: Vec<String>,
+        what: &'static str,
+    ) {
+        let mut cmd = Command::new(&self.ffmpeg_bin);
+        cmd.args(&args)
+            .current_dir(dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true);
+        let id = session_id.to_string();
+        tokio::spawn(async move {
+            let mut child = match spawn_retrying_etxtbsy(&mut cmd).await {
+                Ok(child) => child,
+                Err(e) => {
+                    tracing::warn!(session = %id, error = %e, "failed to spawn {what} pass");
+                    return;
+                }
+            };
+            if let Some(stderr) = child.stderr.take() {
+                use tokio::io::{AsyncBufReadExt, BufReader};
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        tracing::warn!(session = %id, "{what} ffmpeg: {trimmed}");
+                    }
+                }
+            }
+            match child.wait().await {
+                Ok(status) if status.success() => tracing::debug!(session = %id, "{what} complete"),
+                Ok(status) => tracing::warn!(session = %id, %status, "{what} pass exited non-zero"),
+                Err(e) => {
+                    tracing::warn!(session = %id, error = %e, "{what} pass could not be awaited")
+                }
+            }
+        });
+    }
+
+    /// The alternate-audio MASTER for an `alt_audio` (hls.js) session (see
+    /// [`crate::trickplay::audio_master`]), or `None` when the session is
+    /// unknown or has no web renditions — the grant then hands out the plain
+    /// `index.m3u8`, exactly as without the flag.
+    pub async fn web_master(&self, id: &str) -> Option<String> {
+        let guard = self.sessions.lock().await;
+        let s = guard.get(id)?;
+        let audio = s.web_audio_renditions();
+        if audio.is_empty() {
+            return None;
+        }
+        let bandwidth_bps = s
+            .source_avg_kbps
+            .map(|kbps| kbps.saturating_mul(1000))
+            .unwrap_or(6_000_000);
+        Some(crate::trickplay::audio_master(bandwidth_bps, &audio))
+    }
+
+    /// Make sure the browser JPEG for trick-play thumbnail `name`
+    /// (`thumb_%05d.jpg`) exists in the session dir, converting its
+    /// single-I-frame `.ts` sibling on first request (see
+    /// [`crate::trickplay::thumb_jpeg_args`]). Each thumbnail converts at most
+    /// once, so a session's total work is bounded by its thumbnail count. False
+    /// for an unknown session, a non-thumbnail name, or a thumbnail the sampler
+    /// hasn't written (copy-remux sessions have none).
+    pub async fn thumb_jpeg(&self, id: &str, name: &str) -> bool {
+        let Some(stem) = name
+            .strip_suffix(".jpg")
+            .filter(|s| s.starts_with("thumb_"))
+        else {
+            return false;
+        };
+        let Some(jpg) = self.asset_path(id, name).await else {
+            return false;
+        };
+        if tokio::fs::try_exists(&jpg).await.unwrap_or(false) {
+            return true;
+        }
+        let ts = jpg.with_file_name(format!("{stem}.ts"));
+        if !tokio::fs::try_exists(&ts).await.unwrap_or(false) {
+            return false;
+        }
+        // A unique scratch name so two racing requests never write one file;
+        // the rename publishes a complete JPEG or nothing.
+        let partial = jpg.with_file_name(format!(
+            "{name}.{}.partial",
+            START_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let args =
+            crate::trickplay::thumb_jpeg_args(&ts.to_string_lossy(), &partial.to_string_lossy());
+        let mut cmd = Command::new(&self.ffmpeg_bin);
+        cmd.args(&args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true);
+        let converted = match spawn_retrying_etxtbsy(&mut cmd).await {
+            Ok(mut child) => matches!(
+                tokio::time::timeout(Duration::from_secs(10), child.wait()).await,
+                Ok(Ok(status)) if status.success()
+            ),
+            Err(e) => {
+                tracing::warn!(session = %id, error = %e, "failed to spawn thumbnail jpeg conversion");
+                false
+            }
+        };
+        if converted && tokio::fs::rename(&partial, &jpg).await.is_ok() {
+            return true;
+        }
+        let _ = tokio::fs::remove_file(&partial).await;
+        false
     }
 
     /// Probe + cache `path`'s keyframes in the background, deduped against any
@@ -2266,6 +2382,7 @@ mod tests {
             segment_format: crate::plan::SegmentFormat::MpegTs,
             audio_index: 0,
             extra_audio: Vec::new(),
+            alt_audio: Vec::new(),
             reason: "test".into(),
         }
     }
@@ -3224,6 +3341,7 @@ mod tests {
                 subtitle: SubtitleOp::None,
                 audio_index: 0,
                 extra_audio: Vec::new(),
+                alt_audio: Vec::new(),
                 reason: "test".into(),
             },
             start_secs: 0,
@@ -3283,6 +3401,7 @@ mod tests {
                     segment_format: crate::plan::SegmentFormat::Fmp4,
                     audio_index: 0,
                     extra_audio: Vec::new(),
+                    alt_audio: Vec::new(),
                     reason: "hevc copy".into(),
                 },
                 ..remux_opts_id("/lib/arcane.mkv", 2)
@@ -3351,6 +3470,7 @@ mod tests {
                     segment_format: crate::plan::SegmentFormat::Fmp4,
                     audio_index: 0,
                     extra_audio: Vec::new(),
+                    alt_audio: Vec::new(),
                     reason: "hevc copy".into(),
                 },
                 ..remux_opts_id(&src_str, 7)
@@ -3648,6 +3768,7 @@ mod tests {
             subtitle: SubtitleOp::None,
             audio_index: 0,
             extra_audio: Vec::new(),
+            alt_audio: Vec::new(),
             reason: "test".into(),
         };
         let args = crate::args::ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, mgr.encoder());

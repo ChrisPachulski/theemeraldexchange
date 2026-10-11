@@ -405,52 +405,134 @@ pub(crate) fn audio_rendition_args(
     audio_index: usize,
     op: &crate::plan::AudioOp,
 ) -> Vec<String> {
+    audio_renditions_args(input, session_dir, &[(audio_index, op.clone())], 0, 0)
+}
+
+/// ffmpeg argument vector for one pass writing SEVERAL alternate-audio
+/// renditions: one input, one HLS output per track (each laid out exactly as
+/// [`audio_rendition_args`] describes). One demux for every track keeps the
+/// library-disk read to a single pass however many languages the title has.
+///
+/// `start_secs` (> 0) seeks the input like the main pipeline's `-ss`, so a
+/// resumed session's renditions start where its video does; `ts_offset_secs`
+/// (> 0) is [`crate::args::ALT_AUDIO_TS_OFFSET_SECS`], shared with the main
+/// pipeline so both sides keep one timestamp origin. Both 0 = the native pass.
+pub(crate) fn audio_renditions_args(
+    input: &str,
+    session_dir: &str,
+    tracks: &[(usize, crate::plan::AudioOp)],
+    start_secs: u64,
+    ts_offset_secs: u32,
+) -> Vec<String> {
     let mut a: Vec<String> = vec![
         "-hide_banner".into(),
         "-loglevel".into(),
         "warning".into(),
         "-nostdin".into(),
+    ];
+    if start_secs > 0 {
+        a.push("-ss".into());
+        a.push(start_secs.to_string());
+    }
+    a.extend([
         "-fflags".into(),
         "+genpts".into(),
         "-i".into(),
         input.into(),
-        "-map".into(),
-        format!("0:a:{audio_index}?"),
-        "-vn".into(),
-        "-sn".into(),
-    ];
-    match op {
-        crate::plan::AudioOp::Copy => {
-            a.push("-c:a".into());
-            a.push("copy".into());
-        }
-        crate::plan::AudioOp::EncodeAac { bitrate_kbps } => {
-            a.push("-c:a".into());
-            a.push("aac".into());
-            a.push("-ac".into());
-            a.push("2".into());
-            a.push("-b:a".into());
-            a.push(format!("{bitrate_kbps}k"));
-        }
-    }
-    a.extend([
-        "-f".into(),
-        "hls".into(),
-        "-hls_time".into(),
-        crate::args::HLS_SEGMENT_SECS.to_string(),
-        "-hls_list_size".into(),
-        "0".into(),
-        "-hls_flags".into(),
-        "append_list".into(),
-        "-hls_playlist_type".into(),
-        "vod".into(),
-        "-hls_segment_type".into(),
-        "mpegts".into(),
-        "-hls_segment_filename".into(),
-        format!("{session_dir}/audio_{audio_index}_%05d.ts"),
-        format!("{session_dir}/{}", audio_playlist_name(audio_index)),
     ]);
+    for (audio_index, op) in tracks {
+        a.extend([
+            "-map".into(),
+            format!("0:a:{audio_index}?"),
+            "-vn".into(),
+            "-sn".into(),
+        ]);
+        match op {
+            crate::plan::AudioOp::Copy => {
+                a.push("-c:a".into());
+                a.push("copy".into());
+            }
+            crate::plan::AudioOp::EncodeAac { bitrate_kbps } => {
+                a.push("-c:a".into());
+                a.push("aac".into());
+                a.push("-ac".into());
+                a.push("2".into());
+                a.push("-b:a".into());
+                a.push(format!("{bitrate_kbps}k"));
+            }
+        }
+        if ts_offset_secs > 0 {
+            a.push("-output_ts_offset".into());
+            a.push(ts_offset_secs.to_string());
+        }
+        a.extend([
+            "-f".into(),
+            "hls".into(),
+            "-hls_time".into(),
+            crate::args::HLS_SEGMENT_SECS.to_string(),
+            "-hls_list_size".into(),
+            "0".into(),
+            "-hls_flags".into(),
+            "append_list".into(),
+            "-hls_playlist_type".into(),
+            "vod".into(),
+            "-hls_segment_type".into(),
+            "mpegts".into(),
+            "-hls_segment_filename".into(),
+            format!("{session_dir}/audio_{audio_index}_%05d.ts"),
+            format!("{session_dir}/{}", audio_playlist_name(*audio_index)),
+        ]);
+    }
     a
+}
+
+/// Filename of the alternate-audio MASTER served to an `alt_audio` (hls.js)
+/// client: [`audio_master`] over the session's own `index.m3u8`.
+pub(crate) const AUDIO_MASTER_NAME: &str = "master.m3u8";
+
+/// MASTER playlist for an `alt_audio` (hls.js) session: the [`AUDIO_GROUP_ID`]
+/// group (primary in-band, extras as `audio_{n}.m3u8`) over ONE video variant,
+/// the session's on-disk `index.m3u8` — the same growing EVENT playlist the web
+/// plays without the flag. Unlike [`master`] (native only) it points at
+/// `index.m3u8`, never the synthesized `media.m3u8` VOD list, whose not-yet-
+/// encoded tail hls.js would request and 404.
+pub(crate) fn audio_master(variant_bandwidth_bps: u32, audio: &[AudioRendition]) -> String {
+    let mut m = String::from("#EXTM3U\n#EXT-X-VERSION:4\n");
+    for rendition in audio {
+        m.push_str(&audio_media_tag(rendition));
+    }
+    m.push_str(&format!(
+        "#EXT-X-STREAM-INF:BANDWIDTH={variant_bandwidth_bps},AUDIO=\"{AUDIO_GROUP_ID}\"\nindex.m3u8\n"
+    ));
+    m
+}
+
+/// ffmpeg argument vector converting one trick-play thumbnail segment (a
+/// single-I-frame `thumb_%05d.ts`, see [`thumb_args`]) into a JPEG an `<img>`
+/// can show. One 320px frame decode + encode — tens of milliseconds — so the
+/// browser preview reuses the thumbnails the sampler already made instead of
+/// decoding the source again. Raw MJPEG of one frame is a plain JPEG file.
+pub(crate) fn thumb_jpeg_args(thumb_ts: &str, out_path: &str) -> Vec<String> {
+    [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-i",
+        thumb_ts,
+        "-frames:v",
+        "1",
+        "-c:v",
+        "mjpeg",
+        "-q:v",
+        "5",
+        "-f",
+        "mjpeg",
+        "-y",
+        out_path,
+    ]
+    .map(String::from)
+    .to_vec()
 }
 
 #[cfg(test)]
@@ -802,5 +884,75 @@ mod tests {
         assert!(j.contains("-c:a aac -ac 2 -b:a 192k"), "{j}");
         assert!(j.contains("/scratch/sess/audio_1_%05d.ts"), "{j}");
         assert!(j.trim_end().ends_with("/scratch/sess/audio_1.m3u8"), "{j}");
+    }
+
+    #[test]
+    fn native_audio_rendition_argv_is_pinned() {
+        // The native (AppleCoreMedia) pass is unchanged by the web renditions:
+        // no -ss, no timestamp offset, one track per process.
+        let j = audio_rendition_args("/m.mkv", "/s", 1, &crate::plan::AudioOp::Copy).join(" ");
+        assert_eq!(
+            j,
+            "-hide_banner -loglevel warning -nostdin -fflags +genpts -i /m.mkv \
+             -map 0:a:1? -vn -sn -c:a copy -f hls -hls_time 2 -hls_list_size 0 \
+             -hls_flags append_list -hls_playlist_type vod -hls_segment_type mpegts \
+             -hls_segment_filename /s/audio_1_%05d.ts /s/audio_1.m3u8"
+        );
+    }
+
+    #[test]
+    fn web_renditions_share_one_demux_the_seek_and_the_ts_offset() {
+        let tracks = [
+            (0, crate::plan::AudioOp::Copy),
+            (2, crate::plan::AudioOp::EncodeAac { bitrate_kbps: 256 }),
+        ];
+        let j = audio_renditions_args("/m.mkv", "/s", &tracks, 120, 30).join(" ");
+        // One input, seeked like the main pipeline.
+        assert_eq!(j.matches(" -i ").count(), 1, "{j}");
+        assert!(
+            j.starts_with(
+                "-hide_banner -loglevel warning -nostdin -ss 120 -fflags +genpts -i /m.mkv "
+            ),
+            "{j}"
+        );
+        // One HLS output per track, each carrying the shared offset.
+        assert_eq!(j.matches("-output_ts_offset 30 -f hls").count(), 2, "{j}");
+        assert!(
+            j.contains("-map 0:a:0? -vn -sn -c:a copy -output_ts_offset 30"),
+            "{j}"
+        );
+        assert!(
+            j.contains("-map 0:a:2? -vn -sn -c:a aac -ac 2 -b:a 256k -output_ts_offset 30"),
+            "{j}"
+        );
+        assert!(j.contains("/s/audio_0_%05d.ts /s/audio_0.m3u8"), "{j}");
+        assert!(
+            j.trim_end().ends_with("/s/audio_2_%05d.ts /s/audio_2.m3u8"),
+            "{j}"
+        );
+    }
+
+    #[test]
+    fn audio_master_points_hls_js_at_the_event_playlist() {
+        let audio = [
+            rendition("eng", Some("eng"), true, None),
+            rendition("spa", Some("spa"), false, Some(1)),
+        ];
+        assert_eq!(
+            audio_master(6_000_000, &audio),
+            "#EXTM3U\n#EXT-X-VERSION:4\n\
+             #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"eng\",LANGUAGE=\"eng\",AUTOSELECT=YES,DEFAULT=YES\n\
+             #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"spa\",LANGUAGE=\"spa\",AUTOSELECT=YES,DEFAULT=NO,URI=\"audio_1.m3u8\"\n\
+             #EXT-X-STREAM-INF:BANDWIDTH=6000000,AUDIO=\"aud\"\nindex.m3u8\n"
+        );
+    }
+
+    #[test]
+    fn thumb_jpeg_args_convert_one_frame() {
+        assert_eq!(
+            thumb_jpeg_args("/s/thumb_00003.ts", "/s/thumb_00003.jpg.1.partial").join(" "),
+            "-hide_banner -loglevel error -nostdin -i /s/thumb_00003.ts -frames:v 1 \
+             -c:v mjpeg -q:v 5 -f mjpeg -y /s/thumb_00003.jpg.1.partial"
+        );
     }
 }
