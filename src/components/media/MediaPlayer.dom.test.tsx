@@ -544,6 +544,22 @@ describe('MediaPlayer (mounted) — binge flow', () => {
     expect(screen.queryByRole('group', { name: 'Up next' })).not.toBeInTheDocument()
   })
 
+  it('a seek back out of the last 30 s cancels the armed countdown', async () => {
+    vi.useFakeTimers()
+    const onPlayEpisode = vi.fn()
+    render(<Harness onPlayEpisode={onPlayEpisode} />)
+    await flush()
+
+    act(() => engineProps.current?.onPositionUpdate?.(1475, null))
+    expect(screen.getByRole('group', { name: 'Up next' })).toBeInTheDocument()
+    act(() => engineProps.current?.onPositionUpdate?.(100, null))
+    expect(screen.queryByRole('group', { name: 'Up next' })).not.toBeInTheDocument()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000)
+    })
+    expect(onPlayEpisode).not.toHaveBeenCalled()
+  })
+
   it('auto-advances on countdown, then gates the third unattended advance', async () => {
     vi.useFakeTimers()
     const onPlayEpisode = vi.fn()

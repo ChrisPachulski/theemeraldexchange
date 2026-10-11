@@ -672,6 +672,9 @@ export function MediaPlayer({
         upNextDue(pos, dur)
       ) {
         setUpNextSecs((s) => s ?? UP_NEXT_COUNTDOWN_SECS)
+      } else if (!upNextDue(pos, dur)) {
+        // Seeked back out of the final window: the countdown no longer applies.
+        setUpNextSecs(null)
       }
     },
     [report, grant?.delivery, grant?.durationSecs, startPositionSecs, id, stillWatching, nextEpisode, videoEl],
