@@ -443,6 +443,14 @@
   padding-bottom: var(--s-2);
 }
 
+.user-menu__hint {
+  margin: var(--s-1) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: 1.4;
+  color: var(--text-subtle);
+}
+
 .user-menu__disclosure-status {
   font-family: var(--font-mono);
   font-feature-settings: 'tnum' 1;

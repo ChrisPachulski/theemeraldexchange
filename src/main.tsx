@@ -8,6 +8,7 @@ import { initTelemetryFromServer } from './lib/telemetry'
 import { consumeInviteFragment } from './lib/inviteFragment'
 import { consumeLinkFragment } from './lib/linkFragment'
 import { mountAnimatedFavicon } from './lib/animatedFavicon'
+import { setReduceMotion, storedReduceMotion } from './lib/reduceMotion'
 import App from './App'
 import './index.css'
 
@@ -15,6 +16,7 @@ import './index.css'
 // can observe the startup URL, including when the visitor is already signed in.
 const initialInviteCode = consumeInviteFragment()
 consumeLinkFragment()
+setReduceMotion(storedReduceMotion())
 
 // Injected/build-time telemetry still initialises synchronously inside this
 // call; a server-config fetch continues in the background without delaying UI.

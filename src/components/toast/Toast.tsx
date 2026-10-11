@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { prefersReducedMotion } from '../../lib/viewTransition'
 import './Toast.css'
 
 type Props = {
@@ -39,9 +40,7 @@ export function Toast({ message, onDone, duration = 3200 }: Props) {
   // Auto-dismiss timer, (re)started whenever a message becomes visible.
   useEffect(() => {
     if (!message) return
-    const reduce =
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const reduce = prefersReducedMotion()
 
     const id = window.setTimeout(() => {
       if (reduce) {

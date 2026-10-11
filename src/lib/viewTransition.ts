@@ -23,6 +23,10 @@ type ViewTransitionDocument = Document & {
 }
 
 export function prefersReducedMotion(): boolean {
+  // The in-app toggle (src/lib/reduceMotion.ts) counts the same as the OS one.
+  if (typeof document !== 'undefined' && document.documentElement?.hasAttribute('data-reduce-motion')) {
+    return true
+  }
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
     return false
   }

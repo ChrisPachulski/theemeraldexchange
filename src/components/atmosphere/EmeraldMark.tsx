@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { GemScene } from '../../lib/gemScene'
+import { prefersReducedMotion } from '../../lib/viewTransition'
 import './EmeraldMark.css'
 
 interface EmeraldMarkProps {
@@ -66,7 +67,7 @@ export function EmeraldMark({ width = 64, variant = 'single', className }: Emera
         const activeScene = scene
         const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
         const syncMotion = () => {
-          if (reducedMotionQuery.matches) {
+          if (prefersReducedMotion()) {
             activeScene.stop()
             activeScene.renderAt(0)
           } else if (document.hidden) {
@@ -78,9 +79,13 @@ export function EmeraldMark({ width = 64, variant = 'single', className }: Emera
         syncMotion()
         document.addEventListener('visibilitychange', syncMotion)
         reducedMotionQuery.addEventListener('change', syncMotion)
+        // The in-app Reduce motion toggle flips an attribute, not the query.
+        const toggleObserver = new MutationObserver(syncMotion)
+        toggleObserver.observe(document.documentElement, { attributeFilter: ['data-reduce-motion'] })
         teardown = () => {
           document.removeEventListener('visibilitychange', syncMotion)
           reducedMotionQuery.removeEventListener('change', syncMotion)
+          toggleObserver.disconnect()
         }
       })
       .catch((err) => {

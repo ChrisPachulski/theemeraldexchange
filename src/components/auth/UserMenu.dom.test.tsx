@@ -28,6 +28,7 @@ vi.mock('./DiscordNotifications', () => ({ DiscordNotifications: () => null }))
 vi.mock('./ApiKeySettings', () => ({ ApiKeySettings: () => null }))
 vi.mock('./DevicesPanel', () => ({ DevicesPanel: () => null }))
 vi.mock('./InvitesPanel', () => ({ InvitesPanel: () => null }))
+vi.mock('./PreferencesPanel', () => ({ PreferencesPanel: () => null }))
 
 type AuthShape = {
   user: { sub: string; username: string } | null
