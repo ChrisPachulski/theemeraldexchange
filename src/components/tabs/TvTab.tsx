@@ -6,6 +6,9 @@ import { MediaCard } from '../search/MediaCard'
 import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { LibraryAlphabet, libraryBucket, type LibraryLetter } from '../library/LibraryAlphabet'
 import { LibraryFilters, type FilterOption } from '../library/LibraryFilters'
+import { LibraryBrowse, type BrowseRow } from '../library/LibraryBrowse'
+import type { Card } from '../home/HomeShelves'
+import { continueWatching, episodeLabel as resumeEpisodeLabel, titleKey } from '../home/shelves'
 import { DetailModal, type DetailMeta, type SeasonEpisode } from '../detail/DetailModal'
 import { ArrAdvancedPanel } from '../detail/ArrAdvancedPanel'
 import { AddSeriesModal } from '../add/AddSeriesModal'
@@ -32,7 +35,7 @@ import { useConfirm } from '../confirm/useConfirm'
 import { seriesAvailability, sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import type { MediaEpisode } from '../../lib/api/media'
-import { seriesPlayback, watchBadge } from '../../lib/watchState'
+import { seriesPlayback, watchBadge, watchFraction } from '../../lib/watchState'
 import { withViewTransition } from '../../lib/viewTransition'
 import { useIntent } from '../../lib/router'
 import {
@@ -43,6 +46,7 @@ import {
   byYearDesc,
   byAddedDesc,
   byRatingDesc,
+  browseShelves,
   distinctGenres,
   seriesRating,
 } from '../../lib/librarySort'
@@ -333,6 +337,34 @@ export function TvTab() {
       setMode('library')
     })
 
+  // Browse mode (Apple's Recommended): shelves over the rating-capped shows
+  // with an episode on disk. Resume rows join by show title, as Home does.
+  const browseRows = useMemo((): BrowseRow[] => {
+    if (mode !== 'browse') return []
+    const available = (visibleLibrary ?? []).filter((s) => seriesAvailability(s) === 'playable')
+    const card = (s: Series, meta?: string | null, progress?: number): Card => ({
+      key: String(s.id),
+      title: s.title,
+      meta: meta ?? (s.year ? String(s.year) : null),
+      poster: pickLibraryPoster(s),
+      progress,
+      onOpen: () => setViewing(s),
+    })
+    const byTitle = new Map(available.map((s) => [titleKey(s.title), s]))
+    const seen = new Set<number>()
+    const resume = continueWatching(mediaWatch.data?.values() ?? []).flatMap((r) => {
+      const s = r.mediaKind === 'episode' && r.showTitle ? byTitle.get(titleKey(r.showTitle)) : undefined
+      if (!s || seen.has(s.id)) return []
+      seen.add(s.id)
+      return [card(s, resumeEpisodeLabel(r), watchFraction(r) || undefined)]
+    })
+    const shelves = browseShelves(available, { noun: 'shows', rating: seriesRating })
+    return [
+      ...(resume.length ? [{ key: 'resume', label: 'Continue watching', cards: resume }] : []),
+      ...shelves.map((sh) => ({ key: sh.key, label: sh.label, cards: sh.items.map((s) => card(s)) })),
+    ]
+  }, [mode, visibleLibrary, mediaWatch.data])
+
   // Text + status filter, then sort. Article-stripped sort key is used
   // for title sorts (Plex behavior — "The Mandalorian" sorts under M).
   // Alphabet bucket runs against the same key so the bar matches the sort.
@@ -480,6 +512,14 @@ export function TvTab() {
             </div>
           )}
         </>
+      ) : mode === 'browse' ? (
+        <LibraryBrowse
+          loading={library.isPending}
+          rows={browseRows}
+          genres={libraryGenres}
+          onGenre={showGenre}
+          emptyHint={library.error ? "Couldn't load your Sonarr library." : 'Your library is empty. Add something from Discover.'}
+        />
       ) : (
         <>
           {!library.isPending && !library.error && (visibleLibrary?.length ?? 0) > 0 && (
@@ -530,6 +570,8 @@ export function TvTab() {
           onChange={(next) => {
             setQuery(next)
             setLetter('all')
+            // Shelves can't be searched: typing searches the library grid.
+            if (mode === 'browse') setMode('library')
           }}
           placeholder={placeholder}
           ariaLabel="Search TV shows"

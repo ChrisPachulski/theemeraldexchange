@@ -50,20 +50,23 @@ const MEDIA_EPISODES = [[101, 1, 1], [102, 1, 2], [103, 1, 3], [104, 2, 1]].map(
 }))
 
 type WatchRow = Record<string, unknown>
-const watchRow = (kind: string, id: number, pos: number, dur: number, completed = false): WatchRow => ({
-  media_kind: kind, media_id: id, position_secs: pos, duration_secs: dur,
-  watched_at: `2026-10-0${id % 9}T20:00:00Z`, completed: completed ? 1 : 0,
-  title: kind === 'episode' ? 'Ep' : 'Movie', show_title: kind === 'episode' ? 'Test Show' : null,
-})
+const watchRow = (kind: string, id: number, pos: number, dur: number, completed = false): WatchRow => {
+  const ep = MEDIA_EPISODES.find((e) => kind === 'episode' && e.id === id)
+  return {
+    media_kind: kind, media_id: id, position_secs: pos, duration_secs: dur,
+    watched_at: `2026-10-0${id % 9}T20:00:00Z`, completed: completed ? 1 : 0,
+    title: ep ? 'Ep' : 'Movie', show_title: ep ? 'Test Show' : null, season: ep?.season, episode: ep?.episode,
+  }
+}
 
 type Grant = { kind: string; id: number; body: Record<string, unknown> }
 
-async function setup(page: Page, opts: { watch?: WatchRow[] } = {}): Promise<Grant[]> {
+async function setup(page: Page, opts: { watch?: WatchRow[]; movies?: unknown[] } = {}): Promise<Grant[]> {
   const grants: Grant[] = []
   await installBackgroundMocks(page)
   await mockMe(page, REGULAR_USER)
   await page.route('**/api/limits', (r) => r.fulfill(json({ maxMovieGb: 10, maxSeasonGb: 25, mediaEnabled: true })))
-  await page.route('**/api/radarr/api/v3/movie', (r) => r.fulfill(json(MOVIES)))
+  await page.route('**/api/radarr/api/v3/movie', (r) => r.fulfill(json(opts.movies ?? MOVIES)))
   await page.route('**/api/sonarr/api/v3/series', (r) => r.fulfill(json([SHOW, EMPTY_SHOW])))
   await page.route(/\/api\/sonarr\/api\/v3\/episode\?/, (r) => r.fulfill(json(SONARR_EPISODES)))
   await page.route('**/api/media/**', async (route) => {
@@ -193,4 +196,50 @@ test('a show with nothing watched offers Play S1E1', async ({ page }) => {
   await page.getByRole('button', { name: 'Test Show' }).click()
   await page.getByRole('dialog', { name: 'Test Show' }).getByRole('button', { name: 'Play S1E1' }).click()
   await expect.poll(() => grants.map((g) => g.id)[0]).toBe(101)
+})
+
+test('Browse mode shelves the library and its genre chips open the filtered grid', async ({ page }) => {
+  const sciFi = (id: number, title: string, imdb: number, added: string) => ({
+    ...DUNE, id, tmdbId: id * 10, title, added, genres: ['Science Fiction'], ratings: { imdb: { value: imdb } },
+    digitalRelease: undefined,
+  })
+  await setup(page, {
+    movies: [...MOVIES, sciFi(20, 'Arrival', 7.9, '2025-06-01T00:00:00Z'), sciFi(21, 'Her', 8.0, '2025-05-01T00:00:00Z')],
+    watch: [watchRow('movie', 3, 600, 3200)],
+  })
+  await page.goto('/#/movies')
+  await page.getByRole('tab', { name: 'Browse' }).click()
+
+  const shelf = (label: string) => page.getByRole('region', { name: label }).locator('.trending__title')
+  await expect(shelf('Continue watching')).toHaveText(['Dune'])
+  await expect(page.getByRole('region', { name: 'Continue watching' }).locator('.home-shelf__progress > span')).toHaveAttribute(
+    'style',
+    'width: 19%;',
+  )
+  // Released titles only, newest release first; Wanted has no file.
+  await expect(shelf('Recently released')).toHaveText(['Dune', 'Alien'])
+  await expect(shelf('Recently added')).toHaveText(['Dune', 'Alien', 'Arrival', 'Her'])
+  await expect(shelf('Top movies in Science Fiction')).toHaveText(['Alien', 'Dune', 'Her', 'Arrival'])
+
+  await page.getByRole('region', { name: 'Recently added' }).getByRole('button', { name: 'Arrival' }).click()
+  await expect(page.getByRole('dialog', { name: 'Arrival' })).toBeVisible()
+  await page.getByRole('button', { name: 'Close detail view' }).click()
+
+  await page.getByRole('region', { name: 'Browse by genre' }).getByRole('button', { name: 'Horror' }).click()
+  await expect(page.getByRole('tab', { name: /In library/ })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByRole('combobox', { name: 'Filter by genre' })).toHaveValue('Horror')
+  await expect.poll(() => cardTitles(page)).toEqual(['Alien'])
+})
+
+test('Browse mode on TV resumes a show from its Continue watching card', async ({ page }) => {
+  await setup(page, { watch: [watchRow('episode', 102, 300, 1500)] })
+  await page.goto('/#/tv')
+  await page.getByRole('tab', { name: 'Browse' }).click()
+  const resume = page.getByRole('region', { name: 'Continue watching' })
+  await expect(resume.locator('.trending__title')).toHaveText(['Test Show'])
+  await expect(resume).toContainText('S1 · E2')
+  // Other Show has nothing on disk, so only Test Show is shelved.
+  await expect(page.getByRole('region', { name: 'Recently added' }).locator('.trending__title')).toHaveText(['Test Show'])
+  await resume.getByRole('button', { name: 'Test Show' }).click()
+  await expect(page.getByRole('dialog', { name: 'Test Show' }).getByRole('button', { name: 'Resume S1E2' })).toBeVisible()
 })

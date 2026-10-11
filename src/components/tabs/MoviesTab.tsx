@@ -6,6 +6,9 @@ import { MediaCard } from '../search/MediaCard'
 import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { LibraryAlphabet, libraryBucket, type LibraryLetter } from '../library/LibraryAlphabet'
 import { LibraryFilters, type FilterOption } from '../library/LibraryFilters'
+import { LibraryBrowse, type BrowseRow } from '../library/LibraryBrowse'
+import type { Card } from '../home/HomeShelves'
+import { continueWatching } from '../home/shelves'
 import { DetailModal, type DetailMeta } from '../detail/DetailModal'
 import { ArrAdvancedPanel } from '../detail/ArrAdvancedPanel'
 import { AddMovieModal } from '../add/AddMovieModal'
@@ -30,7 +33,7 @@ import { useConfirm } from '../confirm/useConfirm'
 import { movieAvailability, radarr, type Movie, type MovieSearchResult } from '../../lib/api/radarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import type { WatchEntry } from '../../lib/api/media'
-import { resumeLabel, watchBadge } from '../../lib/watchState'
+import { resumeLabel, watchBadge, watchFraction } from '../../lib/watchState'
 import {
   filterAndSortLibrary,
   byTitleAsc,
@@ -39,8 +42,10 @@ import {
   byYearDesc,
   byAddedDesc,
   byRatingDesc,
+  browseShelves,
   distinctGenres,
   movieRating,
+  releaseDay,
 } from '../../lib/librarySort'
 import { withViewTransition } from '../../lib/viewTransition'
 import { useIntent } from '../../lib/router'
@@ -305,6 +310,37 @@ export function MoviesTab() {
       setMode('library')
     })
 
+  // Browse mode (Apple's Recommended): shelves over the rating-capped titles
+  // that have a file to play.
+  const browseRows = useMemo((): BrowseRow[] => {
+    if (mode !== 'browse') return []
+    const available = (visibleLibrary ?? []).filter((m) => movieAvailability(m) === 'playable')
+    const card = (m: Movie, progress?: number): Card => ({
+      key: String(m.id),
+      title: m.title,
+      meta: m.year ? String(m.year) : null,
+      poster: pickLibraryPoster(m),
+      progress,
+      onOpen: () => setViewing(m),
+    })
+    const byTmdb = new Map(available.map((m) => [m.tmdbId, m]))
+    const tmdbOf = new Map([...(localMovieIdx.data ?? [])].map(([tmdb, id]) => [id, tmdb]))
+    const resume = continueWatching(mediaWatch.data?.values() ?? []).flatMap((r) => {
+      const m = r.mediaKind === 'movie' ? byTmdb.get(tmdbOf.get(r.mediaId) ?? -1) : undefined
+      return m ? [card(m, watchFraction(r) || undefined)] : []
+    })
+    const today = new Date().toISOString().slice(0, 10)
+    const shelves = browseShelves(available, {
+      noun: 'movies',
+      rating: movieRating,
+      released: (m) => releaseDay([m.digitalRelease, m.physicalRelease, m.inCinemas], today),
+    })
+    return [
+      ...(resume.length ? [{ key: 'resume', label: 'Continue watching', cards: resume }] : []),
+      ...shelves.map((sh) => ({ key: sh.key, label: sh.label, cards: sh.items.map((m) => card(m)) })),
+    ]
+  }, [mode, visibleLibrary, localMovieIdx.data, mediaWatch.data])
+
   const textFilteredLibrary = useMemo(
     () => filterAndSortLibrary(visibleLibrary, { query, status, genre, comparator: MOVIE_COMPARATORS[sort] }),
     [visibleLibrary, query, status, genre, sort],
@@ -448,6 +484,14 @@ export function MoviesTab() {
             </div>
           )}
         </>
+      ) : mode === 'browse' ? (
+        <LibraryBrowse
+          loading={library.isPending}
+          rows={browseRows}
+          genres={libraryGenres}
+          onGenre={showGenre}
+          emptyHint={library.error ? "Couldn't load your Radarr library." : 'Your library is empty. Add something from Discover.'}
+        />
       ) : (
         <>
           {!library.isPending && !library.error && (visibleLibrary?.length ?? 0) > 0 && (
@@ -499,6 +543,8 @@ export function MoviesTab() {
           onChange={(next) => {
             setQuery(next)
             setLetter('all')
+            // Shelves can't be searched: typing searches the library grid.
+            if (mode === 'browse') setMode('library')
           }}
           placeholder={placeholder}
           ariaLabel="Search movies"

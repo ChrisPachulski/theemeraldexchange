@@ -30,7 +30,7 @@ const MediaPlayer = lazy(() =>
 
 const RECENT_PER_KIND = 10
 
-type Card = {
+export type Card = {
   key: string
   title: string
   meta?: string | null
@@ -41,8 +41,8 @@ type Card = {
 }
 
 // A labelled poster row in the suggestion strip's card style. Renders nothing
-// when empty unless it has empty-state copy.
-function PosterShelf({ label, cards, empty }: { label: string; cards: Card[]; empty?: string }) {
+// when empty unless it has empty-state copy. The library's Browse mode reuses it.
+export function PosterShelf({ label, cards, empty }: { label: string; cards: Card[]; empty?: string }) {
   if (cards.length === 0 && !empty) return null
   return (
     <section className="trending" aria-label={label}>
