@@ -152,3 +152,45 @@ test('library posters show watch state and Missing, and a resumable movie reads 
   await expect(card('Other Show')).toContainText('Missing')
   await expect(card('Test Show')).not.toContainText('Missing')
 })
+
+test('a show detail resumes in one tap and plays from its season browser', async ({ page }) => {
+  const grants = await setup(page, {
+    watch: [watchRow('episode', 101, 1400, 1400, true), watchRow('episode', 102, 300, 1500)],
+  })
+  await openLibrary(page, 'tv')
+  await page.getByRole('button', { name: 'Test Show' }).click()
+  const detail = page.getByRole('dialog', { name: 'Test Show' })
+  await expect(detail.getByText('4 of 5', { exact: true })).toBeVisible()
+  // Opens on the resume target's season, with downloaded and unwatched counts.
+  await expect(detail.getByText('3 of 3 downloaded · 2 unwatched')).toBeVisible()
+  await expect(detail.getByText('1 of 2 downloaded · 2 unwatched')).toBeVisible()
+  const pilot = detail.getByRole('button', { name: /Pilot/ })
+  await expect(pilot).toBeVisible()
+  await expect(pilot).toContainText('Watched')
+  await expect(pilot).toContainText('Pilot synopsis.')
+  await expect(detail.getByRole('button', { name: /Second/ }).locator('.detail__episode-progress > span')).toHaveAttribute(
+    'style',
+    'width: 20%;',
+  )
+
+  await detail.getByRole('button', { name: 'Resume S1E2' }).click()
+  // One tap: straight to the saved offset, no resume prompt.
+  await expect.poll(() => grants.map((g) => [g.id, g.body.start_secs])[0]).toEqual([102, 300])
+  await page.getByRole('button', { name: 'Close player' }).click()
+
+  await page.getByRole('button', { name: 'Test Show' }).click()
+  await detail.getByText('Season 2', { exact: true }).click()
+  // Not downloaded locally: an info row, not a play button.
+  await expect(detail.getByText('Later', { exact: true })).toBeVisible()
+  await expect(detail.getByRole('button', { name: /Later/ })).toHaveCount(0)
+  await detail.getByRole('button', { name: /Return/ }).click()
+  await expect.poll(() => grants.map((g) => g.id)).toContain(104)
+})
+
+test('a show with nothing watched offers Play S1E1', async ({ page }) => {
+  const grants = await setup(page)
+  await openLibrary(page, 'tv')
+  await page.getByRole('button', { name: 'Test Show' }).click()
+  await page.getByRole('dialog', { name: 'Test Show' }).getByRole('button', { name: 'Play S1E1' }).click()
+  await expect.poll(() => grants.map((g) => g.id)[0]).toBe(101)
+})

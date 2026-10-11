@@ -106,12 +106,11 @@ const video = (page: Page) => page.getByTestId('iptv-player-video')
 // sequence of distinct episodes granted, not the raw request count.
 const grantedIds = (grants: Grant[]) => grants.map((g) => g.id).filter((id, i, all) => id !== all[i - 1])
 
-async function openEpisode(page: Page, code = 'S01E01') {
+async function openEpisode(page: Page) {
   await page.goto('/#/tv')
   await page.getByRole('tab', { name: /In library/ }).click()
   await page.getByRole('button', { name: /Test Show/ }).first().click()
-  await page.getByRole('button', { name: 'Watch episodes here' }).click()
-  await page.getByRole('button', { name: new RegExp(code) }).click()
+  await page.getByRole('button', { name: 'Play S1E1' }).click()
   await expect(page.getByRole('group', { name: 'Playback controls' })).toBeVisible()
   // Playing: the clock has left 0:00.
   await expect.poll(() => video(page).evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(0)
@@ -272,7 +271,6 @@ test('a progressive file the browser cannot decode re-grants with forced HLS', a
   await page.goto('/#/tv')
   await page.getByRole('tab', { name: /In library/ }).click()
   await page.getByRole('button', { name: /Test Show/ }).first().click()
-  await page.getByRole('button', { name: 'Watch episodes here' }).click()
-  await page.getByRole('button', { name: /S01E01/ }).click()
+  await page.getByRole('button', { name: 'Play S1E1' }).click()
   await expect.poll(() => grants.filter((g) => g.id === 101 && g.body.force_hls === true).length).toBe(1)
 })
