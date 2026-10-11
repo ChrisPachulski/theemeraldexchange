@@ -44,6 +44,9 @@ const IptvTab = lazy(() => import('./components/tabs/IptvTab'))
 const YouTubeTab = lazy(() =>
   import('./components/tabs/YouTubeTab').then((m) => ({ default: m.YouTubeTab })),
 )
+const MusicTab = lazy(() =>
+  import('./components/tabs/MusicTab').then((m) => ({ default: m.MusicTab })),
+)
 
 // Walkthrough is the unauthed landing experience. Authed users (the hot
 // path) never see it, so keep it out of the initial chunk. Unauthed users
@@ -61,6 +64,7 @@ const TABS: Record<Route, React.ComponentType> = {
   users: UsersTab,
   live: IptvTab,
   youtube: YouTubeTab,
+  music: MusicTab,
 }
 
 function Shell() {
@@ -85,6 +89,7 @@ function Shell() {
   // bouncing a deep link (the placeholder would always say "off").
   // TODO(policy): YouTube is unrated; also bounce rating-capped profiles (Apple MainView).
   const youtubeOff = !limits.isPlaceholderData && limits.data?.youtubeEnabled !== true
+  const musicOff = !limits.isPlaceholderData && limits.data?.musicEnabled !== true
   useEffect(() => {
     if (route === 'users' && !isAdmin) navigate('home')
     if (route === 'live' && !iptvEnabled) navigate('home')
@@ -92,14 +97,16 @@ function Shell() {
     if (route === 'movies' && !radarrEnabled) navigate('home')
     if (route === 'downloads' && !sabEnabled) navigate('home')
     if (route === 'youtube' && youtubeOff) navigate('home')
-  }, [route, isAdmin, iptvEnabled, sonarrEnabled, radarrEnabled, sabEnabled, youtubeOff, navigate])
+    if (route === 'music' && musicOff) navigate('home')
+  }, [route, isAdmin, iptvEnabled, sonarrEnabled, radarrEnabled, sabEnabled, youtubeOff, musicOff, navigate])
   const blocked =
     (route === 'users' && !isAdmin) ||
     (route === 'live' && !iptvEnabled) ||
     (route === 'tv' && !sonarrEnabled) ||
     (route === 'movies' && !radarrEnabled) ||
     (route === 'downloads' && !sabEnabled) ||
-    (route === 'youtube' && youtubeOff)
+    (route === 'youtube' && youtubeOff) ||
+    (route === 'music' && musicOff)
   const effectiveRoute: Route = blocked ? 'home' : route
   const ActiveTab = TABS[effectiveRoute]
   const krakenVariant = effectiveRoute === 'home' ? 'kraken' : 'resting'

@@ -332,6 +332,16 @@
   }
 }
 
+/* Six or more pills (the YouTube/Music entries are on): size each to its
+   label so the row still fits one line instead of running off both edges. */
+@media (min-width: 721px) {
+  .home__entries:has(> :nth-child(6)) .home__entry {
+    min-width: 0;
+    padding-inline: var(--s-4);
+    white-space: nowrap;
+  }
+}
+
 /* iPad landscape and up — even more presence for the about panel. */
 @media (min-width: 1280px) {
   .home__panel-inner {

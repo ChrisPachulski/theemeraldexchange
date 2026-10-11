@@ -25,7 +25,7 @@ type Tab = {
   needs?: 'sonarrEnabled' | 'radarrEnabled' | 'sabEnabled'
   /** Default-off Limits key: the tab shows only when the server reports
    *  that library (an older backend without the field has none). */
-  library?: 'youtubeEnabled'
+  library?: 'youtubeEnabled' | 'musicEnabled'
 }
 
 const TABS: Tab[] = [
@@ -33,6 +33,7 @@ const TABS: Tab[] = [
   { route: 'movies', label: 'Movies', needs: 'radarrEnabled' },
   // TODO(policy): YouTube is unrated; also hide it from rating-capped profiles (Apple MainView).
   { route: 'youtube', label: 'YouTube', library: 'youtubeEnabled' },
+  { route: 'music', label: 'Music', library: 'musicEnabled' },
   // `iptv: true` hides the tab when the server boots with IPTV_DISABLED=1
   // (contract §13.3 reviewer-insurance gate).
   { route: 'live', label: 'Live', iptv: true },
@@ -44,6 +45,7 @@ const ROUTE_LABEL: Record<NavRoute, string> = {
   tv: 'TV Shows',
   movies: 'Movies',
   youtube: 'YouTube',
+  music: 'Music',
   live: 'Live',
   downloads: 'Downloads',
   users: 'Users',
@@ -64,6 +66,7 @@ export function TopNav({ active }: Props) {
     tv: null,
     movies: null,
     youtube: null,
+    music: null,
     live: null,
     downloads: null,
     users: null,

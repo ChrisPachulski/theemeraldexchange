@@ -9,7 +9,7 @@ type Entry = {
   label: string
   adminOnly?: boolean
   /** Default-off Limits key: shown only when the server reports that library. */
-  library?: 'youtubeEnabled'
+  library?: 'youtubeEnabled' | 'musicEnabled'
 }
 
 const ENTRIES: Entry[] = [
@@ -17,6 +17,7 @@ const ENTRIES: Entry[] = [
   { route: 'movies', label: 'Movies' },
   // TODO(policy): YouTube is unrated; also hide it from rating-capped profiles (Apple MainView).
   { route: 'youtube', label: 'YouTube', library: 'youtubeEnabled' },
+  { route: 'music', label: 'Music', library: 'musicEnabled' },
   { route: 'live', label: 'Live' },
   { route: 'downloads', label: 'Downloader' },
   { route: 'users', label: 'Users', adminOnly: true },

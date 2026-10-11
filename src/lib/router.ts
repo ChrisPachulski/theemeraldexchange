@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 
-export type Route = 'home' | 'tv' | 'movies' | 'downloads' | 'users' | 'live' | 'youtube'
+export type Route = 'home' | 'tv' | 'movies' | 'downloads' | 'users' | 'live' | 'youtube' | 'music'
 
-const ROUTES: Route[] = ['home', 'tv', 'movies', 'live', 'downloads', 'users', 'youtube']
+const ROUTES: Route[] = ['home', 'tv', 'movies', 'live', 'downloads', 'users', 'youtube', 'music']
 const DEFAULT_ROUTE: Route = 'home'
 
 // ponytail: parseHash/nextHash are exported for the node-env unit tests

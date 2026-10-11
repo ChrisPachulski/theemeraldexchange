@@ -30,9 +30,12 @@ test('library tabs stay hidden unless the server reports the library', async ({ 
   const sections = page.getByRole('navigation', { name: 'Sections' })
   await expect(sections.getByRole('button', { name: 'Movies' })).toBeVisible()
   await expect(sections.getByRole('button', { name: 'YouTube' })).toHaveCount(0)
+  await expect(sections.getByRole('button', { name: 'Music' })).toHaveCount(0)
 
-  // A stale deep link bounces home once the real limits arrive.
+  // Stale deep links bounce home once the real limits arrive.
   await page.goto('/#/youtube')
+  await expect(page).toHaveURL(/#\/home$/)
+  await page.goto('/#/music')
   await expect(page).toHaveURL(/#\/home$/)
 })
 
@@ -79,4 +82,74 @@ test('YouTube tab shows Latest + channel rows and plays a video as kind video', 
   // Dedupe: dev StrictMode mounts the player's session effect twice.
   expect([...new Set(playback)]).toEqual(['/api/media/playback/video/9'])
   await expect(page.getByRole('dialog', { name: 'Deep Sea Life' })).toBeVisible()
+})
+
+test('Music tab drills Artists -> Albums -> Tracks, retries a failed level, and plays a track', async ({ page }) => {
+  await setup(page, { musicEnabled: true })
+  const playback: string[] = []
+  let albumsCalls = 0
+  await page.route('**/api/media/**', (route) => {
+    const url = new URL(route.request().url())
+    const p = url.pathname
+    if (p === '/api/media/music/artists') {
+      return route.fulfill(json({ items: [{ id: 1, name: 'Boards of Canada', album_count: 1 }], total: 1 }))
+    }
+    if (p === '/api/media/music/albums') {
+      // The first load and the query client's one automatic retry fail, so
+      // the error-with-retry state is exercised.
+      if (albumsCalls++ < 2) return route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"boom"}' })
+      expect(url.searchParams.get('artist_id')).toBe('1')
+      return route.fulfill(json({
+        items: [{ id: 7, artist_id: 1, artist_name: 'Boards of Canada', title: 'Geogaddi', year: 2002, track_count: 2, art_url: '/api/media/music/albums/7/art' }],
+        total: 1,
+      }))
+    }
+    if (p === '/api/media/music/tracks') {
+      expect(url.searchParams.get('album_id')).toBe('7')
+      return route.fulfill(json({
+        items: [
+          { id: 70, album_id: 7, title: 'Ready Lets Go', track_no: 1, duration_secs: 59 },
+          { id: 71, album_id: 7, title: 'Music Is Math', track_no: 2, duration_secs: 321 },
+        ],
+        total: 2,
+      }))
+    }
+    if (p.endsWith('/art')) return route.fulfill({ status: 404, body: '' })
+    if (p.startsWith('/api/media/playback/')) {
+      playback.push(p)
+      return route.fulfill(json({ delivery: 'progressive', url: '/api/media/stream/track/71?t=tok', durationSecs: 321 }))
+    }
+    if (p.startsWith('/api/media/stream/')) return route.fulfill({ status: 404, body: '' })
+    return route.fulfill(json({ items: [] }))
+  })
+
+  await page.goto('/#/home')
+  await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Music' }).click()
+  await expect(page).toHaveURL(/#\/music$/)
+
+  await page.getByRole('list', { name: 'Artists' }).getByRole('button', { name: /Boards of Canada.*1 album$/ }).click()
+  await expect(page.getByRole('alert')).toContainText("Couldn't load albums.")
+  await page.getByRole('button', { name: 'Retry' }).click()
+
+  const album = page.getByRole('list', { name: 'Albums' }).getByRole('button', { name: /Geogaddi/ })
+  await expect(album).toContainText('2002 · 2 tracks')
+  await expect(album.locator('img')).toHaveAttribute('src', /\/api\/media\/music\/albums\/7\/art$/)
+  await album.click()
+
+  await expect(page.getByRole('heading', { name: 'Geogaddi' })).toBeVisible()
+  const track = page.getByRole('list', { name: 'Tracks' }).getByRole('button', { name: /Music Is Math/ })
+  await expect(track).toContainText('Track 2 · 5:21')
+
+  const stream = page.waitForRequest((r) => r.url().includes('/api/media/stream/track/71?t=tok'))
+  await track.click()
+  await stream
+  expect([...new Set(playback)]).toEqual(['/api/media/playback/track/71'])
+  await expect(page.getByRole('dialog', { name: 'Boards of Canada — Music Is Math' })).toBeVisible()
+  await page.getByRole('button', { name: 'Close player' }).click()
+
+  // Crumbs walk back up the drill.
+  await page.getByRole('navigation', { name: 'Music library' }).getByRole('button', { name: 'Boards of Canada' }).click()
+  await expect(page.getByRole('list', { name: 'Albums' })).toBeVisible()
+  await page.getByRole('navigation', { name: 'Music library' }).getByRole('button', { name: 'Artists' }).click()
+  await expect(page.getByRole('list', { name: 'Artists' })).toBeVisible()
 })

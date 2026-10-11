@@ -400,3 +400,28 @@ div.iptv-tab__status--error p { margin: 0 0 .5rem; }
   .library-tab { padding-inline: var(--s-4); }
   .library-shelf__card { width: 200px; }
 }
+/* Music drill (Artists -> Albums -> Tracks): one bordered row per item. */
+.music-header { display: grid; gap: var(--s-2); }
+.music-header__title {
+  margin: 0; font-family: var(--font-display); font-size: var(--t-xl); font-weight: var(--w-display);
+  letter-spacing: var(--tr-display); color: var(--text); line-height: 1.1;
+}
+.music-crumbs { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.music-crumbs button {
+  padding: var(--s-1) var(--s-3); border: 1px solid var(--border); border-radius: var(--r-pod, 999px);
+  background: transparent; color: var(--text-muted); font-size: var(--t-xs); cursor: pointer;
+}
+.music-crumbs button:hover { border-color: var(--emerald); color: var(--emerald); }
+.music-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-2); max-width: var(--content-max); }
+.music-row {
+  display: flex; align-items: center; gap: var(--s-4); width: 100%; padding: var(--s-3) var(--s-4);
+  text-align: left; color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-lg); cursor: pointer; transition: border-color var(--dur-fast) var(--ease);
+}
+.music-row:hover, .music-row:focus-visible { border-color: var(--emerald); }
+.music-row__art {
+  flex: 0 0 auto; width: 48px; height: 48px; object-fit: cover;
+  border-radius: var(--r-md); background: var(--surface-2);
+}
+.music-row__title { flex: 1 1 auto; min-width: 0; font-weight: var(--w-ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music-row__meta { flex: 0 0 auto; font-size: var(--t-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
