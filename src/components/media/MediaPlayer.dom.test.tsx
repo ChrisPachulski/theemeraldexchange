@@ -18,9 +18,10 @@ import { MediaPlayer } from './MediaPlayer'
 import { HEARTBEAT_INTERVAL_MS } from './playbackSession'
 import type { MediaEpisode, PlaybackGrant } from '../../lib/api/media'
 
-const { playbackMock, heartbeatMock, stopMock, flushWatchMock, markersMock, reportMock, engineProps } = vi.hoisted(() => ({
+const { playbackMock, heartbeatMock, stopMock, flushWatchMock, markersMock, chaptersMock, reportMock, engineProps } = vi.hoisted(() => ({
   playbackMock: vi.fn(),
   markersMock: vi.fn(),
+  chaptersMock: vi.fn(),
   heartbeatMock: vi.fn(),
   stopMock: vi.fn(),
   flushWatchMock: vi.fn(),
@@ -46,6 +47,7 @@ vi.mock('../../lib/api/media', () => ({
     stop: stopMock,
     flushWatch: flushWatchMock,
     markers: markersMock,
+    chapters: chaptersMock,
   },
 }))
 vi.mock('../../lib/hooks/useMediaLibrary', () => ({
@@ -100,6 +102,8 @@ beforeEach(() => {
   flushWatchMock.mockReset()
   markersMock.mockReset()
   markersMock.mockResolvedValue([])
+  chaptersMock.mockReset()
+  chaptersMock.mockResolvedValue([])
   reportMock.mockReset()
   engineProps.current = null
 })
@@ -442,6 +446,13 @@ describe('MediaPlayer (mounted) — retry resumes where playback stopped', () =>
     render(<MediaPlayer kind="episode" id={42} title="S01E07" onClose={() => {}} />)
     await flush()
     expect(markersMock).toHaveBeenCalledExactlyOnceWith('episode', 42)
+  })
+
+  it('fetches the title\'s chapters once', async () => {
+    playbackMock.mockResolvedValue(hlsGrant())
+    render(<MediaPlayer kind="movie" id={9} title="Film" onClose={() => {}} />)
+    await flush()
+    expect(chaptersMock).toHaveBeenCalledExactlyOnceWith('movie', 9)
   })
 })
 

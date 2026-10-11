@@ -267,6 +267,11 @@ export type MediaMarker = { type: 'intro' | 'credits'; startSecs: number; endSec
 
 type RawMarkerRow = { marker_type: 'intro' | 'credits'; start_secs: number; end_secs: number }
 
+/** A chapter embedded in the title's file (media-core reads it with ffprobe). */
+export type MediaChapter = { title: string | null; startSecs: number; endSecs: number }
+
+type RawChapterRow = { title: string | null; start_secs: number; end_secs: number }
+
 /** A persisted watch-progress row (camelCase-normalised from media-core). */
 export type WatchEntry = {
   mediaKind: PlayableKind
@@ -775,6 +780,12 @@ export const mediaApi = {
   markers: (kind: PlayableKind, id: number, req?: RequestOpts): Promise<MediaMarker[]> =>
     get<{ items?: RawMarkerRow[] }>('/markers', { media_kind: kind, media_id: id }, req).then((r) =>
       (r.items ?? []).map((m) => ({ type: m.marker_type, startSecs: m.start_secs, endSecs: m.end_secs })),
+    ),
+
+  /** The file's embedded chapters (empty when it carries none). */
+  chapters: (kind: PlayableKind, id: number, req?: RequestOpts): Promise<MediaChapter[]> =>
+    get<{ items?: RawChapterRow[] }>(`/chapters/${kind}/${id}`, undefined, req).then((r) =>
+      (r.items ?? []).map((c) => ({ title: c.title, startSecs: c.start_secs, endSecs: c.end_secs })),
     ),
 
   /** The current user's watch-progress rows. */

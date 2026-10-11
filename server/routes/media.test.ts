@@ -390,6 +390,8 @@ describe('media proxy route', () => {
     ['/subtitles/movie/7/download', 'POST', 'movie', 7],
     ['/subtitles/episode/99/transcribe', 'POST', 'episode', 99],
     ['/subtitles/episode/99/file', 'GET', 'episode', 99],
+    ['/chapters/movie/7', 'GET', 'movie', 7],
+    ['/chapters/video/12', 'GET', 'video', 12],
   ] as const)('403s a capped %s (%s)', async (path, method, kind, id) => {
     ratingState.blocked = true
     mockFetch.mockResolvedValue(new Response('{}', { status: 200 }))
@@ -417,6 +419,17 @@ describe('media proxy route', () => {
     expect(String(mockFetch.mock.calls[0][0])).toBe(
       'http://media-core.test/api/media/subtitles/movie/7/file?language=en',
     )
+  })
+
+  it('proxies /chapters/:kind/:id to media-core when the cap allows it', async () => {
+    ratingState.blocked = false
+    mockFetch.mockResolvedValue(new Response('{"items":[]}', { status: 200 }))
+
+    const res = await media.request('/chapters/episode/99', { method: 'GET', headers: { host: 'localhost' } })
+
+    expect(res.status).toBe(200)
+    expect(String(mockFetch.mock.calls[0][0])).toBe('http://media-core.test/api/media/chapters/episode/99')
+    expect(mockRatingBlocked).toHaveBeenCalledWith(expect.anything(), 'episode', 99)
   })
 
   it('leaves /subtitles/status off the rating gate', async () => {

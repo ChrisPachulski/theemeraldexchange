@@ -169,11 +169,15 @@ async function mediaAuth(c: Context<Env>, next: Next) {
   // /transcribe) share the `/subtitles/{kind}/{id}` prefix, so one guard here
   // covers them uniformly; `/subtitles/status` never matches (its first segment
   // is 'status', not movie|episode) and stays open, as it carries no content.
-  const subsMatch = subpath.match(/^\/subtitles\/(movie|episode)\/([^/?]+)/)
+  // Chapter lists (titles + times, and an ffprobe per uncached title) get the
+  // same gate.
+  const subsMatch =
+    subpath.match(/^\/subtitles\/(movie|episode)\/([^/?]+)/) ??
+    subpath.match(/^\/chapters\/(movie|episode|video)\/([^/?]+)/)
   if (subsMatch) {
     const authDenied = await requireAuth(c, async () => {})
     if (authDenied) return authDenied
-    const kind = subsMatch[1] as 'movie' | 'episode'
+    const kind = subsMatch[1] as 'movie' | 'episode' | 'video'
     if (await ratingBlocked(c.get('session'), kind, Number(subsMatch[2]))) {
       return c.json({ error: 'rating_blocked' }, 403)
     }
