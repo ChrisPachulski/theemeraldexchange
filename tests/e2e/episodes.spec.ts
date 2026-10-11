@@ -243,3 +243,32 @@ test('Browse mode on TV resumes a show from its Continue watching card', async (
   await resume.getByRole('button', { name: 'Test Show' }).click()
   await expect(page.getByRole('dialog', { name: 'Test Show' }).getByRole('button', { name: 'Resume S1E2' })).toBeVisible()
 })
+
+for (const { kind, tab, search, lookup, title } of [
+  { kind: 'radarr', tab: 'movies', search: /search movies/i, lookup: { tmdbId: 5, title: 'New Film', year: 2024, images: [] }, title: 'New Film' },
+  { kind: 'sonarr', tab: 'tv', search: /search tv shows/i, lookup: { tvdbId: 6, title: 'New Series', year: 2024, images: [], seasons: [] }, title: 'New Series' },
+]) {
+  test(`${kind} add dialog: failed add options show Retry instead of dead selects`, async ({ page }) => {
+    await setup(page)
+    let healthy = false
+    const opts = (body: unknown) => (route: import('@playwright/test').Route) =>
+      healthy ? route.fulfill(json(body)) : route.fulfill({ status: 500, contentType: 'application/json', body: '{}' })
+    await page.route(`**/api/${kind}/api/v3/qualityprofile`, opts([{ id: 1, name: 'HD' }]))
+    await page.route(`**/api/${kind}/api/v3/rootfolder`, opts([{ id: 1, path: '/media' }]))
+    await page.route(`**/api/${kind}/api/v3/${kind === 'radarr' ? 'movie' : 'series'}/lookup**`, (r) => r.fulfill(json([lookup])))
+
+    await page.goto(`/#/${tab}`)
+    await page.getByRole('searchbox', { name: search }).fill('New')
+    await page.getByRole('button', { name: new RegExp(title) }).click()
+    await page.getByRole('dialog', { name: title }).getByRole('button', { name: 'Add to library' }).click()
+
+    const notice = page.getByRole('alert').filter({ hasText: "Couldn't load add options." })
+    await expect(notice).toBeVisible()
+    await expect(page.getByRole('combobox', { name: /^Quality/ })).toHaveCount(0)
+    healthy = true
+    await notice.getByRole('button', { name: 'Retry' }).click()
+    await expect(page.getByRole('combobox', { name: /^Quality/ })).toHaveValue('1')
+    await expect(page.getByRole('combobox', { name: /^Folder/ })).toHaveValue('/media')
+    await expect(notice).toHaveCount(0)
+  })
+}

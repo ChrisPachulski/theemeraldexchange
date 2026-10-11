@@ -79,6 +79,10 @@ export function AddMovieModal({ movie, onClose, onAdded, onError }: Props) {
     },
   })
 
+  // The pickers failed to load: say so with a retry instead of dead selects
+  // and a greyed-out Add (Apple AddSheets).
+  const pickersFailed = (profiles.isError && !profiles.data) || (folders.isError && !folders.data)
+
   if (!movie) return null
 
   // Everyone now picks quality/folder/search, so wait on the dropdowns to
@@ -139,33 +143,51 @@ export function AddMovieModal({ movie, onClose, onAdded, onError }: Props) {
         </header>
 
         <div className="add-series__fields">
-          <label className="add-series__field">
-            <span className="add-series__label">Quality</span>
-            <select
-              className="add-series__select"
-              value={profileId ?? ''}
-              onChange={(e) => setProfileChoice(Number(e.target.value))}
-              disabled={!profiles.data}
-            >
-              {profiles.data?.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          </label>
+          {pickersFailed ? (
+            <div className="add-series__error add-series__load-error" role="alert">
+              <span>Couldn't load add options.</span>
+              <button
+                type="button"
+                className="add-series__cancel"
+                onClick={() => {
+                  void profiles.refetch()
+                  void folders.refetch()
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          ) : (
+            <>
+              <label className="add-series__field">
+                <span className="add-series__label">Quality</span>
+                <select
+                  className="add-series__select"
+                  value={profileId ?? ''}
+                  onChange={(e) => setProfileChoice(Number(e.target.value))}
+                  disabled={!profiles.data}
+                >
+                  {profiles.data?.map((p) => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </label>
 
-          <label className="add-series__field">
-            <span className="add-series__label">Folder</span>
-            <select
-              className="add-series__select"
-              value={rootFolder ?? ''}
-              onChange={(e) => setFolderChoice(e.target.value)}
-              disabled={!folders.data}
-            >
-              {folders.data?.map((f) => (
-                <option key={f.id} value={f.path}>{f.path}</option>
-              ))}
-            </select>
-          </label>
+              <label className="add-series__field">
+                <span className="add-series__label">Folder</span>
+                <select
+                  className="add-series__select"
+                  value={rootFolder ?? ''}
+                  onChange={(e) => setFolderChoice(e.target.value)}
+                  disabled={!folders.data}
+                >
+                  {folders.data?.map((f) => (
+                    <option key={f.id} value={f.path}>{f.path}</option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
 
           <label className="add-series__field">
             <span className="add-series__label">Language</span>
