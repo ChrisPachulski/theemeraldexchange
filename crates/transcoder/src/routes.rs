@@ -764,12 +764,12 @@ async fn session_segment(
             None => session_not_found(),
         };
     }
-    // The alternate-audio master an `alt_audio` (hls.js) grant points at.
-    if segment == crate::trickplay::AUDIO_MASTER_NAME {
-        return match state.sessions.web_master(&id).await {
-            Some(body) => m3u8_response(body),
-            None => session_not_found(),
-        };
+    // The alternate-audio master an `alt_audio` (hls.js) grant points at; any
+    // other session falls through to the plain asset 404, as before.
+    if segment == crate::trickplay::AUDIO_MASTER_NAME
+        && let Some(body) = state.sessions.web_master(&id).await
+    {
+        return m3u8_response(body);
     }
     // Browser scrub previews: a trick-play thumbnail as JPEG, converted from
     // its `.ts` on first request and then served like any other asset below.
