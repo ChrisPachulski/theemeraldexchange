@@ -221,18 +221,40 @@
   }
 }
 
-/* Phones: four or five pills can't share the band with the brand and the
-   account cluster (they wrapped over EMERALD EXCHANGE), so they get their own
-   single row beneath it that scrolls sideways. --hero-pad-top clears it. */
-@media (max-width: 520px) {
+/* Desktop: the pills size to their labels. Pinned at left: 50%, the row was
+   otherwise capped at half the viewport and wrapped early (a lone USERS pill
+   on a second row at 1024px); the cap keeps it clear of the brand (left) and
+   Watch + account (right). */
+@media (min-width: 1100px) {
   .top-nav__tabs {
-    top: calc(var(--pod-inset, 8px) + 56px);
-    left: var(--pod-inset, 8px);
-    right: var(--pod-inset, 8px);
+    width: max-content;
+    max-width: calc(100vw - 520px);
+  }
+}
+
+/* Tablets and phones: five pills can't share the band with the brand and the
+   Watch + account cluster (they ran over EMERALD EXCHANGE and WATCH on a
+   portrait iPad), so they get their own row beneath it, the "you are here"
+   label moves beside the brand, and --hero-pad-top clears the row. */
+@media (max-width: 1099px) {
+  .top-nav__brand-stack {
+    display: flex;
+    align-items: center;
+    gap: 0;
+  }
+
+  .top-nav__here {
+    margin-left: 0;
+  }
+
+  .top-nav__tabs {
+    top: calc(var(--pod-inset, 16px) + 56px);
+    left: var(--pod-inset, 16px);
+    right: var(--pod-inset, 16px);
     transform: none;
+    width: auto;
     max-width: none;
     flex-wrap: nowrap;
-    justify-content: flex-start;
     overflow-x: auto;
     /* Room for the hover lift and focus ring inside the scroller. */
     padding: 4px 0;
@@ -246,18 +268,14 @@
   .top-nav__tab {
     flex-shrink: 0;
   }
-}
 
-/* Phones: the "you are here" label sits beside the brand, not under it, so
-   the pill row above can start right below the brand. */
-@media (max-width: 520px) {
-  .top-nav__brand-stack {
-    display: flex;
-    align-items: center;
-    gap: 0;
+  /* Centred while the row fits; once it overflows the auto margins collapse
+     and it scrolls from the first pill (plain centring would cut it off). */
+  .top-nav__tab:first-child {
+    margin-left: auto;
   }
 
-  .top-nav__here {
-    margin-left: 0;
+  .top-nav__tab:last-child {
+    margin-right: auto;
   }
 }
