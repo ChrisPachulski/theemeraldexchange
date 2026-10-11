@@ -83,6 +83,17 @@ export type IptvPlayerProps = {
    *  of dying on a segment that doesn't exist yet. */
   onSeekableEndUpdate?: (sessionSecs: number) => void
   onEnded?: () => void
+  /** Fired on the <video> `playing` event (the engine is actually advancing). */
+  onPlaying?: () => void
+  /** Live IPTV whose owner can mint a fresh grant: a swept session (410), a
+   *  spent network-retry budget, or an off-air channel is handed to the owner
+   *  (to re-grant, or show its offline card) instead of an in-player dead end.
+   *  Retrying the same grant can't recover a swept session. */
+  onLiveLost?: (reason: LiveLostReason) => void
+  /** A finite MPEG-TS asset (catch-up), not a live feed: no live stall-reload
+   *  (a reload restarted the programme from the top) and its natural end
+   *  fires onEnded. */
+  finite?: boolean
   /** Progressive delivery only: fired ONCE when the stream has genuinely
    *  struggled (≥2 confirmed stall episodes in 120 s, user seeks excluded).
    *  The owner is expected to re-grant with buffered (HLS) delivery at the
@@ -340,6 +351,7 @@ export function buildHlsConfig(vodHls: boolean) {
 //   other   — unrecoverable; destroy and surface a message.
 
 export type FatalHlsErrorKind = 'network' | 'media' | 'other'
+export type LiveLostReason = 'offline' | 'gone' | 'exhausted'
 
 // Minimal structural slice of the hls.js instance the handler drives; kept
 // local so tests need no hls.js import (same convention as HlsTrackController).
@@ -605,10 +617,12 @@ export function createFatalHlsErrorHandler(opts: {
   hls: RecoverableHls
   isCancelled: () => boolean
   setError: (message: string) => void
+  // See IptvPlayerProps.onLiveLost. Absent = the in-player messages below.
+  onLost?: (reason: LiveLostReason) => void
   schedule?: (fn: () => void, delayMs: number) => void
   now?: () => number
 }): FatalHlsErrorHandler {
-  const { hls, isCancelled, setError } = opts
+  const { hls, isCancelled, setError, onLost } = opts
   const schedule = opts.schedule ?? ((fn, delayMs) => window.setTimeout(fn, delayMs))
   const now = opts.now ?? (() => Date.now())
 
@@ -633,20 +647,29 @@ export function createFatalHlsErrorHandler(opts: {
   const onFatalError = (kind: FatalHlsErrorKind, response?: FatalHlsErrorResponse) => {
     if (isCancelled()) return
     if (kind === 'network') {
+      const giveUp = (reason: LiveLostReason, message: string) => {
+        hls.destroy()
+        if (onLost) onLost(reason)
+        else setError(message)
+      }
       // Terminal off-air state: don't consume the retry budget or show the
       // warming-up copy — surface the accurate, non-spinning message at once.
       if (isChannelOfflineUpstream(response)) {
-        setError('This channel is off the air right now. Try another channel.')
-        hls.destroy()
+        giveUp('offline', 'This channel is off the air right now. Try another channel.')
+        return
+      }
+      // The server swept this grant's session: every retry on it is another 410.
+      if (onLost && response?.code === 410) {
+        giveUp('gone', '')
         return
       }
       if (netRetries >= MAX_NET_RETRIES) {
-        setError(
+        giveUp(
+          'exhausted',
           hasPlayed
             ? 'Stream interrupted. Retry to reconnect.'
             : 'Couldn’t start playback. The transcoder may still be warming up; try again in a moment.',
         )
-        hls.destroy()
         return
       }
       netRetries += 1
@@ -743,6 +766,9 @@ export default function IptvPlayer({
   onPositionUpdate,
   onSeekableEndUpdate,
   onEnded,
+  onPlaying,
+  onLiveLost,
+  finite = false,
   onDeliveryStruggling,
 }: IptvPlayerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -788,16 +814,19 @@ export default function IptvPlayer({
       onPositionUpdate?.(video.currentTime, durationSecs)
     }
     const onVideoEnded = () => onEnded?.()
+    const onVideoPlaying = () => onPlaying?.()
     video.addEventListener('timeupdate', onTimeUpdate)
     video.addEventListener('ended', onVideoEnded)
+    video.addEventListener('playing', onVideoPlaying)
     video.addEventListener('loadedmetadata', onLoadedMetadata)
 
     return () => {
       video.removeEventListener('timeupdate', onTimeUpdate)
       video.removeEventListener('ended', onVideoEnded)
+      video.removeEventListener('playing', onVideoPlaying)
       video.removeEventListener('loadedmetadata', onLoadedMetadata)
     }
-  }, [onEnded, onPositionUpdate, startPositionSecs])
+  }, [onEnded, onPlaying, onPositionUpdate, startPositionSecs])
 
   useEffect(() => {
     const videoElement = videoRef.current
@@ -900,12 +929,20 @@ export default function IptvPlayer({
           hls,
           isCancelled: () => cancelled,
           setError,
+          onLost: onLiveLost,
         })
         hls.on(Hls.Events.ERROR, (_evt, data) => {
           if (cancelled || !data.fatal) return
           const rawResponse = (data as { response?: { code?: number; text?: string } }).response
+          // hls.js puts the HTTP statusText in response.text, never the body; the
+          // server's reason (channel_offline_upstream) is only in the XHR's body.
+          const xhr = (data as { networkDetails?: unknown }).networkDetails
+          const body =
+            xhr instanceof XMLHttpRequest && (xhr.responseType === '' || xhr.responseType === 'text')
+              ? xhr.responseText
+              : undefined
           const response = rawResponse
-            ? { code: rawResponse.code, text: rawResponse.text }
+            ? { code: rawResponse.code, text: body || rawResponse.text }
             : undefined
           fatal.onFatalError(
             data.type === Hls.ErrorTypes.NETWORK_ERROR
@@ -1011,7 +1048,7 @@ export default function IptvPlayer({
       //   - enableWorker: demux off the main thread.
       //   - fixAudioTimestampGap: ride over occasional upstream TS gaps.
       const player: MpegtsPlayer = mpegts.createPlayer(
-        { type: 'mpegts', isLive: true, url: grant.url },
+        { type: 'mpegts', isLive: !finite, url: grant.url },
         {
           enableWorker: true,
           enableStashBuffer: true,
@@ -1103,14 +1140,21 @@ export default function IptvPlayer({
         }
       }
 
-      player.on(mpegts.Events.ERROR, () => {
-        if (cancelled) return
-        recover()
-      })
-      video.addEventListener('waiting', onStall)
-      video.addEventListener('stalled', onStall)
-      video.addEventListener('playing', onProgress)
-      video.addEventListener('timeupdate', onProgress)
+      if (finite) {
+        // A reload restarts a finite programme from the top, so fail visibly instead.
+        player.on(mpegts.Events.ERROR, () => {
+          if (!cancelled) setError('Playback failed. Close and re-open the programme to retry.')
+        })
+      } else {
+        player.on(mpegts.Events.ERROR, () => {
+          if (cancelled) return
+          recover()
+        })
+        video.addEventListener('waiting', onStall)
+        video.addEventListener('stalled', onStall)
+        video.addEventListener('playing', onProgress)
+        video.addEventListener('timeupdate', onProgress)
+      }
 
       player.attachMediaElement(video)
       player.load()
@@ -1138,7 +1182,7 @@ export default function IptvPlayer({
       resetVideo()
       resetTracks()
     }
-  }, [autoPlay, grant, vodHls, pinnedDurationSecs, onDeliveryStruggling, onSeekableEndUpdate, reloadNonce])
+  }, [autoPlay, grant, vodHls, pinnedDurationSecs, onDeliveryStruggling, onSeekableEndUpdate, onLiveLost, finite, reloadNonce])
 
   const chooseAudioTrack = (trackId: number) => {
     const applied = applyAudioTrack(

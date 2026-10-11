@@ -18,7 +18,7 @@ const { gridMock } = vi.hoisted(() => ({ gridMock: vi.fn() }))
 // context; stub it so the guide renders without the app shell.
 vi.mock('../../lib/navTransition', () => ({ useNavTransition: () => ({ replay: () => {} }) }))
 vi.mock('../../lib/hooks/useIptvEpg', () => ({
-  useIptvEpgGrid: () => gridMock(),
+  useIptvEpgGrid: (...args: unknown[]) => gridMock(...args),
 }))
 
 afterEach(() => {
@@ -100,5 +100,99 @@ describe('EpgGuide detail pane', () => {
     )
     // enabled=false → render the loading state rather than an empty grid.
     expect(screen.getByText(/Loading guide/i)).toBeInTheDocument()
+  })
+})
+
+function liveRow(stream_id: number, name: string, title: string): EpgGridDto {
+  const now = Date.now()
+  return {
+    stream_id,
+    num: stream_id,
+    name,
+    stream_icon: null,
+    epg_channel_id: name,
+    tv_archive: 0,
+    tv_archive_duration: null,
+    programmes: [
+      {
+        channel_id: name,
+        start_utc: new Date(now - 10 * 60_000).toISOString(),
+        stop_utc: new Date(now + 20 * 60_000).toISOString(),
+        title,
+        description: null,
+      },
+    ],
+  }
+}
+
+function renderGuide(props: Partial<Parameters<typeof EpgGuide>[0]> = {}) {
+  return render(
+    <EpgGuide categoryIds={[6]} categoriesLoaded q="" onPlayLive={vi.fn()} onPlayCatchup={vi.fn()} {...props} />,
+  )
+}
+
+describe('EpgGuide failure, empty and stale states', () => {
+  it('keeps the painted rows on a failed refetch and offers Retry', () => {
+    const refetch = vi.fn()
+    gridMock.mockReturnValue({ data: [rowWithLiveAndNext()], isLoading: false, error: new Error('502'), refetch })
+    renderGuide()
+
+    expect(screen.getByTitle(/SportsCenter/)).toBeInTheDocument()
+    expect(screen.getByText('Guide may be out of date.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(refetch).toHaveBeenCalled()
+  })
+
+  it('offers Retry when the first load fails with nothing painted', () => {
+    const refetch = vi.fn()
+    gridMock.mockReturnValue({ data: undefined, isLoading: false, error: new Error('502'), refetch })
+    renderGuide()
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t load the guide.')
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(refetch).toHaveBeenCalled()
+  })
+
+  it('fails closed with a hint, fetching nothing, when no guide category qualifies', () => {
+    gridMock.mockReturnValue({ data: [rowWithLiveAndNext()], isLoading: false, error: null })
+    renderGuide({ categoryIds: [] })
+
+    expect(screen.getByText(/No live categories chosen/)).toBeInTheDocument()
+    for (const call of gridMock.mock.calls) expect((call[2] as { enabled: boolean }).enabled).toBe(false)
+  })
+})
+
+describe('EpgGuide favorites and filtering', () => {
+  it('pins favorite channels to the top and toggles the star', () => {
+    gridMock.mockReturnValue({
+      data: [liveRow(1, 'US ABC', 'News'), liveRow(2, 'US CBS', 'Sports')],
+      isLoading: false,
+      error: null,
+    })
+    const onToggleFavorite = vi.fn()
+    renderGuide({ favorites: new Set([2]), onToggleFavorite })
+
+    const names = screen.getAllByTitle(/^Watch .* live$/).map((el) => el.getAttribute('title'))
+    expect(names).toEqual(['Watch US CBS live', 'Watch US ABC live'])
+    fireEvent.click(screen.getByRole('button', { name: 'Unfavorite US CBS' }))
+    expect(onToggleFavorite).toHaveBeenCalledWith(2, true)
+    fireEvent.click(screen.getByRole('button', { name: 'Favorite US ABC' }))
+    expect(onToggleFavorite).toHaveBeenCalledWith(1, false)
+  })
+
+  it('a search keeps channels airing a matching programme, unioned with server name matches', () => {
+    gridMock.mockImplementation((_from: string, _to: string, opts: { q?: string }) =>
+      opts.q
+        ? { data: [liveRow(9, 'US Celtics Network', 'Pregame')], isLoading: false, error: null }
+        : {
+            data: [liveRow(1, 'US ESPN', 'NBA: Celtics at Knicks'), liveRow(2, 'US CNN', 'Newsroom')],
+            isLoading: false,
+            error: null,
+          },
+    )
+    renderGuide({ q: 'celtics' })
+
+    const names = screen.getAllByTitle(/^Watch .* live$/).map((el) => el.getAttribute('title'))
+    expect(names).toEqual(['Watch US Celtics Network live', 'Watch US ESPN live'])
   })
 })

@@ -13,6 +13,14 @@ import { ReplayButton } from '../nav/ReplayButton'
 import { type EpgGridDto, type EpgProgrammeDto } from '../../lib/api/iptv'
 import { useIptvEpgGrid } from '../../lib/hooks/useIptvEpg'
 import { blockWidth, visibleRowRange } from '../../lib/epgLayout'
+import {
+  GUIDE_BUCKET_MS,
+  GUIDE_CHANNEL_LIMIT,
+  GUIDE_HOURS,
+  airingNow,
+  filterGuideRows,
+  guideWindow,
+} from '../../lib/guideRows'
 
 export type GuideChannel = {
   id: number
@@ -22,20 +30,13 @@ export type GuideChannel = {
 }
 
 const PX_PER_MIN = 6 // 30 min = 180px, 1h = 360px
-const TOTAL_HOURS = 6 // 30 min of history + 5.5h forward
 const ROW_H = 56
 const HEADER_H = 32
-const CHANNEL_COL = 200
+const CHANNEL_COL = 220
 const MIN_BLOCK_PX = 40
 const OVERSCAN = 4
-const BUCKET_MS = 30 * 60_000
-// Cap the channel set fetched for the grid. The curated default (US + sports) is
-// well under this, but a single big category could be large; the grid is
-// virtualized client-side, so a generous cap is plenty (mirrors the Apple app's
-// CatalogStore.guideChannelLimit).
-const GUIDE_CHANNEL_LIMIT = 500
 
-const trackWidth = TOTAL_HOURS * 60 * PX_PER_MIN
+const trackWidth = GUIDE_HOURS * 60 * PX_PER_MIN
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v))
@@ -54,17 +55,7 @@ function programmeDurationMin(p: EpgProgrammeDto): number {
 
 const ms = (iso: string): number => new Date(iso).getTime()
 
-// The programme airing right now on a channel (for the detail pane when a whole
-// channel row, rather than a single block, is hovered).
-function currentProgramme(row: EpgGridDto, nowMs: number): EpgProgrammeDto | null {
-  return (
-    row.programmes.find((p) => {
-      const s = ms(p.start_utc)
-      const e = ms(p.stop_utc)
-      return Number.isFinite(s) && Number.isFinite(e) && s <= nowMs && e > nowMs
-    }) ?? null
-  )
-}
+const NO_FAVORITES: ReadonlySet<number> = new Set()
 
 // The next programme to start after a given one (for the pane's "NEXT" line).
 function nextProgramme(row: EpgGridDto, afterIso: string): EpgProgrammeDto | null {
@@ -96,6 +87,8 @@ export default function EpgGuide({
   categoryIds,
   categoriesLoaded = true,
   q,
+  favorites = NO_FAVORITES,
+  onToggleFavorite,
   onPlayLive,
   onPlayCatchup,
 }: {
@@ -108,6 +101,9 @@ export default function EpgGuide({
   // don't pull the entire has-EPG catalog in the window before curation is known.
   categoriesLoaded?: boolean
   q: string
+  // Favorite channel stream ids: pinned to the top of the grid.
+  favorites?: ReadonlySet<number>
+  onToggleFavorite?: (streamId: number, isFav: boolean) => void
   onPlayLive: (channel: { stream_id: number; name: string }) => void
   onPlayCatchup: (channel: GuideChannel, programme: EpgProgrammeDto) => void
 }) {
@@ -119,39 +115,49 @@ export default function EpgGuide({
     return () => clearInterval(t)
   }, [])
 
-  const anchorMs = Math.floor(nowMs / BUCKET_MS) * BUCKET_MS
-  const windowStartMs = anchorMs - BUCKET_MS // show the last 30 min
-  const windowEndMs = windowStartMs + TOTAL_HOURS * 3600_000
-  const fromIso = new Date(windowStartMs).toISOString()
-  const toIso = new Date(windowEndMs).toISOString()
+  const { anchorMs, startMs: windowStartMs, endMs: windowEndMs, fromIso, toIso } = guideWindow(nowMs)
 
-  // Scoping (curated default, borrowed from the Apple guide, adapted for the web
-  // where the guide IS the only search surface):
+  // Scoping (curated default, borrowed from the Apple guide):
   //   • Single category picked from the dropdown → just that category.
-  //   • A search query → resolved server-side across the whole catalog, so the
-  //     guide still finds ANY scheduled channel (not only the curated set).
-  //   • Otherwise ("All", no search) → the curated set (US + sports by default),
-  //     so the grid is relevant and light instead of the full ~12k catalog.
+  //   • Otherwise → the curated set (US + sports by default), so the grid is
+  //     relevant and light instead of the full ~12k catalog. An empty curated set
+  //     fails closed with a hint rather than loading everything.
+  //   • A search query keeps that scope's rows whose channel or any programme
+  //     matches (client-side, Apple GuideSearch), unioned with the server's
+  //     channel-NAME matches across the whole catalog, so the guide still finds
+  //     any scheduled channel by name.
   // Every path restricts to channels that actually carry a schedule (hasEpg) — a
   // guide is about what's on — and is capped at GUIDE_CHANNEL_LIMIT.
   const trimmedQ = q.trim()
   const curated = useMemo(() => categoryIds ?? [], [categoryIds])
-  const gridOpts =
-    categoryId != null
-      ? { categoryId, q: trimmedQ || undefined, hasEpg: true, limit: GUIDE_CHANNEL_LIMIT }
-      : trimmedQ
-        ? { q: trimmedQ, hasEpg: true, limit: GUIDE_CHANNEL_LIMIT }
-        : curated.length > 0
-          ? { categoryIds: curated, hasEpg: true, limit: GUIDE_CHANNEL_LIMIT }
-          : { hasEpg: true, limit: GUIDE_CHANNEL_LIMIT }
-  // Only the pure-curated path depends on the category list; wait for it so we
-  // curate rather than dump the whole catalog. Once loaded we fetch even if the
-  // curated set is empty (graceful fallback to all-has-EPG for a provider with no
-  // US/sports categories).
-  const pureDefault = categoryId == null && trimmedQ === ''
-  const enabled = !pureDefault || curated.length > 0 || categoriesLoaded
-  const grid = useIptvEpgGrid(fromIso, toIso, { ...gridOpts, enabled })
-  const rows = useMemo(() => grid.data ?? [], [grid.data])
+  const baseEnabled = categoryId != null || curated.length > 0
+  const base = useIptvEpgGrid(fromIso, toIso, {
+    ...(categoryId != null ? { categoryId } : { categoryIds: curated }),
+    hasEpg: true,
+    limit: GUIDE_CHANNEL_LIMIT,
+    enabled: baseEnabled,
+  })
+  const named = useIptvEpgGrid(fromIso, toIso, {
+    ...(categoryId != null ? { categoryId } : {}),
+    q: trimmedQ,
+    hasEpg: true,
+    limit: GUIDE_CHANNEL_LIMIT,
+    enabled: trimmedQ !== '',
+  })
+  const queries = [baseEnabled ? base : null, trimmedQ ? named : null].filter((g) => g !== null)
+  const rows = useMemo(() => {
+    const scoped = baseEnabled ? (base.data ?? []) : []
+    if (!trimmedQ) return filterGuideRows(scoped, '', favorites)
+    const byName = named.data ?? []
+    const seen = new Set(byName.map((r) => r.stream_id))
+    const byProgramme = filterGuideRows(scoped, trimmedQ, NO_FAVORITES).filter((r) => !seen.has(r.stream_id))
+    return filterGuideRows([...byName, ...byProgramme], '', favorites)
+  }, [baseEnabled, base.data, named.data, trimmedQ, favorites])
+  const loading = queries.some((g) => g.isLoading)
+  const failed = queries.some((g) => g.error)
+  const retry = () => {
+    for (const g of queries) void g.refetch()
+  }
 
   // Vertical windowing.
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -167,7 +173,7 @@ export default function EpgGuide({
     const row = rows.find((r) => r.stream_id === active.streamId)
     if (!row) return null
     const prog =
-      active.progIndex != null ? row.programmes[active.progIndex] ?? null : currentProgramme(row, nowMs)
+      active.progIndex != null ? row.programmes[active.progIndex] ?? null : airingNow(row, nowMs)
     const live = prog ? ms(prog.start_utc) <= nowMs && ms(prog.stop_utc) > nowMs : false
     return { row, prog, live }
   }, [active, rows, nowMs])
@@ -177,7 +183,7 @@ export default function EpgGuide({
   // null ref, and never re-ran — so the scroll listener never attached and the
   // guide stayed frozen on its first ~viewport of rows (looked like "only ~25
   // channels" even though thousands were returned). Re-bind when it mounts.
-  const guideReady = enabled && !grid.isLoading && !grid.error && rows.length > 0
+  const guideReady = rows.length > 0
   useEffect(() => {
     const el = scrollRef.current
     if (!el) return undefined
@@ -206,7 +212,7 @@ export default function EpgGuide({
 
   const ticks = useMemo(() => {
     const out: number[] = []
-    for (let t = windowStartMs; t <= windowEndMs; t += BUCKET_MS) out.push(t)
+    for (let t = windowStartMs; t <= windowEndMs; t += GUIDE_BUCKET_MS) out.push(t)
     return out
   }, [windowStartMs, windowEndMs])
 
@@ -227,25 +233,43 @@ export default function EpgGuide({
   const topPad = firstVisible * ROW_H
   const bottomPad = Math.max(0, (rows.length - lastVisible) * ROW_H)
 
-  if (!enabled || grid.isLoading) {
-    return <p className="iptv-tab__status">Loading guide…</p>
-  }
-  if (grid.error) {
-    return <p className="iptv-tab__status iptv-tab__status--error">Failed to load guide.</p>
-  }
-  if (rows.length === 0) {
+  if (!baseEnabled && !trimmedQ) {
+    if (categoryId == null && !categoriesLoaded) return <p className="iptv-tab__status">Loading guide…</p>
     return (
       <p className="iptv-tab__status">
-        {trimmedQ
-          ? `No channel names match “${trimmedQ}”.`
-          : `No guide data for ${categoryId != null ? 'this category' : 'these channels'}.
-        Most channels from this provider don’t publish a schedule; try a major network, or switch back to Channels.`}
+        No live categories chosen for the guide. Pick some with the Guide categories button below.
       </p>
+    )
+  }
+  if (rows.length === 0) {
+    if (loading) return <p className="iptv-tab__status">Loading guide…</p>
+    return failed ? (
+      <div className="iptv-tab__status iptv-tab__status--error" role="alert">
+        <p>Couldn’t load the guide.</p>
+        <button type="button" className="iptv-tab__retry" onClick={retry}>Retry</button>
+      </div>
+    ) : (
+      <div className="iptv-tab__status">
+        <p>
+          {trimmedQ
+            ? `No channels or programs match “${trimmedQ}”.`
+            : `No guide data for ${categoryId != null ? 'this category' : 'these channels'}.
+        Most channels from this provider don’t publish a schedule; try a major network, or switch back to Channels.`}
+        </p>
+        <button type="button" className="iptv-tab__retry" onClick={retry}>Retry</button>
+      </div>
     )
   }
 
   return (
     <div className="epg-guide-wrap">
+      {failed && (
+        // A failed refetch keeps the painted rows (Apple's "may be out of date" banner).
+        <div className="epg-guide__stale" role="status">
+          <span>Guide may be out of date.</span>
+          <button type="button" className="iptv-tab__retry" onClick={retry}>Retry</button>
+        </div>
+      )}
       <GuideDetailPane detail={activeDetail} nowMs={nowMs} onJumpToLive={jumpToLive} />
       <div className="epg-guide" ref={scrollRef} role="grid" aria-label="Programme guide">
       <div className="epg-guide__content" style={{ width: contentWidth }}>
@@ -281,6 +305,8 @@ export default function EpgGuide({
               nowMs={nowMs}
               active={active}
               onActivate={setActive}
+              isFav={favorites.has(row.stream_id)}
+              onToggleFavorite={onToggleFavorite}
               onPlayLive={onPlayLive}
               onPlayCatchup={onPlayCatchup}
             />
@@ -364,6 +390,8 @@ function GuideRow({
   nowMs,
   active,
   onActivate,
+  isFav,
+  onToggleFavorite,
   onPlayLive,
   onPlayCatchup,
 }: {
@@ -372,6 +400,8 @@ function GuideRow({
   nowMs: number
   active: ActiveCell | null
   onActivate: (cell: ActiveCell) => void
+  isFav: boolean
+  onToggleFavorite?: (streamId: number, isFav: boolean) => void
   onPlayLive: (channel: { stream_id: number; name: string }) => void
   onPlayCatchup: (channel: GuideChannel, programme: EpgProgrammeDto) => void
 }) {
@@ -386,18 +416,41 @@ function GuideRow({
 
   return (
     <div className="epg-guide__row" style={{ height: ROW_H, width: CHANNEL_COL + trackWidth }}>
-      <button
-        type="button"
+      {/* Sticky channel cell: a play button plus the favorite star (a button
+          can't nest another). */}
+      <div
         className={'epg-guide__chan' + (rowActive ? ' epg-guide__chan--active' : '')}
         style={{ width: CHANNEL_COL, height: ROW_H }}
-        onClick={() => onPlayLive({ stream_id: row.stream_id, name: row.name })}
-        onMouseEnter={() => onActivate({ streamId: row.stream_id, progIndex: null })}
-        onFocus={() => onActivate({ streamId: row.stream_id, progIndex: null })}
-        title={`Watch ${row.name} live`}
       >
-        <span className="epg-guide__chan-num">{row.num}</span>
-        <span className="epg-guide__chan-name">{row.name}</span>
-      </button>
+        <button
+          type="button"
+          className="epg-guide__chan-play"
+          onClick={() => onPlayLive({ stream_id: row.stream_id, name: row.name })}
+          onMouseEnter={() => onActivate({ streamId: row.stream_id, progIndex: null })}
+          onFocus={() => onActivate({ streamId: row.stream_id, progIndex: null })}
+          title={`Watch ${row.name} live`}
+        >
+          {row.stream_icon && <img className="epg-guide__chan-logo" src={row.stream_icon} alt="" loading="lazy" />}
+          <span className="epg-guide__chan-num">{row.num}</span>
+          <span className="epg-guide__chan-name">{row.name}</span>
+          {channel.canCatchup && (
+            <span className="epg-guide__chan-catchup" role="img" aria-label="Catch-up available" title="Catch-up available">
+              ⟲
+            </span>
+          )}
+        </button>
+        {onToggleFavorite && (
+          <button
+            type="button"
+            className={'epg-guide__chan-fav' + (isFav ? ' epg-guide__chan-fav--on' : '')}
+            aria-label={isFav ? `Unfavorite ${row.name}` : `Favorite ${row.name}`}
+            aria-pressed={isFav}
+            onClick={() => onToggleFavorite(row.stream_id, isFav)}
+          >
+            {isFav ? '★' : '☆'}
+          </button>
+        )}
+      </div>
 
       <div className="epg-guide__track" style={{ width: trackWidth, height: ROW_H }}>
         {row.programmes.map((p, i) => {

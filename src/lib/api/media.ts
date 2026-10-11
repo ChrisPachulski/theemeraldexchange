@@ -63,6 +63,7 @@ type RawMovieRow = {
   file_id: number
   overview?: string | null
   poster_path?: string | null
+  content_rating?: string | null
 }
 
 type RawShowRow = {
@@ -75,6 +76,7 @@ type RawShowRow = {
   imdb_id?: string | null
   overview?: string | null
   poster_path?: string | null
+  content_rating?: string | null
 }
 
 type RawEpisodeRow = {
@@ -131,6 +133,8 @@ export type MediaMovie = {
   fileId: number
   overview: string | null
   posterPath: string | null
+  /** MPAA / TV certification from TMDB; null when unrated. */
+  contentRating: string | null
 }
 
 export type MediaShow = {
@@ -143,6 +147,8 @@ export type MediaShow = {
   imdbId: string | null
   overview: string | null
   posterPath: string | null
+  /** MPAA / TV certification from TMDB; null when unrated. */
+  contentRating: string | null
 }
 
 export type MediaEpisode = {
@@ -493,6 +499,7 @@ function normMovie(r: RawMovieRow): MediaMovie {
     fileId: r.file_id,
     overview: r.overview ?? null,
     posterPath: r.poster_path ?? null,
+    contentRating: r.content_rating ?? null,
   }
 }
 
@@ -507,6 +514,7 @@ function normShow(r: RawShowRow): MediaShow {
     imdbId: r.imdb_id ?? null,
     overview: r.overview ?? null,
     posterPath: r.poster_path ?? null,
+    contentRating: r.content_rating ?? null,
   }
 }
 
