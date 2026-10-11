@@ -163,7 +163,12 @@ export function TvTab() {
   const { linkFor: plexLinkFor } = usePlexLinks()
 
   const [adding, setAdding] = useState<SeriesSearchResult | null>(null)
-  const [viewing, setViewing] = useState<SeriesSearchResult | Series | null>(null)
+  const [pickedViewing, setViewing] = useState<SeriesSearchResult | Series | null>(null)
+  // The policy can arrive after a title opened (default-open while it loads),
+  // so the detail always re-passes the gate rather than trusting the pick.
+  const ratingGate = useRatingGate()
+  let viewing = pickedViewing
+  if (viewing && !ratingGate.allows(viewing.certification)) viewing = null
   const viewingRatings = useRatings([viewing?.imdbId])
   const [toast, setToast] = useState<string | null>(null)
   // Find-release flow: a title added transiently (monitored, auto-grab off)
@@ -268,7 +273,6 @@ export function TvTab() {
     await openLookup(`tmdb:${tmdbId}`)
     setTrendingPending(null)
   }
-  const ratingGate = useRatingGate()
   // Titles opened from elsewhere (links, Home, the strip) pass the same gate.
   const openIfAllowed = (s: Series | SeriesSearchResult) => {
     if (ratingGate.allows(s.certification)) setViewing(s)

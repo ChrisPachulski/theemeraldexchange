@@ -178,7 +178,12 @@ export function MoviesTab() {
   const { linkFor: plexLinkFor } = usePlexLinks()
 
   const [adding, setAdding] = useState<MovieSearchResult | null>(null)
-  const [viewing, setViewing] = useState<MovieSearchResult | Movie | null>(null)
+  const [pickedViewing, setViewing] = useState<MovieSearchResult | Movie | null>(null)
+  // The policy can arrive after a title opened (default-open while it loads),
+  // so the detail always re-passes the gate rather than trusting the pick.
+  const ratingGate = useRatingGate()
+  let viewing = pickedViewing
+  if (viewing && !ratingGate.allows(viewing.certification)) viewing = null
   const viewingRatings = useRatings([viewing?.imdbId])
   const [toast, setToast] = useState<string | null>(null)
   // Find-release flow: a title added transiently (monitored, auto-grab off)
@@ -258,7 +263,6 @@ export function MoviesTab() {
     postClickEvent('movie', tmdbId)
     void openTmdb(tmdbId)
   }
-  const ratingGate = useRatingGate()
   // Titles opened from elsewhere (links, Home, the strip) pass the same gate.
   const openIfAllowed = (m: Movie | MovieSearchResult) => {
     if (ratingGate.allows(m.certification)) setViewing(m)
