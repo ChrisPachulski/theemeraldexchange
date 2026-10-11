@@ -43,6 +43,9 @@ export type Limits = {
    *  an older backend without the field has no such library to browse. */
   youtubeEnabled?: boolean
   musicEnabled?: boolean
+  /** DELETE /api/account/self is mounted. Absent on older backends, which
+   *  have no self-service deletion, so the UserMenu hides the button. */
+  accountDeletionEnabled?: boolean
 }
 
 const DEFAULT_LIMITS: Limits = {

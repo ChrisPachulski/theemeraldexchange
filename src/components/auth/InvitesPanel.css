@@ -58,7 +58,8 @@
   border-color: var(--emerald);
 }
 
-.invites-panel__expiry {
+.invites-panel__expiry,
+.invites-panel__history-toggle {
   display: inline-flex;
   align-items: center;
   gap: var(--s-1);

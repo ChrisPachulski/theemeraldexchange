@@ -22,6 +22,34 @@ declare global {
 let initialised = false
 let handlersRegistered = false
 
+// "Send crash reports to my server" (UserMenu > Preferences), device-local and
+// on by default like the Apple app. Held in memory too, so the switch still
+// works for this page when storage is unavailable.
+const CRASH_REPORTS_OFF_KEY = 'eex.crashReportsOff'
+let crashReportsOff = (() => {
+  try {
+    return localStorage.getItem(CRASH_REPORTS_OFF_KEY) === '1'
+  } catch {
+    return false
+  }
+})()
+
+export function crashReportsEnabled(): boolean {
+  return !crashReportsOff
+}
+
+export function setCrashReportsEnabled(on: boolean): void {
+  crashReportsOff = !on
+  try {
+    if (on) localStorage.removeItem(CRASH_REPORTS_OFF_KEY)
+    else localStorage.setItem(CRASH_REPORTS_OFF_KEY, '1')
+  } catch {
+    /* storage unavailable: the choice lasts for this page only */
+  }
+  // Opted out at boot means the SDK never started; start it now.
+  if (on) void initTelemetryFromServer()
+}
+
 interface ServerTelemetryConfig {
   dsn: string
   environment: string
@@ -86,6 +114,7 @@ function registerGlobalHandlers(): void {
  */
 function initialize(dsn: string, environment: string, release?: string): boolean {
   if (initialised) return true
+  if (crashReportsOff) return false
 
   Sentry.init({
     dsn,
@@ -101,7 +130,8 @@ function initialize(dsn: string, environment: string, release?: string): boolean
     // Don't leak PII into a self-hosted island unless explicitly opted in.
     sendDefaultPii: false,
     integrations: (defaults) => defaults.filter((integration) => integration.name !== 'BrowserSession'),
-    beforeSend: (event) => scrubTelemetryValue(event) as typeof event,
+    // Opting out after boot drops every event from then on.
+    beforeSend: (event) => (crashReportsOff ? null : (scrubTelemetryValue(event) as typeof event)),
   })
 
   initialised = true
@@ -118,6 +148,7 @@ export function initTelemetry(): boolean {
  * non-secret per-install DSN in the background. Network and unconfigured
  * responses degrade to telemetry-off without delaying startup. */
 export async function initTelemetryFromServer(): Promise<boolean> {
+  if (crashReportsOff) return false
   if (initTelemetry()) return true
   try {
     const response = await fetch(apiUrl('/api/telemetry/config'), {

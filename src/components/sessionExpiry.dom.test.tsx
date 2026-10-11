@@ -5,6 +5,7 @@ import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-qu
 import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DevicesPanel } from './auth/DevicesPanel'
+import { ConfirmProvider } from './confirm/ConfirmProvider'
 import { UsageDashboard } from './downloads/UsageDashboard'
 
 function mount(ui: ReactElement, errors: unknown[]) {
@@ -13,7 +14,9 @@ function mount(ui: ReactElement, errors: unknown[]) {
     defaultOptions: { queries: { retry: false } },
   })
   return render(
-    <QueryClientProvider client={client}>{ui}</QueryClientProvider>,
+    <QueryClientProvider client={client}>
+      <ConfirmProvider>{ui}</ConfirmProvider>
+    </QueryClientProvider>,
   )
 }
 

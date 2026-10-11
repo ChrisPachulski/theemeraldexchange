@@ -302,6 +302,10 @@
   background: color-mix(in oklch, var(--danger) 12%, transparent);
 }
 
+.user-menu__signout--danger {
+  color: var(--danger);
+}
+
 .user-menu__signout-error {
   margin: var(--s-2) var(--s-1) 0;
   color: var(--danger);
@@ -437,6 +441,14 @@
 
 .user-menu__disclosure[open] .user-menu__disclosure-summary {
   padding-bottom: var(--s-2);
+}
+
+.user-menu__hint {
+  margin: var(--s-1) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  line-height: 1.4;
+  color: var(--text-subtle);
 }
 
 .user-menu__disclosure-status {

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { apiUrl } from '../../lib/api/base'
 import { throwApiError } from '../../lib/api/errors'
+import { useConfirm } from '../confirm/useConfirm'
 import './DevicesPanel.css'
 
 // Self-management surface for paired Apple devices (M2 PIN-pair flow).
@@ -91,6 +92,7 @@ function platformLabel(p: string): string {
 
 export function DevicesPanel() {
   const qc = useQueryClient()
+  const confirm = useConfirm()
   const [editing, setEditing] = useState<string | null>(null)
   const [draftName, setDraftName] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -214,7 +216,17 @@ export function DevicesPanel() {
                       <button
                         type="button"
                         className="devices-panel__btn devices-panel__btn--danger"
-                        onClick={() => revoke.mutate(d.jti)}
+                        onClick={() =>
+                          confirm({
+                            title: 'Revoke this device?',
+                            body: `“${d.device_name}” will be signed out.`,
+                            confirmLabel: 'Revoke',
+                            cancelLabel: 'Keep',
+                            onConfirm: async () => {
+                              await revoke.mutateAsync(d.jti)
+                            },
+                          })
+                        }
                         disabled={revoke.isPending}
                       >
                         Revoke
@@ -230,7 +242,18 @@ export function DevicesPanel() {
             <button
               type="button"
               className="devices-panel__btn devices-panel__btn--danger"
-              onClick={() => logout.mutate()}
+              onClick={() =>
+                confirm({
+                  title: 'Sign out everywhere?',
+                  // Unlike the Apple app's copy, no "including this one": the
+                  // browser's cookie session is not a device token, so it stays.
+                  body: 'Every paired device will need to pair again.',
+                  confirmLabel: 'Sign out all',
+                  onConfirm: async () => {
+                    await logout.mutateAsync()
+                  },
+                })
+              }
               disabled={logout.isPending}
             >
               Sign out everywhere

@@ -268,6 +268,57 @@ describe('src/lib/telemetry', () => {
     expect((vi.mocked(Sentry.captureException).mock.calls[1][0] as Error).message).toBe('y')
   })
 
+  // H. device-local crash-report opt-out (UserMenu > Preferences)
+  function stubStorage(initial: Record<string, string> = {}) {
+    const data = new Map(Object.entries(initial))
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => data.get(k) ?? null,
+      setItem: (k: string, v: string) => void data.set(k, v),
+      removeItem: (k: string) => void data.delete(k),
+    })
+    return data
+  }
+
+  it('never starts the SDK or fetches config when opted out at boot', async () => {
+    stubWindow({ glitchtipDsn: 'https://injected@glitchtip.test/1' })
+    stubStorage({ 'eex.crashReportsOff': '1' })
+    vi.stubGlobal('fetch', vi.fn())
+    const { initTelemetryFromServer, isTelemetryActive } = await loadFresh()
+    expect(await initTelemetryFromServer()).toBe(false)
+    expect(vi.mocked(Sentry.init)).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+    expect(isTelemetryActive()).toBe(false)
+  })
+
+  it('drops events after an opt-out and starts the SDK again on opt-in', async () => {
+    stubWindow({ glitchtipDsn: 'https://injected@glitchtip.test/1' })
+    const data = stubStorage()
+    const { initTelemetry, setCrashReportsEnabled } = await loadFresh()
+    initTelemetry()
+    const beforeSend = vi.mocked(Sentry.init).mock.calls[0][0]?.beforeSend as unknown as (
+      e: Record<string, unknown>,
+    ) => unknown
+    expect(beforeSend({ message: 'x' })).not.toBeNull()
+
+    setCrashReportsEnabled(false)
+    expect(data.get('eex.crashReportsOff')).toBe('1')
+    expect(beforeSend({ message: 'x' })).toBeNull()
+
+    setCrashReportsEnabled(true)
+    expect(data.has('eex.crashReportsOff')).toBe(false)
+    expect(beforeSend({ message: 'x' })).not.toBeNull()
+  })
+
+  it('opting back in starts telemetry that was skipped at boot', async () => {
+    stubWindow({ glitchtipDsn: 'https://injected@glitchtip.test/1' })
+    stubStorage({ 'eex.crashReportsOff': '1' })
+    const { initTelemetry, setCrashReportsEnabled, isTelemetryActive } = await loadFresh()
+    expect(initTelemetry()).toBe(false)
+    setCrashReportsEnabled(true)
+    await vi.waitFor(() => expect(isTelemetryActive()).toBe(true))
+    expect(vi.mocked(Sentry.init)).toHaveBeenCalledTimes(1)
+  })
+
   // G. isTelemetryActive reflects state
   it('isTelemetryActive is false on a fresh module and true after init', async () => {
     stubWindow({ glitchtipDsn: 'https://injected@glitchtip.test/1' })

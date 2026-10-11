@@ -1,6 +1,52 @@
 @import './styles/tokens.css';
 @import './styles/global.css';
 
+/* ── In-app Reduce motion (UserMenu > Preferences) ────────────────────
+   src/lib/reduceMotion.ts sets data-reduce-motion on <html>. A media query
+   can't be OR'd with a selector, so every `prefers-reduced-motion: reduce`
+   block is mirrored here (reduceMotion.test.ts fails when one is missing),
+   and the `no-preference` enter/exit transitions are switched off. */
+:root[data-reduce-motion] {
+  --dur-fast: 0.01ms;
+  --dur-mid: 0.01ms;
+  --dur-slow: 0.01ms;
+}
+:root[data-reduce-motion] .constellation__sky,
+:root[data-reduce-motion] .downloads-tab__progress-shuttle,
+:root[data-reduce-motion] .home__scroll-hint,
+:root[data-reduce-motion] .home__panel-inner,
+:root[data-reduce-motion] .loading-pulse,
+:root[data-reduce-motion] .loading-pulse__glyph,
+:root[data-reduce-motion] .trending__refresh--busy svg,
+:root[data-reduce-motion] .trending__card--skeleton,
+:root[data-reduce-motion] .trending__loading-dot,
+:root[data-reduce-motion] .trending__loading-hint,
+:root[data-reduce-motion] .arr-adv__skel,
+:root[data-reduce-motion] .detail__cast-card--skeleton .detail__cast-photo,
+:root[data-reduce-motion] .walkthrough__hero-scroll,
+:root[data-reduce-motion] .nav-transition {
+  animation: none;
+}
+:root[data-reduce-motion] .downloads-tab__progress-shuttle { width: 100%; opacity: 0.5; }
+:root[data-reduce-motion] .home__scroll-hint,
+:root[data-reduce-motion] .walkthrough__hero-scroll { opacity: 0.7; }
+:root[data-reduce-motion] .trending__card--skeleton { opacity: 0.55; }
+:root[data-reduce-motion] .loading-pulse__glyph,
+:root[data-reduce-motion] .feedback-dot:hover { transform: none; }
+:root[data-reduce-motion] .feedback-dot,
+:root[data-reduce-motion] .toast,
+:root[data-reduce-motion] .confirm,
+:root[data-reduce-motion] .confirm::backdrop,
+:root[data-reduce-motion] .confirm__panel,
+:root[data-reduce-motion] .detail,
+:root[data-reduce-motion] .detail::backdrop,
+:root[data-reduce-motion] .detail__panel,
+:root[data-reduce-motion] .add-series,
+:root[data-reduce-motion] .add-series::backdrop,
+:root[data-reduce-motion] .add-series__panel {
+  transition: none;
+}
+
 .suggestion-badge { display: inline-block; font-size: 0.65rem; font-weight: 700; border-radius: 3px; padding: 1px 5px; margin-left: 4px; vertical-align: middle; }
 .suggestion-badge--iptv { background: #1a7a4a; color: #fff; }
 

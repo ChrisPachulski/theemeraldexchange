@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
 import { InvitesPanel } from './InvitesPanel'
+import { ConfirmProvider } from '../confirm/ConfirmProvider'
 
 // SSR markup check for the admin allowlist panel. Effects/queries don't
 // fire under renderToStaticMarkup, so we assert the static scaffold:
@@ -12,7 +13,9 @@ function render(): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return renderToStaticMarkup(
     <QueryClientProvider client={qc}>
-      <InvitesPanel />
+      <ConfirmProvider>
+        <InvitesPanel />
+      </ConfirmProvider>
     </QueryClientProvider>,
   )
 }
