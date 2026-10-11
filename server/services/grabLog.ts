@@ -35,6 +35,8 @@ export type GrabEventType =
   | 'planned_size_exceeds_free_space'
   | 'grab_succeeded'
   | 'grab_failed'
+  // The grab POST timed out (504): the release may still have been queued.
+  | 'grab_unconfirmed'
 
 export type GrabEvent = {
   ts: string

@@ -1540,6 +1540,8 @@ describe('radarr movie-add in-flight reservation', () => {
     freeSpace?: number
     grabStatus?: number
     holdPost?: (resolve: () => void) => void
+    // Delay the grab POST; honors the request's abort signal like a real fetch.
+    grabDelayMs?: number
   }
 
   // Stub the admin add path (rootFolderPath supplied → admin passthrough):
@@ -1571,6 +1573,15 @@ describe('radarr movie-add in-flight reservation', () => {
           if (s.holdPost) {
             return new Promise<Response>((resolve) => {
               s.holdPost!(() => resolve(new Response('{}', { status: grabStatus })))
+            })
+          }
+          if (s.grabDelayMs) {
+            await new Promise<void>((resolve, reject) => {
+              const t = setTimeout(resolve, s.grabDelayMs)
+              init?.signal?.addEventListener('abort', () => {
+                clearTimeout(t)
+                reject(new DOMException('aborted', 'AbortError'))
+              })
             })
           }
           return new Response(JSON.stringify({ ok: grabStatus < 400 }), { status: grabStatus })
@@ -1764,6 +1775,29 @@ describe('radarr movie-add in-flight reservation', () => {
     const r2 = await settle(addMovie(await adminCookie(), path))
     expect(r2.status).toBe(201)
     expect(grabPostCount(calls2)).toBe(1)
+  })
+
+  it('SLOW GRAB: a grab POST slower than the 15 s LAN budget keeps the movie and never rolls it back', async () => {
+    // Regression: the grab POST ran on the 15 s LAN budget. On a loaded NAS
+    // Radarr takes longer to fetch the release, the add saw a synthesized 504
+    // and DELETEd the movie while Radarr was downloading it.
+    const path = '/data/movies-slowgrab'
+    const calls: Array<{ url: string; method: string }> = []
+    stubMovieAdd(calls, { path, movieId: 401, grabDelayMs: 30_000 })
+    const r = await settle(addMovie(await adminCookie(), path))
+    expect(r.status).toBe(201)
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false)
+  })
+
+  it('GRAB TIMEOUT: a grab POST past its budget keeps the movie monitored (grab_unconfirmed), never DELETEs it', async () => {
+    const path = '/data/movies-grabtimeout'
+    const calls: Array<{ url: string; method: string }> = []
+    stubMovieAdd(calls, { path, movieId: 402, grabDelayMs: 120_000 })
+    const r = await settle(addMovie(await adminCookie(), path))
+    expect(r.status).toBe(200)
+    expect(await r.json()).toMatchObject({ status: 'monitoring', phase: 'grab_unconfirmed' })
+    expect(calls.some((c) => c.method === 'DELETE')).toBe(false)
+    expect(calls.some((c) => c.url.includes('/api/v3/movie/402') && c.method === 'PUT')).toBe(true)
   })
 })
 

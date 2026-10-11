@@ -14,7 +14,7 @@
 
 import type { Context } from 'hono'
 import type { Release } from './arrAdd.js'
-import type { ArrGrabEvent, ReservationLedger, RootFolderSpaceSnapshot } from './arrGrab.js'
+import { grabEventType, type ArrGrabEvent, type ReservationLedger, type RootFolderSpaceSnapshot } from './arrGrab.js'
 import type { Env } from '../middleware/auth.js'
 
 // ---------------------------------------------------------------------------
@@ -363,7 +363,7 @@ export async function executeInteractiveGrab(opts: {
     await recordEvent({
       ...base,
       title: picked.title,
-      type: grab.ok ? 'grab_succeeded' : 'grab_failed',
+      type: grabEventType(grab),
       status: grab.status,
       release: { title: picked.title, sizeBytes: size, qualityWeight: picked.qualityWeight ?? 0 },
     })

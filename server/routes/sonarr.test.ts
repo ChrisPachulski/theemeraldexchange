@@ -1065,8 +1065,19 @@ describe('sonarr season-grab in-flight reservation', () => {
     noReleases?: boolean
     // Optional gate to hold the grab POST open (used by the overcommit test).
     holdPost?: (resolve: () => void) => void
-    // Delay the release search; honors the request's abort signal.
+    // Delay the release search / grab POST; both honor the request's abort signal.
     searchDelayMs?: number
+    grabDelayMs?: number
+  }
+
+  function abortableDelay(ms: number, signal?: AbortSignal | null): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const t = setTimeout(resolve, ms)
+      signal?.addEventListener('abort', () => {
+        clearTimeout(t)
+        reject(new DOMException('aborted', 'AbortError'))
+      })
+    })
   }
 
   function stubSeasonMonitor(calls: Array<{ url: string; method: string }>, s: Stubs) {
@@ -1099,15 +1110,7 @@ describe('sonarr season-grab in-flight reservation', () => {
           return new Response(JSON.stringify([{ seasonNumber: 1, episodeNumber: 1, hasFile: false }]), { status: 200 })
         }
         if (url.includes('/api/v3/release') && method === 'GET') {
-          if (s.searchDelayMs) {
-            await new Promise<void>((resolve, reject) => {
-              const t = setTimeout(resolve, s.searchDelayMs)
-              init?.signal?.addEventListener('abort', () => {
-                clearTimeout(t)
-                reject(new DOMException('aborted', 'AbortError'))
-              })
-            })
-          }
+          if (s.searchDelayMs) await abortableDelay(s.searchDelayMs, init?.signal)
           if (s.noReleases) return new Response(JSON.stringify([]), { status: 200 })
           return new Response(
             JSON.stringify([
@@ -1130,6 +1133,7 @@ describe('sonarr season-grab in-flight reservation', () => {
               s.holdPost!(() => resolve(new Response('{}', { status: 200 })))
             })
           }
+          if (s.grabDelayMs) await abortableDelay(s.grabDelayMs, init?.signal)
           return new Response(JSON.stringify({ ok: grabStatus < 400 }), { status: grabStatus })
         }
         return new Response('[]', { status: 200 })
@@ -1154,6 +1158,9 @@ describe('sonarr season-grab in-flight reservation', () => {
   }
   function grabPostCount(calls: Array<{ url: string; method: string }>) {
     return calls.filter((c) => c.url.endsWith('/api/v3/release') && c.method === 'POST').length
+  }
+  function grabEventTypes() {
+    return (grabLog.appendGrabEvent as ReturnType<typeof vi.fn>).mock.calls.map(([e]) => (e as { type?: string }).type)
   }
 
   let appendSpy: ReturnType<typeof vi.spyOn>
@@ -1286,6 +1293,18 @@ describe('sonarr season-grab in-flight reservation', () => {
     stubSeasonMonitor(calls, { path, searchDelayMs: 90_000 })
     await monitorAndFlushGrab(await adminCookie())
     expect(grabPostCount(calls)).toBe(1)
+  })
+
+  it('SLOW GRAB: a grab POST slower than the 15 s LAN budget is logged as grabbed', async () => {
+    // Regression: the grab POST ran on the 15 s LAN budget. On a loaded NAS
+    // Sonarr takes longer to fetch the release from the indexer, so the add
+    // logged grab_failed 504 although Sonarr did grab.
+    const path = '/data/tv-slowgrab'
+    const calls: Array<{ url: string; method: string }> = []
+    stubSeasonMonitor(calls, { path, grabDelayMs: 30_000 })
+    await monitorAndFlushGrab(await adminCookie())
+    expect(grabEventTypes()).toContain('grab_succeeded')
+    expect(grabEventTypes()).not.toContain('grab_failed')
   })
 })
 

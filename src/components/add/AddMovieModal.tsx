@@ -54,6 +54,10 @@ export function AddMovieModal({ movie, onClose, onAdded, onError }: Props) {
     if (!movie || !d) return
     d.showModal()
     setError(null)
+    // The dialog stays mounted between movies: a Quality/Folder pick applies
+    // to this add only, never silently to the next one.
+    setProfileChoice(null)
+    setFolderChoice(null)
     return () => {
       if (d.open) d.close()
     }

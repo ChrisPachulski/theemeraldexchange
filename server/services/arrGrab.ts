@@ -34,6 +34,17 @@ export type CappedGrabResult =
   | { status: 'no_matching_releases'; scanned: number }
   | { status: 'all_rejected_by_cap'; scanned: number }
   | { status: 'grab_failed'; upstreamStatus: number }
+  // The grab POST timed out: the *arr may well have queued the release, so
+  // the item is kept (monitored), never rolled back.
+  | { status: 'grab_unconfirmed'; scanned: number }
+
+/** Grab-log type for a grab POST outcome. A 504 is the timeout upstream.ts
+ *  synthesizes (or an unreachable *arr): the release may still have been
+ *  queued, so it is logged as unconfirmed rather than failed. */
+export function grabEventType(res: { ok: boolean; status: number }): 'grab_succeeded' | 'grab_failed' | 'grab_unconfirmed' {
+  if (res.ok) return 'grab_succeeded'
+  return res.status === 504 ? 'grab_unconfirmed' : 'grab_failed'
+}
 
 type GrabEventInput = Parameters<typeof appendGrabEvent>[0]
 export type ArrGrabEvent = Omit<GrabEventInput, 'app'>

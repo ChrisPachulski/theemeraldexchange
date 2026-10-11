@@ -9,6 +9,7 @@ import { SEARCH_TIMEOUT_MS } from '../services/upstream.js'
 import {
   createGrabEventRecorder,
   createReservationLedger,
+  grabEventType,
   type CappedGrabResult,
   type RootFolderSpaceSnapshot,
 } from '../services/arrGrab.js'
@@ -229,11 +230,12 @@ radarr.post('/api/v3/release', requireAdmin, radarrMutateLimit, async (c) => {
       return (await res.json().catch(() => [])) as UpstreamRelease[]
     },
     postGrab: async (guid, indexerId) => {
-      const res = await radarrFetch('/api/v3/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guid, indexerId }),
-      })
+      const res = await radarrFetch(
+        '/api/v3/release',
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guid, indexerId }) },
+        undefined,
+        SEARCH_TIMEOUT_MS,
+      )
       return { ok: res.ok, status: res.status }
     },
     recordEvent: recordRadarrGrabEvent,
@@ -415,11 +417,16 @@ async function grabBestUnderCap(
   }
   let grabRes: Awaited<ReturnType<typeof radarrFetch>>
   try {
-    grabRes = await radarrFetch('/api/v3/release', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ guid: best.guid, indexerId: best.indexerId }),
-    })
+    grabRes = await radarrFetch(
+      '/api/v3/release',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guid: best.guid, indexerId: best.indexerId }),
+      },
+      undefined,
+      SEARCH_TIMEOUT_MS,
+    )
   } catch (err) {
     // Egress failed entirely — nothing was grabbed, so free the reservation.
     radarrReservations.release(rootFolder, best.size)
@@ -439,7 +446,7 @@ async function grabBestUnderCap(
   })
   await recordRadarrGrabEvent({
     ...base,
-    type: grabRes.ok ? 'grab_succeeded' : 'grab_failed',
+    type: grabEventType(grabRes),
     status: grabRes.status,
     scanned: all.length,
     eligible: eligible.length,
@@ -449,6 +456,9 @@ async function grabBestUnderCap(
       qualityWeight: best.qualityWeight,
     },
   })
+  if (grabEventType(grabRes) === 'grab_unconfirmed') {
+    return { status: 'grab_unconfirmed', scanned: all.length }
+  }
   if (!grabRes.ok) {
     return { status: 'grab_failed', upstreamStatus: grabRes.status }
   }
@@ -831,7 +841,7 @@ async function settleCappedMovieGrab(
         424,
       )
     }
-    if (grab.status === 'no_releases' || grab.status === 'no_matching_releases') {
+    if (grab.status === 'no_releases' || grab.status === 'no_matching_releases' || grab.status === 'grab_unconfirmed') {
       // Nothing GRABBABLE yet — either an unreleased/future film with no
       // releases at all (no_releases), or releases exist but Radarr
       // rejected every one for parse/title/quality reasons unrelated to
@@ -841,7 +851,9 @@ async function settleCappedMovieGrab(
       // Radarr's RSS sync grabs it the moment a usable release appears.
       // This is the "add it and it'll come when available" behavior, and
       // avoids the dead-end 424 on titles that simply have no clean
-      // release right now.
+      // release right now. A timed-out grab (grab_unconfirmed) is kept the
+      // same way: Radarr was most likely still queuing the release, and
+      // deleting the movie under it would orphan that download.
       const monitored = await setMovieMonitored(created, true)
       if (!monitored.ok) {
         return c.json(
@@ -979,11 +991,16 @@ radarr.post('/api/v3/movie/:id/upgrade', requireAdmin, radarrMutateLimit, async 
   }
   let grabRes: Awaited<ReturnType<typeof radarrFetch>>
   try {
-    grabRes = await radarrFetch('/api/v3/release', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ guid: best.guid, indexerId: best.indexerId }),
-    })
+    grabRes = await radarrFetch(
+      '/api/v3/release',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ guid: best.guid, indexerId: best.indexerId }),
+      },
+      undefined,
+      SEARCH_TIMEOUT_MS,
+    )
   } catch (err) {
     radarrReservations.release(spaceGate.folder, best.size)
     throw err

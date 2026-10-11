@@ -15,6 +15,7 @@ export type GrabEventType =
   | 'planned_size_exceeds_free_space'
   | 'grab_succeeded'
   | 'grab_failed'
+  | 'grab_unconfirmed'
 
 export type GrabEvent = {
   ts: string

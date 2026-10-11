@@ -11,6 +11,7 @@ import { SEARCH_TIMEOUT_MS } from '../services/upstream.js'
 import {
   createGrabEventRecorder,
   createReservationLedger,
+  grabEventType,
   type RootFolderSpaceSnapshot,
 } from '../services/arrGrab.js'
 import {
@@ -281,11 +282,12 @@ sonarr.post('/api/v3/release', requireAdmin, sonarrMutateLimit, async (c) => {
       return (await res.json().catch(() => [])) as UpstreamRelease[]
     },
     postGrab: async (guid, indexerId) => {
-      const res = await sonarrFetch('/api/v3/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guid, indexerId }),
-      })
+      const res = await sonarrFetch(
+        '/api/v3/release',
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ guid, indexerId }) },
+        undefined,
+        SEARCH_TIMEOUT_MS,
+      )
       return { ok: res.ok, status: res.status }
     },
     recordEvent: recordSonarrGrabEvent,
@@ -404,10 +406,12 @@ sonarr.put('/api/v3/series/:id', requireAdmin, sonarrMutateLimit, async (c) => {
 //    Automatic grabs only use non-rejected releases so we stay inside
 //    the same safety decisions Sonarr made upstream.
 //
-// No client waits on this background grab, so its per-season search is not
-// bound by the SPA's 60s abort like SEARCH_TIMEOUT_MS is. On a loaded NAS a
-// season search runs past 50s (observed ~55s with downloads unpacking).
-const TV_GRAB_SEARCH_TIMEOUT_MS = 180_000
+// No client waits on this background grab, so its per-season search and its
+// grab POSTs are not bound by the SPA's 60s abort like SEARCH_TIMEOUT_MS is.
+// On a loaded NAS a season search runs past 50s (observed ~55s with downloads
+// unpacking), and a grab POST past the 15s LAN budget (logged grab_failed 504
+// while Sonarr did grab).
+const TV_GRAB_TIMEOUT_MS = 180_000
 
 async function grabTvUnderCap(
   seriesId: number,
@@ -445,7 +449,7 @@ async function grabTvUnderCap(
   const all: Release[] = []
   for (const seasonNumber of monitoredSeasons) {
     const url = `/api/v3/release?seriesId=${seriesId}&seasonNumber=${seasonNumber}`
-    const res = await sonarrFetch(url, { method: 'GET' }, undefined, TV_GRAB_SEARCH_TIMEOUT_MS)
+    const res = await sonarrFetch(url, { method: 'GET' }, undefined, TV_GRAB_TIMEOUT_MS)
     if (!res.ok) {
       capLog.error('release search failed', { status: res.status, seasonNumber, seriesId })
       await recordSonarrGrabEvent({ ...base, type: 'search_failed', status: res.status })
@@ -584,11 +588,16 @@ async function grabTvUnderCap(
   // same root folder until restart.
   try {
     for (const pick of finalPicks) {
-      const grabRes = await sonarrFetch('/api/v3/release', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guid: pick.guid, indexerId: pick.indexerId }),
-      })
+      const grabRes = await sonarrFetch(
+        '/api/v3/release',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ guid: pick.guid, indexerId: pick.indexerId }),
+        },
+        undefined,
+        TV_GRAB_TIMEOUT_MS,
+      )
       const ec = effectiveEpisodeCount(pick) ?? 1
       capLog.info('grab', {
         title: pick.title.slice(0, 80),
@@ -600,7 +609,7 @@ async function grabTvUnderCap(
       })
       await recordSonarrGrabEvent({
         ...base,
-        type: grabRes.ok ? 'grab_succeeded' : 'grab_failed',
+        type: grabEventType(grabRes),
         status: grabRes.status,
         release: {
           title: pick.title,
