@@ -50,9 +50,9 @@ describe('Walkthrough invite handoff', () => {
     const inviteInputs = screen.getAllByRole('textbox', { name: /Invite code/ })
     expect(inviteInputs).toHaveLength(2)
     for (const input of inviteInputs) expect(input).toHaveValue(sentinel)
-    // Both blocks' Google + Apple links carry the invite to the WorkOS start route.
-    const links = screen.getAllByRole('link', { name: /Sign in with (Google|Apple)/ })
-    expect(links).toHaveLength(4)
+    // Both blocks' Google, Apple and email links carry the invite to the WorkOS start route.
+    const links = screen.getAllByRole('link', { name: /Sign in with (Google|Apple|email)/ })
+    expect(links).toHaveLength(6)
     for (const link of links) expect(link).toHaveAttribute('href', expect.stringContaining(`invite=${sentinel}`))
   })
 })

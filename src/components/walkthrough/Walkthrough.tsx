@@ -99,23 +99,28 @@ function SignInBlock({
           </button>
         )}
         {showApple && <AppleSignInButton inviteCode={code || undefined} />}
+        {/* No provider = the WorkOS hosted page, which carries email sign-in
+            for members whose identity is neither Google nor Apple. */}
         {showWorkos &&
-          (['google', 'apple'] as const).map((provider) => (
-            <a
-              key={provider}
-              className="walkthrough__signin-button"
-              href={apiUrl('/api/auth/workos/start', {
-                provider,
-                ...(code ? { invite: code } : {}),
-              })}
-              aria-disabled={pending || Boolean(codeError) ? true : undefined}
-            >
-              Sign in with {provider === 'google' ? 'Google' : 'Apple'}
-            </a>
-          ))}
+          ([['google', 'Google'], ['apple', 'Apple'], [null, 'email']] as const).map(
+            ([provider, label]) => (
+              <a
+                key={label}
+                className="walkthrough__signin-button"
+                href={apiUrl('/api/auth/workos/start', {
+                  ...(provider ? { provider } : {}),
+                  ...(code ? { invite: code } : {}),
+                })}
+                aria-disabled={pending || Boolean(codeError) ? true : undefined}
+              >
+                Sign in with {label}
+              </a>
+            ),
+          )}
       </fieldset>
       <p className="walkthrough__signin-hint">
         Invitation-only. Returning members sign in with Google, Apple
+        {showWorkos ? ', email' : ''}
         {showPlex ? ', or the Plex account the library was shared to' : ''}; no
         code needed. First-time guests: paste your invite code above, then sign
         in with any provider.
