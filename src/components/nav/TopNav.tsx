@@ -1,8 +1,9 @@
 import { useRef } from 'react'
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
-import { useAuth } from '../../lib/auth'
+import { authModeFromUser, useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
+import { useSectionAccess } from '../../lib/hooks/usePolicy'
 import { UserMenu } from '../auth/UserMenu'
 import { usePlexUser } from '../../lib/hooks/usePlexLinks'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
@@ -23,6 +24,8 @@ type Tab = {
   /** Limits key gating this tab (plan 006 Phase 3): tab hides when the
    *  matching integration is unconfigured on this install. */
   needs?: 'sonarrEnabled' | 'radarrEnabled' | 'sabEnabled'
+  /** Policy section gating this tab: hides when the member's policy denies it. */
+  section?: 'live' | 'downloads'
 }
 
 const TABS: Tab[] = [
@@ -30,8 +33,10 @@ const TABS: Tab[] = [
   { route: 'movies', label: 'Movies', needs: 'radarrEnabled' },
   // `iptv: true` hides the tab when the server boots with IPTV_DISABLED=1
   // (contract §13.3 reviewer-insurance gate).
-  { route: 'live', label: 'Live', iptv: true },
-  { route: 'downloads', label: 'Downloads', needs: 'sabEnabled' },
+  { route: 'live', label: 'Live', iptv: true, section: 'live' },
+  { route: 'downloads', label: 'Downloads', needs: 'sabEnabled', section: 'downloads' },
+  // Admin-only, and only on a Plex-backed session: the list reads plex.tv
+  // with the session's Plex token.
   { route: 'users', label: 'Users', adminOnly: true },
 ]
 
@@ -51,8 +56,10 @@ type Props = {
 export function TopNav({ active }: Props) {
   const { transitionTo, navigate } = useNavTransition()
   const plexUser = usePlexUser()
-  const { isAdmin } = useAuth()
+  const { isAdmin, user } = useAuth()
+  const plexAdmin = isAdmin && user !== null && authModeFromUser(user) === 'plex'
   const limits = useLimits()
+  const sections = useSectionAccess()
   const iptvEnabled = limits.data?.iptvEnabled !== false // default true on older backends
   const tabRefs = useRef<Record<NavRoute, HTMLButtonElement | null>>({
     tv: null,
@@ -63,8 +70,9 @@ export function TopNav({ active }: Props) {
   })
   const visibleTabs = TABS.filter(
     (t) =>
-      (!t.adminOnly || isAdmin) &&
+      (!t.adminOnly || plexAdmin) &&
       (!t.iptv || iptvEnabled) &&
+      (!t.section || sections[t.section]) &&
       // Optional integrations (plan 006 Phase 3): default true so older
       // backends without the flags keep every tab.
       (!t.needs || limits.data?.[t.needs] !== false) &&

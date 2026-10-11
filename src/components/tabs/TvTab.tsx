@@ -21,6 +21,7 @@ import { useSonarrLibrary, useSonarrProfiles, useSonarrRootFolders } from '../..
 import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
 import { useLimits } from '../../lib/hooks/useLimits'
+import { useRatingGate, useSectionAccess } from '../../lib/hooks/usePolicy'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
 import { resumePosition, useLocalShowIndex, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
 import { MediaPlayer } from '../media/MediaPlayer'
@@ -247,12 +248,26 @@ export function TvTab() {
     return map
   }, [episodes.data])
 
+  // A rating-capped profile never sees a title above its cap (unrated fails
+  // closed), so filter before search, sort, A-Z and counts all inherit it.
+  const ratingGate = useRatingGate()
+  const visibleLibrary = useMemo(
+    () => library.data?.filter((x) => ratingGate.allows(x.certification)),
+    [library.data, ratingGate],
+  )
+  const visibleResults = useMemo(
+    () => (search.data ?? []).filter((x) => ratingGate.allows(x.certification)),
+    [search.data, ratingGate],
+  )
+  // Members whose policy denies library management get no Add (it 403s).
+  const sections = useSectionAccess()
+
   // Text + status filter, then sort. Article-stripped sort key is used
   // for title sorts (Plex behavior — "The Mandalorian" sorts under M).
   // Alphabet bucket runs against the same key so the bar matches the sort.
   const textFilteredLibrary = useMemo(
-    () => filterAndSortLibrary(library.data, { query, status, comparator: TV_COMPARATORS[sort] }),
-    [library.data, query, status, sort],
+    () => filterAndSortLibrary(visibleLibrary, { query, status, comparator: TV_COMPARATORS[sort] }),
+    [visibleLibrary, query, status, sort],
   )
 
   const availableLetters = useMemo(
@@ -370,11 +385,12 @@ export function TvTab() {
             query={debouncedQuery}
             loading={search.isPending && debouncedQuery.length >= 2}
             error={search.error}
-            results={search.data ?? []}
+            results={visibleResults}
             libraryByTvdb={libraryByTvdb}
             onCardClick={handleSearchClick}
           />
-          {debouncedQuery.length < 2 && (
+          {/* Suggestions carry no certification: withheld under a cap. */}
+          {debouncedQuery.length < 2 && !ratingGate.capped && (
             <div className="tv-tab__trending-below-fold">
               <TrendingRow
                 items={strip.items}
@@ -395,7 +411,7 @@ export function TvTab() {
         </>
       ) : (
         <>
-          {!library.isPending && !library.error && (library.data?.length ?? 0) > 0 && (
+          {!library.isPending && !library.error && (visibleLibrary?.length ?? 0) > 0 && (
             <>
               <LibraryFilters
                 sortOptions={TV_SORT_OPTIONS}
@@ -452,7 +468,7 @@ export function TvTab() {
               if (next === 'discover') setLetter('all')
             })
           }}
-          libraryCount={library.data?.length}
+          libraryCount={visibleLibrary?.length}
         />
       </div>
 
@@ -539,7 +555,7 @@ export function TvTab() {
           monitorSeasonMutation.mutate({ seriesId, seasonNumber })
         } : undefined}
         addingSeason={monitorSeasonMutation.isPending ? monitorSeasonMutation.variables?.seasonNumber ?? null : null}
-        onAdd={viewing && !('id' in viewing) ? () => {
+        onAdd={sections.arr && viewing && !('id' in viewing) ? () => {
           const item = viewing as SeriesSearchResult
           setViewing(null)
           setAdding(item)

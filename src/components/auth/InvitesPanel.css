@@ -209,6 +209,31 @@
   color: var(--text-subtle);
 }
 
+.invites-panel__item-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+}
+
+/* ── Member restrictions editor ─────────────────────────────────── */
+
+.invites-panel__restrictions {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--emerald);
+  border-radius: var(--r-sm);
+}
+
+.invites-panel__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text);
+}
+
 /* ── Buttons (mirror DevicesPanel) ──────────────────────────────── */
 
 .invites-panel__btn {

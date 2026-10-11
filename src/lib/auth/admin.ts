@@ -1,5 +1,6 @@
 import { apiUrl } from '../api/base'
 import { throwApiError } from '../api/errors'
+import type { Policy } from '../parentalGate'
 import type { AuthMode, Role } from './types'
 
 // ── Admin allowlist API — invites + members ────────────────────────
@@ -107,4 +108,24 @@ export async function revokeMember(sub: string): Promise<void> {
     'revoke member',
     { method: 'DELETE' },
   )
+}
+
+// ── Per-member restrictions (parental controls + section scoping) ──
+
+/** Every stored policy keyed by member sub. A member with no entry is
+ *  unrestricted. */
+export async function listPolicies(): Promise<Record<string, Policy>> {
+  const body = await adminJson<{ policies: Record<string, Policy> }>(
+    '/api/users/policies',
+    'load restrictions',
+  )
+  return body.policies
+}
+
+/** Full replace: the server resets any omitted key to its open default. */
+export async function setPolicy(sub: string, policy: Policy): Promise<Policy> {
+  return adminJson<Policy>(`/api/users/${encodeURIComponent(sub)}/policy`, 'save restrictions', {
+    method: 'PUT',
+    body: JSON.stringify(policy),
+  })
 }

@@ -78,6 +78,10 @@ vi.mock('../../lib/hooks/useSonarrEpisodes', () => ({
 vi.mock('../../lib/hooks/useLimits', () => ({
   useLimits: () => ({ data: limitsData.current }),
 }))
+vi.mock('../../lib/hooks/usePolicy', () => ({
+  useRatingGate: () => ({ capped: false, allows: () => true }),
+  useSectionAccess: () => ({ live: true, downloads: true, arr: true }),
+}))
 vi.mock('../../lib/hooks/useCast', () => ({ useCast: () => ({ data: [], isLoading: false }) }))
 vi.mock('../../lib/hooks/usePlexLinks', () => ({
   usePlexLinks: () => ({ linkFor: () => null, isLoading: false }),

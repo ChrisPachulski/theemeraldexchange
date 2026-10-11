@@ -29,6 +29,9 @@ vi.mock('./lib/animatedFavicon', () => ({
   mountAnimatedFavicon: mocks.mountAnimatedFavicon,
 }))
 vi.mock('./lib/hooks/useLimits', () => ({ useLimits: () => ({ data: {} }) }))
+vi.mock('./lib/hooks/usePolicy', () => ({
+  useSectionAccess: () => ({ live: true, downloads: true, arr: true }),
+}))
 vi.mock('./lib/router', () => ({ useRoute: () => ['home', vi.fn()] }))
 vi.mock('./lib/navTransition', () => ({
   NavTransitionProvider: ({ children }: { children: ReactNode }) => children,
