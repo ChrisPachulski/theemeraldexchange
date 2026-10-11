@@ -403,6 +403,36 @@ describe('media proxy route', () => {
     expect(mockRatingBlocked).toHaveBeenCalledWith(expect.anything(), kind, id)
   })
 
+  // media-core's router decodes path params, so a percent-encoded kind or id is
+  // the same title upstream and must hit the same gate here.
+  it.each([
+    ['/chapters/%6dovie/7', 'movie', 7],
+    ['/subtitles/movie/%37/file', 'movie', 7],
+    ['/stream/%6dovie/7', 'movie', 7],
+  ] as const)('403s a capped percent-encoded %s', async (path, kind, id) => {
+    ratingState.blocked = true
+    mockFetch.mockResolvedValue(new Response('{}', { status: 200 }))
+
+    const res = await media.request(path, { method: 'GET', headers: { host: 'localhost' } })
+
+    expect(res.status).toBe(403)
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockRatingBlocked).toHaveBeenCalledWith(expect.anything(), kind, id)
+  })
+
+  it('403s a capped percent-encoded YouTube listing', async () => {
+    ratingState.blocked = true
+    const res = await media.request('/%79outube/channels', { method: 'GET', headers: { host: 'localhost' } })
+    expect(res.status).toBe(403)
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('400s a malformed percent-encoding instead of guessing', async () => {
+    const res = await media.request('/chapters/%E0%A4%A/7', { method: 'GET', headers: { host: 'localhost' } })
+    expect(res.status).toBe(400)
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
   it('still proxies /subtitles/movie/:id/file when the cap allows it', async () => {
     // The guard must not become a blanket block on the sidecar routes.
     ratingState.blocked = false

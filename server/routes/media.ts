@@ -145,7 +145,14 @@ function principalHeader(session: Session, requestId?: string): Record<string, s
 // <video> can authenticate without a cookie) bound to the exact title; every
 // other media subpath requires the session cookie/bearer.
 async function mediaAuth(c: Context<Env>, next: Next) {
-  const subpath = new URL(c.req.url).pathname.replace(/^\/api\/media/, '') || '/'
+  // Decoded once, as media-core's router decodes path params: matching the raw
+  // path let `/chapters/%6dovie/7` skip every gate below yet reach movie 7.
+  let subpath: string
+  try {
+    subpath = decodeURIComponent(new URL(c.req.url).pathname).replace(/^\/api\/media/, '') || '/'
+  } catch {
+    return c.json({ error: 'bad_path' }, 400)
+  }
   const token = c.req.query('t')
   const streamMatch = subpath.match(/^\/stream\/([^/]+)\/([^/?]+)/)
   if (streamMatch && token) {

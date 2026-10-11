@@ -104,8 +104,15 @@ transcode.all('/*', async (c) => {
   const url = new URL(c.req.url)
   const subpath = url.pathname.replace(/^\/api\/transcode/, '') || '/'
   // Blocked before ANY upstream URL construction or principal minting: a 404
-  // (not 403) so the proxy does not confirm the route exists upstream.
-  if (BLOCKED_CONTROL_PATHS.has(subpath)) return c.notFound()
+  // (not 403) so the proxy does not confirm the route exists upstream. Compared
+  // decoded, so `/%67rant` can't pass as a different path.
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(subpath)
+  } catch {
+    return c.notFound()
+  }
+  if (BLOCKED_CONTROL_PATHS.has(decoded)) return c.notFound()
   const token = url.searchParams.get('t')
   // Forward the original query MINUS our `?t=` (the transcoder authenticates via
   // the internal principal, not the stream token).
