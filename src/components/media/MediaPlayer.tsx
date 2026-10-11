@@ -348,6 +348,12 @@ export function MediaPlayer({
   // Plain-div dialog: useModalA11y supplies Escape-to-close, the focus trap,
   // and focus restoration that aria-modal="true" promises (LiveTab pattern).
   const modalRef = useModalA11y<HTMLDivElement>(onClose)
+  // An episode swap unmounts the control that was clicked (Play now, a queue
+  // row); pull focus back into the dialog so Escape and the trap keep working.
+  useEffect(() => {
+    const modal = modalRef.current
+    if (modal && !modal.contains(document.activeElement)) modal.focus()
+  }, [id, modalRef])
 
   // One playback session per (title, chosen start, retry attempt). A new id
   // (episode swap) starts a fresh session; the resume prompt gates the first

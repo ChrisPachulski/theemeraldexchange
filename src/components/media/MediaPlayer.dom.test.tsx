@@ -482,7 +482,9 @@ describe('MediaPlayer (mounted) — binge flow', () => {
     act(() => engineProps.current?.onPositionUpdate?.(1475, null))
     expect(screen.getByRole('group', { name: 'Up next' })).toHaveTextContent('S01E02 · Episode 2')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Play now' }))
+    const playNow = screen.getByRole('button', { name: 'Play now' })
+    playNow.focus()
+    fireEvent.click(playNow)
     await flush()
 
     expect(onPlayEpisode).toHaveBeenCalledExactlyOnceWith(episodes[1])
@@ -493,6 +495,8 @@ describe('MediaPlayer (mounted) — binge flow', () => {
     expect(reportMock).toHaveBeenCalledWith(1475, 1500, true, true)
     expect(playbackMock).toHaveBeenLastCalledWith('episode', 2, undefined, undefined, false)
     expect(screen.queryByRole('group', { name: 'Up next' })).not.toBeInTheDocument()
+    // The clicked button is gone; focus stays inside the dialog.
+    expect(document.activeElement).toBe(dialog)
   })
 
   it('"Watch credits" dismisses the card for this episode', async () => {
