@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { nextHash, parseHash, type Route } from './router'
+import { nextHash, parseHash, takeIntent, type Route } from './router'
 
 // vitest runs in the `node` environment (see vitest.config.ts) where `window`
 // is undefined — there is no jsdom/happy-dom renderer and no @testing-library.
@@ -58,6 +58,10 @@ describe('parseHash', () => {
     expect(parseHash()).toBe('home')
     stubHash('#/tv/extra')
     expect(parseHash()).toBe('home')
+    stubHash('#/home/5')
+    expect(parseHash()).toBe('home')
+    stubHash('#/movies/tvdb')
+    expect(parseHash()).toBe('home')
     stubHash('#/123')
     expect(parseHash()).toBe('home')
   })
@@ -80,5 +84,40 @@ describe('nextHash', () => {
     expect(nextHash('home', 'tv')).toBe('#/tv')
     expect(nextHash('movies', 'live')).toBe('#/live')
     expect(nextHash('users', 'home')).toBe('#/home')
+  })
+})
+
+describe('open-title intents', () => {
+  const stubIntentHash = (h: string) => {
+    const replaceState = vi.fn()
+    vi.stubGlobal('window', { location: { hash: h }, history: { state: null, replaceState } })
+    return replaceState
+  }
+
+  it('routes #/<tab>/<ref> to the tab', () => {
+    stubHash('#/movies/12')
+    expect(parseHash()).toBe('movies')
+    stubHash('#/tv/tvdb:81189')
+    expect(parseHash()).toBe('tv')
+    stubHash('#/live/200158440')
+    expect(parseHash()).toBe('live')
+  })
+
+  it('takes a library id or lookup term once and clears it from the URL', () => {
+    const replaceState = stubIntentHash('#/tv/tmdb:1396')
+    expect(takeIntent('tv')).toBe('tmdb:1396')
+    expect(replaceState).toHaveBeenCalledWith(null, '', '#/tv')
+
+    stubIntentHash('#/movies/42')
+    expect(takeIntent('movies')).toBe('42')
+  })
+
+  it("ignores another tab's intent and a bare route", () => {
+    const other = stubIntentHash('#/movies/42')
+    expect(takeIntent('tv')).toBeNull()
+    expect(other).not.toHaveBeenCalled()
+    const bare = stubIntentHash('#/movies')
+    expect(takeIntent('movies')).toBeNull()
+    expect(bare).not.toHaveBeenCalled()
   })
 })

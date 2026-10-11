@@ -21,7 +21,7 @@ export type RecentItem = {
   id: number
 }
 
-function pickPoster(images: Array<{ coverType: string; remoteUrl?: string; url?: string }> | undefined) {
+export function pickPoster(images: Array<{ coverType: string; remoteUrl?: string; url?: string }> | undefined) {
   const img = images?.find((i) => i.coverType === 'poster')
   return img?.remoteUrl ?? img?.url
 }

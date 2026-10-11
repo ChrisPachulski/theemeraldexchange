@@ -11,7 +11,7 @@ import { useSonarrLibrary } from '../../lib/hooks/useSonarrLibrary'
 import { useRecentlyAdded } from '../../lib/hooks/useRecentlyAdded'
 import { GrabActivityPanel } from '../downloads/GrabActivityPanel'
 import { UsageDashboard } from '../downloads/UsageDashboard'
-import { useNavTransition } from '../../lib/navTransition'
+import { openIntent } from '../../lib/router'
 import { useConfirm } from '../confirm/useConfirm'
 import { QueueRow } from '../queue/QueueRow'
 import { LoadingPulse } from '../feedback/LoadingPulse'
@@ -67,7 +67,6 @@ export function DownloadsTab() {
   const radarrQueue = useRadarrQueue()
   const series = useSonarrLibrary()
   const recent = useRecentlyAdded(12)
-  const { transitionTo } = useNavTransition()
   const confirm = useConfirm()
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
@@ -483,7 +482,7 @@ export function DownloadsTab() {
                 key={item.key}
                 type="button"
                 className="downloads-tab__recent-card"
-                onClick={() => transitionTo(item.route)}
+                onClick={() => openIntent(item.route, item.id)}
                 title={`${item.title}${item.year ? ` (${item.year})` : ''}`}
               >
                 {item.poster ? (

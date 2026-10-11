@@ -1,9 +1,16 @@
+import { Suspense, lazy } from 'react'
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
 import { authModeFromUser, useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useRatingGate, useSectionAccess } from '../../lib/hooks/usePolicy'
 import './HomeTab.css'
+
+// Shelves pull in the suggestion strip, library and IPTV queries; lazy so the
+// entry chunk stays the shell (see App.tsx).
+const HomeShelves = lazy(() =>
+  import('../home/HomeShelves').then((m) => ({ default: m.HomeShelves })),
+)
 
 type Entry = {
   route: Route
@@ -88,6 +95,9 @@ export function HomeTab() {
 
   return (
     <section className="home" aria-label="Emerald Exchange home">
+      <Suspense fallback={null}>
+        <HomeShelves />
+      </Suspense>
       <div className="home__about" aria-label="About the Exchange">
         <div className="home__scroll-hint" aria-hidden="true">
           <span className="home__scroll-label">Read on</span>

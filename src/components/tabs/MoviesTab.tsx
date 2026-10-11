@@ -37,6 +37,7 @@ import {
   byYearDesc,
 } from '../../lib/librarySort'
 import { withViewTransition } from '../../lib/viewTransition'
+import { useIntent } from '../../lib/router'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
 import { pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
 import './TvTab.css'
@@ -212,7 +213,7 @@ export function MoviesTab() {
   // Trending shows TMDB items; clicking one resolves through Radarr's
   // lookup (it accepts tmdb:NNN) so the same DetailModal flow handles
   // it as a regular search result.
-  const handleTrendingPick = async (tmdbId: number) => {
+  const handleTrendingPick = (tmdbId: number) => {
     // Mirror the click to the recommender as a conversion signal.
     // Outcome attribution in the sidecar ties it back to the most
     // recent rec_log row for the same (sub, kind, tmdb_id) — so for
@@ -222,25 +223,41 @@ export function MoviesTab() {
     // which is the correct behavior (we don't want to attribute a
     // click to a recommendation that was never made).
     postClickEvent('movie', tmdbId)
+    void openTmdb(tmdbId)
+  }
+  const ratingGate = useRatingGate()
+  // Titles opened from elsewhere (links, Home, the strip) pass the same gate.
+  const openIfAllowed = (m: Movie | MovieSearchResult) => {
+    if (ratingGate.allows(m.certification)) setViewing(m)
+    else setToast('That title isn’t available on this profile.')
+  }
+  // Library entry first, else the Radarr lookup (Discover detail with Add).
+  // Shared by the strip and the `#/movies/tmdb:N` intent.
+  const openTmdb = async (tmdbId: number) => {
     setTrendingPending(tmdbId)
     try {
       const inLib = libraryByTmdb.get(tmdbId)
       if (inLib) {
-        setViewing(inLib)
+        openIfAllowed(inLib)
         return
       }
       const results = await radarr.lookup(`tmdb:${tmdbId}`)
-      if (results[0]) setViewing(results[0])
+      if (results[0]) openIfAllowed(results[0])
     } catch (e) {
       setToast(e instanceof Error ? e.message : String(e))
     } finally {
       setTrendingPending(null)
     }
   }
+  // Open-a-title intent from another surface (Home shelves, Downloads).
+  useIntent('movies', !library.isPending, (ref) => {
+    if (ref.startsWith('tmdb:')) return void openTmdb(Number(ref.slice(5)))
+    const movie = library.data?.find((m) => m.id === Number(ref))
+    if (movie) openIfAllowed(movie)
+  })
 
   // A rating-capped profile never sees a title above its cap (unrated fails
   // closed), so filter before search, sort, A-Z and counts all inherit it.
-  const ratingGate = useRatingGate()
   const visibleLibrary = useMemo(
     () => library.data?.filter((x) => ratingGate.allows(x.certification)),
     [library.data, ratingGate],

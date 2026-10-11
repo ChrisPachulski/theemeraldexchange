@@ -22,6 +22,7 @@ import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIp
 import { useReportPosition } from '../../lib/hooks/useIptvHistory'
 import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useModalA11y } from '../../lib/hooks/useModalA11y'
+import { useIntent } from '../../lib/router'
 import {
   effectiveGuideCategoryIds,
   formatGuideCategoryCsv,
@@ -177,6 +178,10 @@ export default function LiveTab() {
       setPlayError(playFailureFromError(err))
     }
   }
+
+  // Home's "On now" row tunes a channel via `#/live/<streamId>`. epg/now carries
+  // no channel name, hence the generic player title.
+  useIntent('live', true, (ref) => void playChannel({ stream_id: Number(ref), name: 'Live TV' }))
 
   // Shared by the per-channel guide modal and the grid guide. Mirrors
   // playChannel's concurrency handling so a 429 surfaces the kick-a-session

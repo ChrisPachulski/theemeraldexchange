@@ -32,6 +32,7 @@ import { useConfirm } from '../confirm/useConfirm'
 import { seriesAvailability, sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import { withViewTransition } from '../../lib/viewTransition'
+import { useIntent } from '../../lib/router'
 import {
   filterAndSortLibrary,
   byTitleAsc,
@@ -211,21 +212,37 @@ export function TvTab() {
     // silently dropped sidecar-side.
     postClickEvent('tv', tmdbId)
     setTrendingPending(tmdbId)
+    await openLookup(`tmdb:${tmdbId}`)
+    setTrendingPending(null)
+  }
+  const ratingGate = useRatingGate()
+  // Titles opened from elsewhere (links, Home, the strip) pass the same gate.
+  const openIfAllowed = (s: Series | SeriesSearchResult) => {
+    if (ratingGate.allows(s.certification)) setViewing(s)
+    else setToast('That title isn’t available on this profile.')
+  }
+  // Resolve a `tmdb:N` / `tvdb:N` term through Sonarr, then open the library
+  // entry if we own it, else the Discover detail. Shared by the strip and the
+  // `#/tv/<term>` intent.
+  const openLookup = async (term: string) => {
     try {
-      const results = await sonarr.lookup(`tmdb:${tmdbId}`)
+      const results = await sonarr.lookup(term)
       const hit = results[0]
       if (!hit) {
         setToast("Couldn't find that show on TVDB")
         return
       }
-      const inLib = libraryByTvdb.get(hit.tvdbId)
-      setViewing(inLib ?? hit)
+      openIfAllowed(libraryByTvdb.get(hit.tvdbId) ?? hit)
     } catch (e) {
       setToast(e instanceof Error ? e.message : String(e))
-    } finally {
-      setTrendingPending(null)
     }
   }
+  // Open-a-title intent from another surface (Home shelves, Downloads).
+  useIntent('tv', !library.isPending, (ref) => {
+    if (ref.includes(':')) return void openLookup(ref)
+    const series = library.data?.find((s) => s.id === Number(ref))
+    if (series) openIfAllowed(series)
+  })
 
   // Episode list only useful for in-library shows (it powers the
   // per-season disclosure inside DetailModal). Discover results don't
@@ -250,7 +267,6 @@ export function TvTab() {
 
   // A rating-capped profile never sees a title above its cap (unrated fails
   // closed), so filter before search, sort, A-Z and counts all inherit it.
-  const ratingGate = useRatingGate()
   const visibleLibrary = useMemo(
     () => library.data?.filter((x) => ratingGate.allows(x.certification)),
     [library.data, ratingGate],

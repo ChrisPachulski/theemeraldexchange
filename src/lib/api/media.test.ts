@@ -322,6 +322,19 @@ describe('mediaApi playback + watch', () => {
             watched_at: '2026-06-07T00:00:00Z',
             completed: 0,
           },
+          {
+            media_kind: 'episode',
+            media_id: 9,
+            position_secs: 30,
+            duration_secs: 1500,
+            watched_at: '2026-06-08T00:00:00Z',
+            completed: 0,
+            title: 'Pilot',
+            show_title: 'Severance',
+            poster_path: '/sev.jpg',
+            season: 1,
+            episode: 2,
+          },
         ],
       }),
     )
@@ -333,6 +346,19 @@ describe('mediaApi playback + watch', () => {
       positionSecs: 600,
       durationSecs: 1200,
       completed: false,
+      title: null,
+      showTitle: null,
+      posterPath: null,
+      season: null,
+      episode: null,
+    })
+    // The display fields media-core joins on (Home Continue Watching).
+    expect(rows[1]).toMatchObject({
+      title: 'Pilot',
+      showTitle: 'Severance',
+      posterPath: '/sev.jpg',
+      season: 1,
+      episode: 2,
     })
   })
 

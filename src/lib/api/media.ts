@@ -264,6 +264,15 @@ export type WatchEntry = {
   durationSecs: number | null
   watchedAt: string
   completed: boolean
+  /** Display metadata media-core joins onto each row (null when the title is
+   *  gone). For an episode `title` is the episode's own name; `showTitle`,
+   *  `season` and `episode` are set only for episodes. `posterPath` is TMDB
+   *  relative. */
+  title: string | null
+  showTitle: string | null
+  posterPath: string | null
+  season: number | null
+  episode: number | null
 }
 
 type RawWatchRow = {
@@ -273,6 +282,11 @@ type RawWatchRow = {
   duration_secs: number | null
   watched_at: string
   completed: number | boolean
+  title?: string | null
+  show_title?: string | null
+  poster_path?: string | null
+  season?: number | null
+  episode?: number | null
 }
 
 /** Conservative fallback playback capabilities — the canonical web-safe
@@ -607,6 +621,11 @@ function normWatch(r: RawWatchRow): WatchEntry {
     durationSecs: r.duration_secs ?? null,
     watchedAt: r.watched_at,
     completed: Boolean(r.completed),
+    title: r.title ?? null,
+    showTitle: r.show_title ?? null,
+    posterPath: r.poster_path ?? null,
+    season: r.season ?? null,
+    episode: r.episode ?? null,
   }
 }
 

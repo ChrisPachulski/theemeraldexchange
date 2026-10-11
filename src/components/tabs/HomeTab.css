@@ -65,6 +65,106 @@
   .home__scroll-hint { animation: none; opacity: 0.7; }
 }
 
+/* Content shelves (continue watching, recently added, live, picks) lead the
+   page on a frosted band below the fixed HomeNav; the about panels follow.
+   Rows reuse the suggestion strip's card styles (TrendingRow.css). */
+.home__shelves {
+  display: grid;
+  gap: var(--s-2);
+  min-width: 0;
+  margin:
+    calc(var(--pod-inset, 16px) + var(--pod-h, 56px) + var(--s-4))
+    var(--s-5)
+    0;
+  padding: var(--s-5) 0 0;
+  background: color-mix(in oklch, var(--surface) 88%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+}
+
+.home__shelves:empty {
+  display: none;
+}
+
+/* Cards in one row stretch to the tallest caption; keep poster, progress and
+   caption packed at the top so progress bars line up. */
+.home__shelves .trending__card {
+  align-content: start;
+}
+
+/* Watched fraction under a resume poster, and how far a live programme has run. */
+.home-shelf__progress {
+  display: block;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.home-shelf__progress > span {
+  display: block;
+  height: 100%;
+  background: var(--emerald);
+}
+
+.home-live-tile {
+  flex: 0 0 auto;
+  width: 220px;
+  min-height: 112px;
+  display: grid;
+  align-content: end;
+  gap: var(--s-1);
+  padding: var(--s-3);
+  text-align: left;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+
+.home-live-tile:hover,
+.home-live-tile:focus-visible {
+  border-color: var(--emerald);
+  transform: translateY(-2px);
+}
+
+.home-live-tile--guide {
+  align-content: center;
+  justify-items: center;
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-sm);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  background: linear-gradient(135deg, color-mix(in oklch, var(--emerald) 28%, var(--surface-2)), var(--surface-2));
+}
+
+.home-live-tile__title {
+  font-family: var(--font-display);
+  font-size: var(--t-sm);
+  font-weight: var(--w-ui);
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.home-live-tile__caption {
+  font-size: var(--t-xs);
+  color: var(--text-muted);
+}
+
+@media (max-width: 720px) {
+  .home__shelves {
+    margin-inline: var(--s-3);
+  }
+}
+
 /* Stack of full-viewport panels — no hero block above, so the first
    panel sits in the initial viewport without requiring a scroll. The
    kraken keeps playing behind; panels are solid surfaces so text stays
