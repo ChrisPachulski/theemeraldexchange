@@ -236,8 +236,10 @@ export default function EpgGuide({
   if (rows.length === 0) {
     return (
       <p className="iptv-tab__status">
-        No guide data for {trimmedQ ? `“${trimmedQ}”` : categoryId != null ? 'this category' : 'these channels'}.
-        Most channels from this provider don’t publish a schedule; try a major network, or switch back to Channels.
+        {trimmedQ
+          ? `No channel names match “${trimmedQ}”.`
+          : `No guide data for ${categoryId != null ? 'this category' : 'these channels'}.
+        Most channels from this provider don’t publish a schedule; try a major network, or switch back to Channels.`}
       </p>
     )
   }

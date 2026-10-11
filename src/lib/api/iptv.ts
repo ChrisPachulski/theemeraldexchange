@@ -203,6 +203,21 @@ export type EpgGridDto = {
   programmes: EpgProgrammeDto[]
 }
 
+// One `GET /epg/search` hit: a programme whose title or description matched,
+// plus the channel it airs on (server/services/iptvEpgQuery.ts epgSearch).
+export type EpgSearchHit = {
+  streamId: number
+  channelName: string
+  categoryId: number | null
+  programIndex: number
+  programme: EpgProgrammeDto
+}
+
+export type EpgSearchResult = {
+  hits: EpgSearchHit[]
+  total: number
+}
+
 export type VodDto = {
   stream_id: number
   name: string
@@ -330,6 +345,10 @@ export const iptvApi = Object.assign({
     if (opts.limit != null) params.limit = opts.limit
     return get<EpgGridDto[]>('/epg/grid', params)
   },
+  // Programme search over the whole synced EPG store (title + description), so
+  // "maple leafs" finds the channels airing the game, not just channel names.
+  epgSearch: (q: string, fromIso: string, toIso: string, limit?: number) =>
+    get<EpgSearchResult>('/epg/search', { q: q.trim(), from: fromIso, to: toIso, limit }),
   // Every browser tunes live through the server remux (HLS), the same session
   // AVPlayer uses — not the raw .ts byte proxy + mpegts.js. Measured on prod
   // (2026-08-27): the provider bursts ~10 s of backlog on connect, so the remux

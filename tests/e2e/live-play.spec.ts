@@ -69,3 +69,58 @@ test('playing a live channel requests its manifest with no page error', async ({
   await manifest
   expect(pageErrors).toEqual([])
 })
+
+test('a programme search finds the channel airing it and tunes that channel', async ({ page }) => {
+  const now = Date.now()
+  const hitChannel = { stream_id: 300001, name: 'CA: TSN 4' }
+  const json = (body: unknown) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
+  const searches: string[] = []
+
+  await page.route('**/api/iptv/**', (route) => {
+    const url = new URL(route.request().url())
+    const p = url.pathname
+    if (p.endsWith('/epg/search')) {
+      searches.push(url.searchParams.get('q') ?? '')
+      return route.fulfill(json({
+        total: 1,
+        hits: [{
+          streamId: hitChannel.stream_id,
+          channelName: hitChannel.name,
+          categoryId: 21,
+          programIndex: 0,
+          programme: {
+            channel_id: 'tsn4.ca',
+            start_utc: new Date(now - 20 * 60_000).toISOString(),
+            stop_utc: new Date(now + 100 * 60_000).toISOString(),
+            title: 'NHL: Toronto Maple Leafs at Boston Bruins',
+            description: null,
+          },
+        }],
+      }))
+    }
+    if (p.endsWith('/grant')) {
+      return route.fulfill(json({ url: `/api/iptv/stream/live/${hitChannel.stream_id}/remux/index.m3u8?t=tok`, delivery: 'hls' }))
+    }
+    if (p.endsWith('/categories')) return route.fulfill(json([{ category_id: 21, name: 'CA: Sports', parent_id: 0 }]))
+    if (p.endsWith('/live')) return route.fulfill(json({ items: [], total: 0, limit: 100, offset: 0 }))
+    if (p.endsWith('/epg/grid')) return route.fulfill(json([]))
+    if (p.endsWith('/sessions')) return route.fulfill(json({ sessions: [], max: 2 }))
+    if (p.endsWith('/favorites')) return route.fulfill(json([]))
+    return route.fulfill(json({}))
+  })
+  await page.route('**/api/limits', (route) => route.fulfill(json({ maxMovieGb: 10, maxSeasonGb: 25, iptvEnabled: true })))
+  await installBackgroundMocks(page)
+  await mockMe(page, ADMIN_USER)
+
+  await page.goto('/#/live')
+  await page.getByPlaceholder('Search channels and programs…').fill('maple leafs')
+  const hit = page.getByRole('button', { name: /Toronto Maple Leafs at Boston Bruins/ })
+  await expect(hit).toBeVisible()
+  await expect(hit).toContainText('LIVE')
+  await expect(hit).toContainText(hitChannel.name)
+  expect(searches).toContain('maple leafs')
+
+  const grant = page.waitForRequest((r) => r.url().includes(`/stream/live/${hitChannel.stream_id}/grant`))
+  await hit.click()
+  await grant
+})

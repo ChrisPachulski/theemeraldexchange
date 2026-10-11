@@ -231,6 +231,22 @@ div.iptv-tab__status--error p { margin: 0 0 .5rem; }
   .iptv-guide-list__item { grid-template-columns: minmax(0, 1fr) auto; gap:.35rem .6rem; }
   .iptv-guide-list__time { grid-column: 1 / -1; }
 }
+/* Programme search hits above the guide/cards (Apple Live -> Search "Programs"). */
+.iptv-prog-results { margin:.5rem 0 .75rem; }
+.iptv-prog-results__head { margin:0 0 .4rem; font-size:.78rem; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-dim,#9a9a9a); }
+.iptv-prog-results__head span { margin-left:.4rem; font-weight:400; }
+.iptv-prog-results__list { list-style:none; margin:0; padding:0; display:grid; gap:.4rem; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); max-height:14rem; overflow-y:auto; }
+.iptv-prog-results__item {
+  width:100%; text-align:left; display:flex; flex-direction:column; gap:.2rem; padding:.5rem .7rem; cursor:pointer;
+  background:#101814; border:1px solid rgba(255,255,255,.1); border-radius:6px; color:#f5f5f5;
+}
+.iptv-prog-results__item:hover { border-color:rgba(127,224,176,.45); background:#15211b; }
+.iptv-prog-results__item:focus-visible { outline:2px solid #79d7ff; outline-offset:2px; }
+.iptv-prog-results__title { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.iptv-prog-results__meta { display:flex; gap:.5rem; align-items:center; min-width:0; font-size:.8rem; color:var(--text-dim,#9a9a9a); }
+.iptv-prog-results__live { color:#7fe0b0; font-size:.68rem; letter-spacing:.06em; }
+.iptv-prog-results__chan { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.iptv-prog-results__time { flex-shrink:0; margin-left:auto; font-variant-numeric:tabular-nums; }
 /* ── View toggle (Channels / Guide) — sits in the IPTV toolbar ───────── */
 .iptv-tab__viewtoggle { display:inline-flex; border:1px solid rgba(255,255,255,.14); border-radius:999px; overflow:hidden; flex-shrink:0; }
 .iptv-tab__viewtoggle button { background:transparent; color:var(--text-dim,#bbb); border:0; padding:.5rem .9rem; font-size:.8rem; letter-spacing:.03em; text-transform:uppercase; cursor:pointer; }

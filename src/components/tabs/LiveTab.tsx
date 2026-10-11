@@ -6,11 +6,17 @@ import {
   iptvApi,
   type ChannelDto,
   type EpgProgrammeDto,
+  type EpgSearchHit,
   type SourceUnavailableError,
   type StreamGrant,
 } from '../../lib/api/iptv'
 import { useIptvCategories } from '../../lib/hooks/useIptvCategories'
-import { useIptvEpgChannel, useIptvEpgNow } from '../../lib/hooks/useIptvEpg'
+import {
+  EPG_SEARCH_MIN_CHARS,
+  useIptvEpgChannel,
+  useIptvEpgNow,
+  useIptvEpgSearch,
+} from '../../lib/hooks/useIptvEpg'
 import { useIptvLive } from '../../lib/hooks/useIptvLive'
 import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIptvFavorites'
 import { useReportPosition } from '../../lib/hooks/useIptvHistory'
@@ -87,7 +93,7 @@ export default function LiveTab() {
   const [categoryId, setCategoryId] = useState<number | undefined>(undefined)
   const [offset, setOffset] = useState(0)
   const [playing, setPlaying] = useState<{ grant: StreamGrant; title: string; itemId: string; live?: boolean } | null>(null)
-  const [guideFor, setGuideFor] = useState<GuideChannel | null>(null)
+  const [guideFor, setGuideFor] = useState<(GuideChannel & { untilIso?: string }) | null>(null)
   const [concurrencyError, setConcurrencyError] = useState<ConcurrencyLimitPayload | null>(null)
   const [playError, setPlayError] = useState<PlayFailure | null>(null)
   const [pendingPlay, setPendingPlay] = useState<(() => Promise<void>) | null>(null)
@@ -222,6 +228,19 @@ export default function LiveTab() {
           </button>
         </div>
       )}
+      <ProgrammeResults
+        q={debounced}
+        onPlayLive={(hit) => void playChannel({ stream_id: hit.streamId, name: hit.channelName })}
+        onShowInGuide={(hit) =>
+          setGuideFor({
+            id: hit.streamId,
+            name: hit.channelName,
+            archiveDays: 0,
+            canCatchup: false,
+            untilIso: hit.programme.stop_utc,
+          })
+        }
+      />
       {view === 'guide' ? (
         <EpgGuide
           categoryId={categoryId}
@@ -334,7 +353,7 @@ export default function LiveTab() {
         </div>
         <input
           className="iptv-tab__search"
-          placeholder="Search channels…"
+          placeholder="Search channels and programs…"
           value={q}
           onChange={(e) => {
             setQ(e.target.value)
@@ -395,6 +414,7 @@ export default function LiveTab() {
       {guideFor && (
         <ChannelGuide
           channel={guideFor}
+          untilIso={guideFor.untilIso}
           onClose={() => setGuideFor(null)}
           onPlayCatchup={async (programme) => {
             await playCatchup(guideFor, programme)
@@ -553,10 +573,13 @@ function GuideCategorySettings({
 
 function ChannelGuide({
   channel,
+  untilIso,
   onClose,
   onPlayCatchup,
 }: {
   channel: GuideChannel
+  // Extends the window past the default 4h so an upcoming search hit is listed.
+  untilIso?: string
   onClose: () => void
   onPlayCatchup: (programme: EpgProgrammeDto) => Promise<void>
 }) {
@@ -568,7 +591,10 @@ function ChannelGuide({
     () => new Date(openedAt - channel.archiveDays * 24 * 3600_000).toISOString(),
     [channel.archiveDays, openedAt],
   )
-  const toIso = useMemo(() => new Date(openedAt + 4 * 3600_000).toISOString(), [openedAt])
+  const toIso = useMemo(() => {
+    const until = untilIso ? new Date(untilIso).getTime() : NaN
+    return new Date(Math.max(openedAt + 4 * 3600_000, Number.isFinite(until) ? until : 0)).toISOString()
+  }, [openedAt, untilIso])
   const epg = useIptvEpgChannel(channel.id, fromIso, toIso)
   const archiveCutoff = openedAt - channel.archiveDays * 24 * 3600_000
 
@@ -643,5 +669,97 @@ function ChannelGuide({
         </ul>
       </div>
     </div>
+  )
+}
+
+const PROGRAMME_SEARCH_HOURS = 24
+const PROGRAMME_SEARCH_LIMIT = 60
+const SEARCH_BUCKET_MS = 5 * 60_000
+
+function isAiring(programme: EpgProgrammeDto, nowMs: number): boolean {
+  return new Date(programme.start_utc).getTime() <= nowMs && new Date(programme.stop_utc).getTime() > nowMs
+}
+
+function formatClock(iso: string): string {
+  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(iso))
+}
+
+function formatDayClock(iso: string): string {
+  return new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(iso))
+}
+
+// Programme hits for the search box — the Apple Live -> Search "Programs" section.
+// Searches title + description across every channel's schedule for the next 24h,
+// so typing a team or show finds the channels carrying it. Airing hits tune the
+// channel; upcoming ones open that channel's guide.
+function ProgrammeResults({
+  q,
+  onPlayLive,
+  onShowInGuide,
+}: {
+  q: string
+  onPlayLive: (hit: EpgSearchHit) => void
+  onShowInGuide: (hit: EpgSearchHit) => void
+}) {
+  // Ticks so LIVE badges age out; the 5-min bucket keeps the query key stable while
+  // typing, and programmes that ended inside the bucket are dropped below.
+  const [nowMs, setNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    const t = setInterval(() => setNowMs(Date.now()), 30_000)
+    return () => clearInterval(t)
+  }, [])
+  const fromMs = Math.floor(nowMs / SEARCH_BUCKET_MS) * SEARCH_BUCKET_MS
+  const fromIso = new Date(fromMs).toISOString()
+  const toIso = new Date(fromMs + PROGRAMME_SEARCH_HOURS * 3600_000).toISOString()
+  const search = useIptvEpgSearch(q, fromIso, toIso, PROGRAMME_SEARCH_LIMIT)
+  const hits = useMemo(() => {
+    const live: EpgSearchHit[] = []
+    const later: EpgSearchHit[] = []
+    for (const hit of search.data?.hits ?? []) {
+      if (new Date(hit.programme.stop_utc).getTime() <= nowMs) continue
+      ;(isAiring(hit.programme, nowMs) ? live : later).push(hit)
+    }
+    later.sort((a, b) => a.programme.start_utc.localeCompare(b.programme.start_utc))
+    return [...live, ...later]
+  }, [search.data, nowMs])
+
+  if (q.trim().length < EPG_SEARCH_MIN_CHARS) return null
+  if (search.isLoading) return <p className="iptv-tab__status">Searching programs…</p>
+  if (search.error) return <p className="iptv-tab__status iptv-tab__status--error">Program search failed.</p>
+  if (hits.length === 0) return null
+
+  const total = search.data?.total ?? hits.length
+  return (
+    <section className="iptv-prog-results" aria-label="Matching programs">
+      <h2 className="iptv-prog-results__head">
+        Programs <span>{total > hits.length ? `${hits.length} of ${total}` : hits.length}</span>
+      </h2>
+      <ul className="iptv-prog-results__list">
+        {hits.map((hit) => {
+          const airing = isAiring(hit.programme, nowMs)
+          return (
+            <li key={`${hit.streamId}#${hit.programIndex}`}>
+              <button
+                type="button"
+                className="iptv-prog-results__item"
+                onClick={() => (airing ? onPlayLive(hit) : onShowInGuide(hit))}
+                title={airing ? `Watch ${hit.channelName} live` : `Show ${hit.channelName} in the guide`}
+              >
+                <span className="iptv-prog-results__title">{epgTitle(hit.programme.title)}</span>
+                <span className="iptv-prog-results__meta">
+                  {airing && <strong className="iptv-prog-results__live">LIVE</strong>}
+                  <span className="iptv-prog-results__chan">{hit.channelName}</span>
+                  <span className="iptv-prog-results__time">
+                    {airing
+                      ? `until ${formatClock(hit.programme.stop_utc)}`
+                      : formatDayClock(hit.programme.start_utc)}
+                  </span>
+                </span>
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    </section>
   )
 }
