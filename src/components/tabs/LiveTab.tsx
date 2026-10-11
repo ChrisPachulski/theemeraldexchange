@@ -1,6 +1,5 @@
 // src/components/tabs/LiveTab.tsx
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
-import IptvPlayer from '../player/IptvPlayer'
+import { type KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import EpgGuide, { type GuideChannel } from './EpgGuide'
 import { useQueryClient } from '@tanstack/react-query'
 import {
@@ -35,6 +34,7 @@ import {
 import type { CategoryDto } from '../../lib/api/iptv'
 import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import { ConnectionsWidget } from '../iptv/ConnectionsWidget'
+import { LivePlayerModal, type LivePlaying } from '../iptv/LivePlayerModal'
 import {
   concurrencyPayloadFromError,
   type ConcurrencyLimitPayload,
@@ -96,7 +96,7 @@ export default function LiveTab() {
   const [view, setView] = useState<'cards' | 'guide' | 'favorites'>('guide')
   const [categoryId, setCategoryId] = useState<number | undefined>(undefined)
   const [offset, setOffset] = useState(0)
-  const [playing, setPlaying] = useState<{ grant: StreamGrant; title: string; itemId: string; live?: boolean } | null>(null)
+  const [playing, setPlaying] = useState<LivePlaying | null>(null)
   const [guideFor, setGuideFor] = useState<(GuideChannel & { untilIso?: string; selectedStart?: string }) | null>(null)
   const [concurrencyError, setConcurrencyError] = useState<ConcurrencyLimitPayload | null>(null)
   const [playError, setPlayError] = useState<PlayFailure | null>(null)
@@ -130,6 +130,12 @@ export default function LiveTab() {
     }
   }
   const reportPosition = useReportPosition('live', playing?.itemId ?? '')
+  // Swap a fresh grant into the item still playing (live reconnect, remux escalation).
+  const swapGrant = useCallback(
+    (itemId: string, grant: StreamGrant) =>
+      setPlaying((cur) => (cur && cur.itemId === itemId ? { ...cur, grant } : cur)),
+    [],
+  )
 
   // Release the upstream concurrency slot whenever the active channel changes
   // or this tab unmounts. The grant ACQUIRES a slot; nothing released it on
@@ -508,17 +514,22 @@ export default function LiveTab() {
       )}
 
       {playing && (
-        <PlayerModal
-          key={playing.grant.url}
+        <LivePlayerModal
+          // Not the grant URL: a reconnect swaps grants and must keep its state.
+          key={`${playing.itemId}|${playing.title}`}
           playing={playing}
+          guideCategoryIds={guideIds}
+          favorites={favStreamIds}
           onClose={() => setPlaying(null)}
+          onSurf={(channel) => void playChannel(channel)}
+          onGrant={swapGrant}
           onEscalate={
             // Live raw-TS channel the browser demuxer can't hold: swap to the
             // server remux (same grant the Apple app uses) once.
             playing.live && playing.grant.delivery === 'mpegts'
               ? () => {
                   void iptvApi.grantLive(playing.itemId, { avplayer: true }).then(
-                    (grant) => setPlaying((cur) => (cur && cur.itemId === playing.itemId ? { ...cur, grant } : cur)),
+                    (grant) => swapGrant(playing.itemId, grant),
                     (err) => setPlayError(playFailureFromError(err)),
                   )
                 }
@@ -545,42 +556,6 @@ export default function LiveTab() {
         />
       )}
     </section>
-  )
-}
-
-// The player modal is a plain div (role=dialog/aria-modal) rather than a
-// native <dialog> because it's a full-bleed layout, not a centered panel.
-// useModalA11y supplies the focus trap, Escape-to-close, and focus restoration
-// that aria-modal="true" promises but a bare div doesn't provide.
-function PlayerModal({
-  playing,
-  onClose,
-  onPositionUpdate,
-  onEscalate,
-}: {
-  playing: { grant: StreamGrant; title: string; itemId: string }
-  onClose: () => void
-  onPositionUpdate: (positionSecs: number, durationSecs: number | null) => void
-  onEscalate?: () => void
-}) {
-  const modalRef = useModalA11y<HTMLDivElement>(onClose)
-  return (
-    <div
-      ref={modalRef}
-      className="iptv-player-modal"
-      role="dialog"
-      aria-modal="true"
-      aria-label={playing.title}
-      tabIndex={-1}
-    >
-      <div className="iptv-player-modal__header">
-        <h2>{playing.title}</h2>
-        <button className="iptv-player-modal__close" type="button" onClick={onClose} aria-label="Close player">
-          ×
-        </button>
-      </div>
-      <IptvPlayer grant={playing.grant} autoPlay onPositionUpdate={onPositionUpdate} onDeliveryStruggling={onEscalate} />
-    </div>
   )
 }
 
