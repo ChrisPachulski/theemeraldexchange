@@ -31,6 +31,7 @@ import { useConfirm } from '../confirm/useConfirm'
 import { seriesAvailability, sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import { withViewTransition } from '../../lib/viewTransition'
+import { useIntent } from '../../lib/router'
 import {
   filterAndSortLibrary,
   byTitleAsc,
@@ -210,8 +211,15 @@ export function TvTab() {
     // silently dropped sidecar-side.
     postClickEvent('tv', tmdbId)
     setTrendingPending(tmdbId)
+    await openLookup(`tmdb:${tmdbId}`)
+    setTrendingPending(null)
+  }
+  // Resolve a `tmdb:N` / `tvdb:N` term through Sonarr, then open the library
+  // entry if we own it, else the Discover detail. Shared by the strip and the
+  // `#/tv/<term>` intent.
+  const openLookup = async (term: string) => {
     try {
-      const results = await sonarr.lookup(`tmdb:${tmdbId}`)
+      const results = await sonarr.lookup(term)
       const hit = results[0]
       if (!hit) {
         setToast("Couldn't find that show on TVDB")
@@ -221,10 +229,14 @@ export function TvTab() {
       setViewing(inLib ?? hit)
     } catch (e) {
       setToast(e instanceof Error ? e.message : String(e))
-    } finally {
-      setTrendingPending(null)
     }
   }
+  // Open-a-title intent from another surface (Home shelves, Downloads).
+  useIntent('tv', !library.isPending, (ref) => {
+    if (ref.includes(':')) return void openLookup(ref)
+    const series = library.data?.find((s) => s.id === Number(ref))
+    if (series) setViewing(series)
+  })
 
   // Episode list only useful for in-library shows (it powers the
   // per-season disclosure inside DetailModal). Discover results don't

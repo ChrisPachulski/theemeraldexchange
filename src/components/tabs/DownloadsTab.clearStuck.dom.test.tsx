@@ -52,9 +52,6 @@ vi.mock('../../lib/hooks/useSonarrLibrary', () => ({ useSonarrLibrary: () => ({ 
 vi.mock('../../lib/hooks/useRecentlyAdded', () => ({ useRecentlyAdded: () => [] }))
 vi.mock('../downloads/GrabActivityPanel', () => ({ GrabActivityPanel: () => null }))
 vi.mock('../downloads/UsageDashboard', () => ({ UsageDashboard: () => null }))
-vi.mock('../../lib/navTransition', () => ({
-  useNavTransition: () => ({ transitionTo: vi.fn() }),
-}))
 vi.mock('../../lib/auth', () => ({ useAuth: () => ({ isAdmin: true }) }))
 // Auto-accept the confirm dialog so a click runs onConfirm directly. The real
 // ConfirmModal awaits onConfirm inside try/catch and renders the message, so

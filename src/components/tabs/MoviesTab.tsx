@@ -36,6 +36,7 @@ import {
   byYearDesc,
 } from '../../lib/librarySort'
 import { withViewTransition } from '../../lib/viewTransition'
+import { useIntent } from '../../lib/router'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
 import { pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
 import './TvTab.css'
@@ -211,7 +212,7 @@ export function MoviesTab() {
   // Trending shows TMDB items; clicking one resolves through Radarr's
   // lookup (it accepts tmdb:NNN) so the same DetailModal flow handles
   // it as a regular search result.
-  const handleTrendingPick = async (tmdbId: number) => {
+  const handleTrendingPick = (tmdbId: number) => {
     // Mirror the click to the recommender as a conversion signal.
     // Outcome attribution in the sidecar ties it back to the most
     // recent rec_log row for the same (sub, kind, tmdb_id) — so for
@@ -221,6 +222,11 @@ export function MoviesTab() {
     // which is the correct behavior (we don't want to attribute a
     // click to a recommendation that was never made).
     postClickEvent('movie', tmdbId)
+    void openTmdb(tmdbId)
+  }
+  // Library entry first, else the Radarr lookup (Discover detail with Add).
+  // Shared by the strip and the `#/movies/tmdb:N` intent.
+  const openTmdb = async (tmdbId: number) => {
     setTrendingPending(tmdbId)
     try {
       const inLib = libraryByTmdb.get(tmdbId)
@@ -236,6 +242,12 @@ export function MoviesTab() {
       setTrendingPending(null)
     }
   }
+  // Open-a-title intent from another surface (Home shelves, Downloads).
+  useIntent('movies', !library.isPending, (ref) => {
+    if (ref.startsWith('tmdb:')) return void openTmdb(Number(ref.slice(5)))
+    const movie = library.data?.find((m) => m.id === Number(ref))
+    if (movie) setViewing(movie)
+  })
 
   const textFilteredLibrary = useMemo(
     () => filterAndSortLibrary(library.data, { query, status, comparator: MOVIE_COMPARATORS[sort] }),
