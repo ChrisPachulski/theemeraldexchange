@@ -826,9 +826,11 @@ export default function IptvPlayer({
     }
 
     const onLoadedMetadata = () => {
-      updateNativeTracks()
+      // Under hls.js the engine owns the track lists; the element's native
+      // lists are empty in Chrome and would wipe them.
+      if (!hlsRef.current) updateNativeTracks()
       // The viewer's audio language (playbackPrefs), applied once the native
-      // track list is known (hls.js grants apply it on MANIFEST_PARSED).
+      // track list is known (hls.js grants apply it on AUDIO_TRACKS_UPDATED).
       const audio = (video as VideoWithTracks).audioTracks
       if (preferredAudioLanguage && audio && audio.length > 1) {
         const i = preferredTrackIndex(Array.from({ length: audio.length }, (_, k) => audio[k]), preferredAudioLanguage)
@@ -969,12 +971,17 @@ export default function IptvPlayer({
 
         hls.on(Hls.Events.MANIFEST_PARSED, updateHlsTracks)
         hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, updateHlsTracks)
+        hls.on(Hls.Events.AUDIO_TRACK_SWITCHED, updateHlsTracks)
         hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, updateHlsTracks)
         // A local-media master lists the title's audio tracks as alternate
         // renditions: start on the viewer's audio language, as Apple does.
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        // Once per engine, so a later track-list refresh never overrides a
+        // pick the viewer made in the Audio menu.
+        let audioPreferenceApplied = false
+        hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
           const preferred = preferredAudioRef.current
-          if (cancelled || !preferred || hls.audioTracks.length < 2) return
+          if (cancelled || audioPreferenceApplied || !preferred || hls.audioTracks.length < 2) return
+          audioPreferenceApplied = true
           const i = preferredTrackIndex(
             hls.audioTracks.map((t) => ({ language: t.lang, label: t.name })),
             preferred,

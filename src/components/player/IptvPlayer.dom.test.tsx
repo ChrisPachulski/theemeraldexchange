@@ -28,6 +28,7 @@ const { FakeHls, hlsInstances } = vi.hoisted(() => {
     static Events = {
       MANIFEST_PARSED: 'hlsManifestParsed',
       AUDIO_TRACKS_UPDATED: 'hlsAudioTracksUpdated',
+      AUDIO_TRACK_SWITCHED: 'hlsAudioTrackSwitched',
       SUBTITLE_TRACKS_UPDATED: 'hlsSubtitleTracksUpdated',
       ERROR: 'hlsError',
     }
@@ -152,34 +153,51 @@ describe('IptvPlayer (mounted) — hls.js engine wiring', () => {
 })
 
 describe('IptvPlayer (mounted) — hls.js alternate audio', () => {
+  // hls.js fills audioTracks when it selects the variant's audio group
+  // (AUDIO_TRACKS_UPDATED), after MANIFEST_PARSED.
+  function listTracks(hls: InstanceType<typeof FakeHls>, tracks: Array<{ name?: string; lang?: string }>) {
+    hls.audioTracks = tracks
+    hls.audioTrack = -1
+    act(() => {
+      hls.emit(FakeHls.Events.MANIFEST_PARSED)
+      hls.emit(FakeHls.Events.AUDIO_TRACKS_UPDATED)
+    })
+  }
+
   it('starts on the preferred audio language and lists the renditions by language', async () => {
     render(<IptvPlayer grant={hlsGrant()} preferredAudioLanguage="es" />)
     await waitFor(() => expect(hlsInstances).toHaveLength(1))
     const hls = hlsInstances[0]
-    hls.audioTracks = [
+    listTracks(hls, [
       { name: 'eng', lang: 'eng' },
       { name: 'spa', lang: 'spa' },
-    ]
-    hls.audioTrack = 0
-
-    act(() => {
-      hls.emit(FakeHls.Events.MANIFEST_PARSED)
-    })
+    ])
 
     expect(hls.audioTrack).toBe(1)
-    const select = screen.getByRole('combobox', { name: 'Audio' })
+    const select = screen.getByRole('combobox', { name: /Audio/ })
     expect(select).toHaveValue('1')
     expect(Array.from((select as HTMLSelectElement).options).map((o) => o.text)).toEqual(['English', 'Spanish'])
+
+    // The element's own (empty, under MSE) track list must not wipe the menu.
+    act(() => {
+      screen.getByTestId('iptv-player-video').dispatchEvent(new Event('loadedmetadata'))
+    })
+    expect(screen.getByRole('combobox', { name: /Audio/ })).toHaveValue('1')
+
+    // A later track-list refresh keeps the viewer's own pick.
+    act(() => {
+      hls.audioTrack = 0
+      hls.emit(FakeHls.Events.AUDIO_TRACK_SWITCHED)
+      hls.emit(FakeHls.Events.AUDIO_TRACKS_UPDATED)
+    })
+    expect(hls.audioTrack).toBe(0)
+    expect(screen.getByRole('combobox', { name: /Audio/ })).toHaveValue('0')
   })
 
   it('leaves the engine pick alone without a preference (IPTV)', async () => {
     const { hls } = await mountHlsPlayer()
-    hls.audioTracks = [{ name: 'English' }, { name: 'French' }]
-    hls.audioTrack = 0
-    act(() => {
-      hls.emit(FakeHls.Events.MANIFEST_PARSED)
-    })
-    expect(hls.audioTrack).toBe(0)
+    listTracks(hls, [{ name: 'English' }, { name: 'French' }])
+    expect(hls.audioTrack).toBe(-1)
   })
 })
 
