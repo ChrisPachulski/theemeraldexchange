@@ -24,9 +24,10 @@ import { useDebounced } from '../../lib/hooks/useDebounced'
 import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import {
   effectiveGuideCategoryIds,
-  formatGuideCategoryCsv,
-  readGuideCategoryCsv,
-  writeGuideCategoryCsv,
+  formatGuideCategoryNames,
+  isAdultCategory,
+  readGuideCategoryNames,
+  writeGuideCategoryNames,
 } from '../../lib/guideCategories'
 import type { CategoryDto } from '../../lib/api/iptv'
 import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
@@ -98,9 +99,9 @@ export default function LiveTab() {
   const [playError, setPlayError] = useState<PlayFailure | null>(null)
   const [pendingPlay, setPendingPlay] = useState<(() => Promise<void>) | null>(null)
   const [exportMsg, setExportMsg] = useState<string | null>(null)
-  // Persisted curated guide-category selection (CSV of ids). Empty = the US+sports
-  // default. Held in state so toggling re-renders the guide immediately.
-  const [guideCsv, setGuideCsv] = useState(() => readGuideCategoryCsv())
+  // Persisted curated guide-category selection (category names). Empty = the
+  // US+sports default. Held in state so toggling re-renders the guide immediately.
+  const [guideNames, setGuideNames] = useState(() => readGuideCategoryNames())
   const [showGuideCats, setShowGuideCats] = useState(false)
   const debounced = useDebounced(q, 250)
   const cats = useIptvCategories('live')
@@ -127,17 +128,26 @@ export default function LiveTab() {
     }
   }, [playing?.grant.sessionId])
 
-  const sortedCats = useMemo(() => (cats.data ?? []).slice().sort((a, b) => a.name.localeCompare(b.name)), [cats.data])
+  // Adult categories are never offered in the dropdown or the guide picker
+  // (Apple GuideCategories.isAdult); the provider doesn't flag them.
+  const sortedCats = useMemo(
+    () => (cats.data ?? []).filter((c) => !isAdultCategory(c.name)).sort((a, b) => a.name.localeCompare(b.name)),
+    [cats.data],
+  )
   // The category set the default ("All") guide loads — curated to US+sports unless
   // the viewer customized it. A single category pick from the dropdown overrides it.
   const guideIds = useMemo(
-    () => effectiveGuideCategoryIds(guideCsv, cats.data ?? []),
-    [guideCsv, cats.data],
+    () => effectiveGuideCategoryIds(guideNames, cats.data ?? []),
+    [guideNames, cats.data],
   )
-  const saveGuideCsv = (csv: string) => {
-    setGuideCsv(csv)
-    writeGuideCategoryCsv(csv)
+  const saveGuideNames = (stored: string) => {
+    setGuideNames(stored)
+    writeGuideCategoryNames(stored)
   }
+  const favStreamIds = useMemo(
+    () => new Set([...favs].filter((k) => k.startsWith('live:')).map((k) => Number(k.slice('live:'.length)))),
+    [favs],
+  )
   const visibleChannels = useMemo(() => list.data?.items ?? [], [list.data])
   const visibleIds = useMemo(() => visibleChannels.map((c) => c.stream_id), [visibleChannels])
   const nowEpg = useIptvEpgNow(visibleIds)
@@ -247,6 +257,10 @@ export default function LiveTab() {
           categoryIds={guideIds}
           categoriesLoaded={!!cats.data}
           q={debounced}
+          favorites={favStreamIds}
+          onToggleFavorite={(streamId, isFav) =>
+            toggleFavorite.mutate({ kind: 'live', itemId: String(streamId), currentlyFav: isFav })
+          }
           onPlayLive={(channel) => void playChannel(channel)}
           onPlayCatchup={(channel, programme) => void playCatchup(channel, programme)}
         />
@@ -294,6 +308,7 @@ export default function LiveTab() {
                   <span><strong>Now:</strong> {epg?.current ?? '—'}</span>
                   <span><strong>Next:</strong> {epg?.next ?? '—'}</span>
                 </div>
+                {c.tv_archive === 1 && <span className="iptv-channel-card__catchup">Catch-up</span>}
               </div>
               <button
                 className="iptv-channel-card__guide"
@@ -405,8 +420,8 @@ export default function LiveTab() {
         <GuideCategorySettings
           categories={sortedCats}
           allCategories={cats.data ?? []}
-          csv={guideCsv}
-          onChange={saveGuideCsv}
+          stored={guideNames}
+          onChange={saveGuideNames}
           onClose={() => setShowGuideCats(false)}
         />
       )}
@@ -506,26 +521,25 @@ function PlayerModal({
 function GuideCategorySettings({
   categories,
   allCategories,
-  csv,
+  stored,
   onChange,
   onClose,
 }: {
-  categories: CategoryDto[] // display order (sorted by name)
-  allCategories: CategoryDto[] // catalog order — for a stable CSV
-  csv: string
-  onChange: (csv: string) => void
+  categories: CategoryDto[] // display order (sorted by name, adult-free)
+  allCategories: CategoryDto[] // catalog order — for a stable stored value
+  stored: string
+  onChange: (stored: string) => void
   onClose: () => void
 }) {
   const modalRef = useModalA11y<HTMLDivElement>(onClose)
-  const selected = new Set(effectiveGuideCategoryIds(csv, allCategories))
+  const selected = new Set(effectiveGuideCategoryIds(stored, allCategories))
 
   const toggle = (id: number) => {
-    const ids = new Set(effectiveGuideCategoryIds(csv, allCategories))
+    const ids = new Set(selected)
     if (ids.has(id)) ids.delete(id)
     else ids.add(id)
-    // Preserve catalog order for a stable, readable CSV.
-    const ordered = allCategories.map((c) => c.category_id).filter((x) => ids.has(x))
-    onChange(formatGuideCategoryCsv(ordered))
+    // Stored by name (ids drift on every provider sync), in catalog order.
+    onChange(formatGuideCategoryNames(allCategories.filter((c) => ids.has(c.category_id)).map((c) => c.name)))
   }
 
   return (

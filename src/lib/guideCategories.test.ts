@@ -3,9 +3,11 @@ import type { CategoryDto } from './api/iptv'
 import {
   defaultGuideSelection,
   effectiveGuideCategoryIds,
-  formatGuideCategoryCsv,
+  formatGuideCategoryNames,
+  guideCategoryIdsForNames,
+  isAdultCategory,
   isDefaultGuideCategory,
-  parseGuideCategoryCsv,
+  parseGuideCategoryNames,
 } from './guideCategories'
 
 function cat(category_id: number, name: string): CategoryDto {
@@ -13,7 +15,7 @@ function cat(category_id: number, name: string): CategoryDto {
 }
 
 // Ported from the Apple app's GuideCategoriesTests, plus the GuideCategoryPrefs
-// CSV/effective-selection logic (Apple's SettingsScreen helpers).
+// name-keyed effective-selection logic (Apple's SettingsScreen helpers).
 describe('isDefaultGuideCategory', () => {
   it('matches US-region and sports, not lookalikes', () => {
     for (const name of ['US| News', 'USA| Sports', 'US - Locals', 'us entertainment', 'World Sports', 'PPV SPORTS']) {
@@ -22,6 +24,23 @@ describe('isDefaultGuideCategory', () => {
     // "US" appearing mid-word must NOT match.
     for (const name of ['MUSIC', 'PLUS HD', 'AUSTRALIA', 'UK| News', 'CA Movies']) {
       expect(isDefaultGuideCategory(name), name).toBe(false)
+    }
+  })
+
+  it('never qualifies an adult category, even with a US prefix or "sports"', () => {
+    for (const name of ['USA XXX', 'US| Adult', 'XXX Sports', 'US 18+']) {
+      expect(isDefaultGuideCategory(name), name).toBe(false)
+    }
+  })
+})
+
+describe('isAdultCategory', () => {
+  it('matches whole adult tokens only', () => {
+    for (const name of ['XXX', 'XXX OnlyFans', 'Adult', 'ADULTS 24/7', '18+ Channels', 'porn hd', 'US| XXX']) {
+      expect(isAdultCategory(name), name).toBe(true)
+    }
+    for (const name of ['US| News', 'Boxxxing', 'Adulting Today', 'Kids 18', 'Sports+']) {
+      expect(isAdultCategory(name), name).toBe(false)
     }
   })
 })
@@ -33,28 +52,44 @@ describe('defaultGuideSelection', () => {
       cat(2, 'US| Entertainment'),
       cat(3, 'World Sports'),
       cat(4, 'Music Hits'),
+      cat(5, 'USA XXX'),
     ]
     expect(defaultGuideSelection(cats)).toEqual([2, 3])
   })
 })
 
-describe('guide category prefs CSV', () => {
-  it('parses and formats a CSV of ids, dropping junk', () => {
-    expect(parseGuideCategoryCsv('1, 2,3')).toEqual([1, 2, 3])
-    expect(parseGuideCategoryCsv('1,,abc,4')).toEqual([1, 4])
-    expect(parseGuideCategoryCsv('')).toEqual([])
-    expect(formatGuideCategoryCsv([2, 3])).toBe('2,3')
+describe('guide category prefs (stored by name)', () => {
+  it('parses and formats newline-separated names, keeping commas and pipes', () => {
+    expect(parseGuideCategoryNames('US| News\n Sports, Live \n\n')).toEqual(['US| News', 'Sports, Live'])
+    expect(parseGuideCategoryNames('')).toEqual([])
+    expect(formatGuideCategoryNames(['US| News', 'Sports, Live'])).toBe('US| News\nSports, Live')
   })
 
-  it('intersects stored ids with live categories', () => {
-    const cats = [cat(1, 'UK| News'), cat(2, 'US| Entertainment'), cat(3, 'World Sports')]
-    // 2 is live, 99 is stale → only 2 survives.
-    expect(effectiveGuideCategoryIds('2,99', cats)).toEqual([2])
+  it('resolves names to today’s ids case-insensitively, in catalog order', () => {
+    const cats = [cat(10, 'UK| News'), cat(20, 'US| Entertainment'), cat(30, 'World Sports')]
+    expect(guideCategoryIdsForNames(['world sports', 'UK| News', 'Gone'], cats)).toEqual([10, 30])
   })
 
-  it('falls back to the US+sports default when the pref is empty or all-stale', () => {
+  it('follows a category the provider renumbered (names, not ids)', () => {
+    const before = [cat(1, 'UK| News'), cat(2, 'US| Sports')]
+    const after = [cat(7, 'XXX'), cat(8, 'UK| News'), cat(9, 'US| Sports')]
+    const stored = formatGuideCategoryNames(['UK| News'])
+    expect(effectiveGuideCategoryIds(stored, before)).toEqual([1])
+    expect(effectiveGuideCategoryIds(stored, after)).toEqual([8])
+  })
+
+  it('never resolves a saved adult category', () => {
+    const cats = [cat(1, 'XXX'), cat(2, 'UK| News')]
+    expect(guideCategoryIdsForNames(['XXX', 'UK| News'], cats)).toEqual([2])
+  })
+
+  it('falls back to the US+sports default when the pref is empty or names nothing live', () => {
     const cats = [cat(1, 'UK| News'), cat(2, 'US| Entertainment'), cat(3, 'World Sports')]
     expect(effectiveGuideCategoryIds('', cats)).toEqual([2, 3])
-    expect(effectiveGuideCategoryIds('99,100', cats)).toEqual([2, 3])
+    expect(effectiveGuideCategoryIds('Gone\nAlso gone', cats)).toEqual([2, 3])
+  })
+
+  it('is empty (the guide fails closed) when nothing qualifies', () => {
+    expect(effectiveGuideCategoryIds('', [cat(1, 'UK| News'), cat(2, 'XXX')])).toEqual([])
   })
 })

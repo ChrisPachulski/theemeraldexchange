@@ -155,7 +155,7 @@
 .iptv-guide-cats__item input { width: 1.1rem; height: 1.1rem; accent-color: var(--emerald, #34d399); }
 .iptv-tab__status { color: var(--text-dim, #888); padding: 1rem; }
 .iptv-tab__status--error { color: var(--text-error, #c33); }
-div.iptv-tab__status--error p { margin: 0 0 .5rem; }
+div.iptv-tab__status p { margin: 0 0 .5rem; }
 /* "Play again" after a transcode session was reaped (MediaPlayer). */
 .iptv-tab__retry {
   padding: .4rem .9rem; border-radius: 4px; cursor: pointer;
@@ -188,6 +188,10 @@ div.iptv-tab__status--error p { margin: 0 0 .5rem; }
 .iptv-channel-card__name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iptv-channel-card__epg { display: grid; gap: .1rem; font-size: .82rem; line-height: 1.25; color: var(--text-dim, #aaa); }
 .iptv-channel-card__epg span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.iptv-channel-card__catchup {
+  align-self: flex-start; padding: .05rem .45rem; border-radius: 999px; font-size: .7rem; letter-spacing: .03em;
+  color: #7fe0b0; border: 1px solid rgba(127, 224, 176, .4);
+}
 .iptv-channel-card__guide {
   position: absolute; right: .45rem; bottom: .45rem; padding: .25rem .5rem; border-radius: 4px;
   border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.08); color: #f5f5f5;
@@ -285,12 +289,26 @@ div.iptv-tab__status--error p { margin: 0 0 .5rem; }
 .epg-guide__row { display:flex; }
 .epg-guide__chan {
   position:sticky; left:0; z-index:10; flex-shrink:0;
-  display:flex; align-items:center; gap:.5rem; padding:0 .6rem;
+  display:flex; align-items:center; gap:.25rem; padding:0 .4rem 0 .6rem;
   background:#161616; border-right:1px solid rgba(255,255,255,.1); border-bottom:1px solid rgba(255,255,255,.06);
-  color:#f5f5f5; text-align:left; cursor:pointer;
+  color:#f5f5f5;
 }
 .epg-guide__chan:hover { background:#1e1e1e; }
-.epg-guide__chan:focus-visible { outline:2px solid #79d7ff; outline-offset:-2px; }
+/* The cell holds a play button (logo, number, name, catch-up chip) and the favorite star. */
+.epg-guide__chan-play {
+  flex:1; min-width:0; height:100%; display:flex; align-items:center; gap:.5rem;
+  padding:0; border:0; background:none; color:inherit; font:inherit; text-align:left; cursor:pointer;
+}
+.epg-guide__chan-play:focus-visible { outline:2px solid #79d7ff; outline-offset:-2px; }
+.epg-guide__chan-logo { flex-shrink:0; width:24px; height:24px; object-fit:contain; }
+.epg-guide__chan-catchup { flex-shrink:0; font-size:.8rem; color:#7fe0b0; }
+.epg-guide__chan-fav {
+  flex-shrink:0; padding:.2rem; border:0; background:none; cursor:pointer;
+  color:var(--text-dim,#777); font-size:1rem; line-height:1;
+}
+.epg-guide__chan-fav:hover { color:#f5f5f5; }
+.epg-guide__chan-fav--on, .epg-guide__chan-fav--on:hover { color:gold; }
+.epg-guide__chan-fav:focus-visible { outline:2px solid #79d7ff; outline-offset:1px; }
 .epg-guide__chan-num { flex-shrink:0; min-width:2em; text-align:right; font-size:.8rem; color:var(--text-dim,#888); font-variant-numeric:tabular-nums; }
 .epg-guide__chan-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.86rem; font-weight:600; }
 .epg-guide__track { position:relative; flex-shrink:0; border-bottom:1px solid rgba(255,255,255,.06); }
@@ -309,6 +327,11 @@ div.iptv-tab__status--error p { margin: 0 0 .5rem; }
 .epg-guide__prog:not(.epg-guide__prog--static):hover { border-color:rgba(255,255,255,.3); }
 .epg-guide__prog:focus-visible { outline:2px solid #79d7ff; outline-offset:1px; }
 
+/* A failed refetch keeps the painted grid under this bar (Apple's "may be out of date"). */
+.epg-guide__stale {
+  flex-shrink:0; display:flex; align-items:center; gap:.75rem; padding:.35rem .8rem; font-size:.84rem;
+  color:#ffd58a; background:rgba(255,190,80,.08); border:1px solid rgba(255,190,80,.25); border-radius:6px;
+}
 /* Guide wrapper: pinned now/next detail pane above, scrollable grid below. */
 .epg-guide-wrap { display:flex; flex-direction:column; height:calc(100dvh - 12.5rem); min-height:380px; gap:.5rem; }
 .epg-guide-wrap .epg-guide { flex:1; height:auto; min-height:0; }
