@@ -230,7 +230,7 @@ div.iptv-conn-modal__empty p { margin: 0 0 .5rem; }
   box-shadow: inset 0 1px 0 var(--frost);
 }
 .iptv-tab__search {
-  flex: 1 1 16rem; min-width: 0; min-height: 40px; padding: var(--s-2) var(--s-4);
+  flex: 1 1 12rem; min-width: 0; min-height: 40px; padding: var(--s-2) var(--s-4);
   font: inherit; color: var(--text); background: var(--surface-2);
   border: 1px solid var(--border); border-radius: var(--r-pod);
 }
@@ -257,6 +257,9 @@ div.iptv-conn-modal__empty p { margin: 0 0 .5rem; }
 @media (max-width: 520px) {
   .iptv-tab__search { order: -1; flex-basis: 100%; }
   .iptv-tab__guide-cats, .iptv-tab__toolbar > button, .iptv-tab__category { min-height: 36px; padding: var(--s-1) var(--s-3); }
+  /* Compact enough for the view toggle and the category picker to share a row. */
+  .iptv-tab__viewtoggle button { padding: .45rem .6rem; font-size: .72rem; }
+  .iptv-tab__category { flex: 1 1 0; min-width: 0; }
 }
 /* The preview starts after resting a pointer on a programme: no hover, no use. */
 @media (hover: none) {
