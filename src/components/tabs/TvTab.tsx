@@ -31,7 +31,9 @@ import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { seriesAvailability, sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
+import { mediaApi } from '../../lib/api/media'
 import type { RelatedItem } from '../../lib/api/tmdb'
+import { episodeQueue } from '../media/playbackSession'
 import { withViewTransition } from '../../lib/viewTransition'
 import { useIntent } from '../../lib/router'
 import {
@@ -155,13 +157,15 @@ export function TvTab() {
   const sonarrProfiles = useSonarrProfiles()
   const sonarrFolders = useSonarrRootFolders()
   // In-browser playback of a locally-available show: pick an episode, then play.
-  const [pickShow, setPickShow] = useState<{ id: number; title: string } | null>(null)
+  // tvdbId feeds the end card's More like this after the last episode.
+  const [pickShow, setPickShow] = useState<{ id: number; title: string; tvdbId?: number } | null>(null)
   const [playingEpisode, setPlayingEpisode] = useState<{
     id: number
     title: string
     startPositionSecs?: number
     showId: number
     showTitle: string
+    tvdbId?: number
   } | null>(null)
   // The playing show's episodes power the player's Up Next, prev/next and queue.
   const playingEpisodes = useMediaEpisodes(playingEpisode?.showId ?? null)
@@ -248,6 +252,36 @@ export function TvTab() {
     setTrendingPending(item.id)
     await openLookup(`tmdb:${item.id}`, item.title)
     setTrendingPending(null)
+  }
+  // End-card pick (Apple playPick): a local show plays its first episode in
+  // place, anything else opens its detail.
+  const playRelated = async (item: RelatedItem) => {
+    const showId = localShowIdx.data?.get(item.id)
+    if (showId == null) {
+      setPlayingEpisode(null)
+      return openRelated(item)
+    }
+    try {
+      const eps = await qc.fetchQuery({
+        queryKey: ['media', 'episodes', showId],
+        queryFn: ({ signal }) => mediaApi.episodes(showId, { signal }),
+        staleTime: 60_000,
+      })
+      const sorted = episodeQueue(eps.items, -1).episodes
+      // Season 1 over specials, which sort first.
+      const first = sorted.find((e) => e.season > 0) ?? sorted[0]
+      if (!first) throw new Error(`No episodes of ${item.title} to play`)
+      setPlayingEpisode({
+        id: first.id,
+        title: episodeLabel(item.title, first),
+        startPositionSecs: resumePosition(mediaWatch.data?.get(`episode:${first.id}`)),
+        showId,
+        showTitle: item.title,
+      })
+    } catch (e) {
+      setPlayingEpisode(null)
+      setToast(e instanceof Error ? e.message : String(e))
+    }
   }
   // Open-a-title intent from another surface (Home shelves, Downloads).
   useIntent('tv', !library.isPending, (ref) => {
@@ -555,7 +589,7 @@ export function TvTab() {
             ? () => {
                 const t = viewing.title
                 setViewing(null)
-                setPickShow({ id: localShowId, title: t })
+                setPickShow({ id: localShowId, title: t, tvdbId: viewing.tvdbId })
               }
             : undefined
         }
@@ -626,7 +660,14 @@ export function TvTab() {
           onPlay={(ep, label) => {
             const startPositionSecs = resumePosition(mediaWatch.data?.get(`episode:${ep.id}`))
             setPickShow(null)
-            setPlayingEpisode({ id: ep.id, title: label, startPositionSecs, showId: pickShow.id, showTitle: pickShow.title })
+            setPlayingEpisode({
+              id: ep.id,
+              title: label,
+              startPositionSecs,
+              showId: pickShow.id,
+              showTitle: pickShow.title,
+              tvdbId: pickShow.tvdbId,
+            })
           }}
         />
       )}
@@ -638,6 +679,9 @@ export function TvTab() {
           title={playingEpisode.title}
           startPositionSecs={playingEpisode.startPositionSecs}
           episodes={playingEpisodes.data?.items}
+          // Related titles carry no certification: withheld under a cap.
+          related={ratingGate.capped || !playingEpisode.tvdbId ? undefined : { kind: 'tv', id: playingEpisode.tvdbId }}
+          onPickRelated={(item) => void playRelated(item)}
           onPlayEpisode={(ep) =>
             setPlayingEpisode((cur) =>
               cur && {

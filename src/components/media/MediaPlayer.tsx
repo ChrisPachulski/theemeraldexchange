@@ -14,6 +14,9 @@ import { useReportWatch } from '../../lib/hooks/useMediaLibrary'
 import { useModalA11y } from '../../lib/hooks/useModalA11y'
 import { getPlaybackPrefs, subtitleCueVars, usePlaybackPrefs } from '../../lib/playbackPrefs'
 import { ResumePrompt } from './ResumePrompt'
+import { TrendingRow } from '../search/TrendingRow'
+import type { RelatedItem, TmdbRef } from '../../lib/api/tmdb'
+import { useRelated } from '../../lib/hooks/useTmdbExtras'
 import {
   absoluteProgress,
   COMPLETE_TAIL_SECS,
@@ -45,6 +48,11 @@ type Props = {
    *  the modal survive, unlike a remount). */
   episodes?: MediaEpisode[]
   onPlayEpisode?: (ep: MediaEpisode) => void
+  /** The title the end card's More like this is for (movie by TMDB id, show
+   *  by TVDB id), as Apple's relatedKind/relatedId. Omit for no row. */
+  related?: TmdbRef
+  /** An end-card pick: the owner plays it in place or opens its detail. */
+  onPickRelated?: (item: RelatedItem) => void
   onClose: () => void
 }
 
@@ -92,6 +100,26 @@ export type MediaPlayerViewProps = {
   /** "Still watching?" gate (playback is paused while it shows). */
   stillWatching?: boolean
   onKeepWatching?: () => void
+  /** "Finished" card after a movie or a show's last episode (Apple
+   *  EndCardView): Replay, Done and More like this for `related`. */
+  endCard?: { onReplay: () => void; related?: TmdbRef; onPick?: (item: RelatedItem) => void } | null
+}
+
+// The end card's More like this. Its own component so the player only needs
+// a QueryClient once something has finished.
+function EndCardRelated({ related, onPick }: { related: TmdbRef; onPick: (item: RelatedItem) => void }) {
+  const items = useRelated(related).data ?? []
+  if (items.length === 0) return null
+  return (
+    <TrendingRow
+      items={items}
+      onPick={(id) => {
+        const item = items.find((r) => r.id === id)
+        if (item) onPick(item)
+      }}
+      label="More like this"
+    />
+  )
 }
 
 /** Presentational half of the player modal, exported so the node vitest env
@@ -125,6 +153,7 @@ export function MediaPlayerView({
   onUpNextCancel,
   stillWatching,
   onKeepWatching,
+  endCard,
 }: MediaPlayerViewProps) {
   const promptingResume = !error && !streamGrant && resumePromptSecs != null
   // Session-relative produced edge of the growing HLS transcode, reported by
@@ -244,6 +273,25 @@ export function MediaPlayerView({
           </div>
         </div>
       )}
+      {endCard && (
+        <div className="media-end-card" role="group" aria-label="Finished">
+          <div className="media-end-card__head">
+            <div className="media-up-next__text">
+              <p className="media-up-next__eyebrow">Finished</p>
+              <p className="media-end-card__title">{title}</p>
+            </div>
+            <div className="media-resume__choices">
+              <button className="media-up-next__secondary" type="button" onClick={endCard.onReplay}>
+                Replay
+              </button>
+              <button className="iptv-tab__retry" type="button" onClick={onClose} autoFocus>
+                Done
+              </button>
+            </div>
+          </div>
+          {endCard.related && endCard.onPick && <EndCardRelated related={endCard.related} onPick={endCard.onPick} />}
+        </div>
+      )}
     </div>
   )
 }
@@ -266,6 +314,8 @@ export function MediaPlayer({
   autoResume,
   episodes,
   onPlayEpisode,
+  related,
+  onPickRelated,
   onClose,
 }: Props) {
   const [grant, setGrant] = useState<PlaybackGrant | null>(null)
@@ -313,6 +363,9 @@ export function MediaPlayer({
     [kind, episodes, id],
   )
   const nextEpisode = queue?.next ?? null
+  // The end card covers a movie and a show's last episode; Up Next owns the rest.
+  const [ended, setEnded] = useState(false)
+  const showEndCard = ended && (kind === 'movie' || (queue != null && !nextEpisode))
 
   // In-place episode swap (Up Next, queue, prev/next): the owner hands in a new
   // id. Reset this render's session state for it (React's adjust-state-on-prop
@@ -328,6 +381,7 @@ export function MediaPlayer({
     setEffectiveStartSecs(Math.floor(startPositionSecs ?? 0))
     setUpNextSecs(null)
     setStillWatching(null)
+    setEnded(false)
   }
   // The swapped-out engine can still deliver a queued timeupdate after the
   // commit; this (set synchronously at commit) lets its stale callback bail
@@ -590,7 +644,18 @@ export function MediaPlayer({
     report(latest.current.pos, dur, true, true)
     // Free the transcoder slot immediately (also stops the heartbeat).
     sessionRef.current?.stop()
+    setEnded(true)
   }, [report, grant?.durationSecs])
+
+  // End-card Replay: the session stopped at the end, so re-grant from 0.
+  const replay = useCallback(() => {
+    setEnded(false)
+    latest.current = { pos: 0, dur: null }
+    effectiveStartRef.current = 0
+    setGrant(null)
+    setEffectiveStartSecs(0)
+    setSessionKey((key) => key + 1)
+  }, [])
 
   // A tap (queue, prev/next, Play now) is attended and resets the binge count.
   const pickEpisode = useCallback(
@@ -702,6 +767,7 @@ export function MediaPlayer({
       }}
       stillWatching={stillWatching != null}
       onKeepWatching={keepWatching}
+      endCard={showEndCard ? { onReplay: replay, related, onPick: onPickRelated } : null}
     />
   )
 }
