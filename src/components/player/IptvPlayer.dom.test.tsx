@@ -41,6 +41,8 @@ const { FakeHls, hlsInstances } = vi.hoisted(() => {
     subtitleTracks: Array<{ name?: string; lang?: string }> = []
     audioTrack = -1
     subtitleTrack = -1
+    // A parsed manifest's variants; empty until then.
+    levels: unknown[] = [{}]
 
     loadSource = vi.fn()
     attachMedia = vi.fn()
@@ -242,6 +244,23 @@ describe('IptvPlayer (mounted) — NETWORK_ERROR retry', () => {
     expect(hls.startLoad).toHaveBeenCalledTimes(1)
     expect(hls.destroy).not.toHaveBeenCalled()
     expect(screen.queryByText(/Couldn’t start playback/)).not.toBeInTheDocument()
+  })
+
+  it('a startup failure before any manifest reloads the source (startLoad has nothing to resume)', async () => {
+    const { hls } = await mountHlsPlayer()
+    hls.levels = []
+    vi.useFakeTimers()
+    hls.loadSource.mockClear()
+
+    act(() => {
+      hls.emit(FakeHls.Events.ERROR, fatalError(FakeHls.ErrorTypes.NETWORK_ERROR))
+    })
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+
+    expect(hls.loadSource).toHaveBeenCalledWith(hlsGrant().url)
+    expect(hls.startLoad).not.toHaveBeenCalled()
   })
 })
 

@@ -926,7 +926,21 @@ export default function IptvPlayer({
         }
         // engine === 'mse' — drive the <video> through hls.js below.
 
-        const hls = new Hls(buildHlsConfig(vodHls))
+        // The last error response's body, read as it arrives: hls.js can abort
+        // the XHR on a 4xx/5xx before handing over the error, and an aborted
+        // XHR's responseText is empty, so the server's reason (an off-air
+        // channel's channel_offline_upstream) would be lost to a race.
+        let lastErrorResponse: { code: number; body: string } | null = null
+        const hls = new Hls({
+          ...buildHlsConfig(vodHls),
+          xhrSetup: (xhr: XMLHttpRequest) => {
+            xhr.addEventListener('readystatechange', () => {
+              if (xhr.readyState >= 3 && xhr.status >= 400 && xhr.responseText) {
+                lastErrorResponse = { code: xhr.status, body: xhr.responseText }
+              }
+            })
+          },
+        })
         hlsRef.current = hls
 
         const updateHlsTracks = () => {
@@ -948,7 +962,14 @@ export default function IptvPlayer({
         // recovery ladder, and only give up with a visible message after a
         // bounded number of attempts.
         const fatal = createFatalHlsErrorHandler({
-          hls,
+          hls: {
+            // Before the manifest parses, startLoad() has nothing to resume and
+            // the player would hang on a startup retry; reload the source.
+            startLoad: () => (hls.levels.length > 0 ? hls.startLoad() : hls.loadSource(grant.url)),
+            recoverMediaError: () => hls.recoverMediaError(),
+            swapAudioCodec: () => hls.swapAudioCodec(),
+            destroy: () => hls.destroy(),
+          },
           isCancelled: () => cancelled,
           setError,
           onLost: onLiveLost,
@@ -960,9 +981,10 @@ export default function IptvPlayer({
           // server's reason (channel_offline_upstream) is only in the XHR's body.
           const xhr = (data as { networkDetails?: unknown }).networkDetails
           const body =
-            xhr instanceof XMLHttpRequest && (xhr.responseType === '' || xhr.responseType === 'text')
+            (xhr instanceof XMLHttpRequest && (xhr.responseType === '' || xhr.responseType === 'text')
               ? xhr.responseText
-              : undefined
+              : undefined) ||
+            (lastErrorResponse && lastErrorResponse.code === rawResponse?.code ? lastErrorResponse.body : undefined)
           const response = rawResponse
             ? { code: rawResponse.code, text: body || rawResponse.text }
             : undefined
