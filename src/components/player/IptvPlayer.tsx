@@ -3,7 +3,7 @@
    unit-tested directly; fast-refresh is irrelevant for these pure functions. */
 import { useEffect, useRef, useState } from 'react'
 import type { StreamGrant } from '../../lib/api/iptv'
-import { preferredTrackIndex } from '../../lib/playbackPrefs'
+import { canonicalLanguage, languageName, preferredTrackIndex } from '../../lib/playbackPrefs'
 import './IptvPlayer.css'
 
 export type TrackOption = {
@@ -101,13 +101,23 @@ export type IptvPlayerProps = {
    *  current position. Absent prop = no escalation (IPTV unaffected). Also
    *  fired when the browser can't decode the progressive file at all. */
   onDeliveryStruggling?: () => void
-  /** Audio language to select when the element exposes several audio tracks
-   *  (Safari's native audioTracks). Absent = keep the engine's pick (IPTV). */
+  /** Audio language to select when the stream offers several audio tracks
+   *  (Safari's native audioTracks, or hls.js alternate-audio renditions).
+   *  Absent = keep the engine's pick (IPTV). */
   preferredAudioLanguage?: string
 }
 
 export function labelForTrack(track: { name?: string; lang?: string; label?: string; language?: string }, index: number): string {
-  return track.name || track.label || track.lang || track.language || `Track ${index + 1}`
+  const label = track.name || track.label || track.lang || track.language
+  if (!label) return `Track ${index + 1}`
+  // A bare language tag (the transcoder names its renditions "spa") reads as
+  // the language ("Spanish"); any other label is shown as given.
+  if (label === (track.lang || track.language)) {
+    const code = canonicalLanguage(label)
+    const name = languageName(code)
+    if (name !== code) return name
+  }
+  return label
 }
 
 export function audioOptionsFromVideo(video: VideoWithTracks): TrackOption[] {
@@ -789,6 +799,12 @@ export default function IptvPlayer({
   // recovery affordance instead of a dead-end message the user can only escape
   // by closing the modal.
   const [reloadNonce, setReloadNonce] = useState(0)
+  // Read by the hls.js engine when its track list arrives; a ref so a prefs
+  // change never tears the engine down.
+  const preferredAudioRef = useRef(preferredAudioLanguage)
+  useEffect(() => {
+    preferredAudioRef.current = preferredAudioLanguage
+  }, [preferredAudioLanguage])
 
   // Hand the element to the owner (custom controls). Mount-scoped: the
   // <video> itself persists across engine swaps, so this fires once.
@@ -812,7 +828,7 @@ export default function IptvPlayer({
     const onLoadedMetadata = () => {
       updateNativeTracks()
       // The viewer's audio language (playbackPrefs), applied once the native
-      // track list is known. hls.js grants carry a single audio rendition.
+      // track list is known (hls.js grants apply it on MANIFEST_PARSED).
       const audio = (video as VideoWithTracks).audioTracks
       if (preferredAudioLanguage && audio && audio.length > 1) {
         const i = preferredTrackIndex(Array.from({ length: audio.length }, (_, k) => audio[k]), preferredAudioLanguage)
@@ -954,6 +970,20 @@ export default function IptvPlayer({
         hls.on(Hls.Events.MANIFEST_PARSED, updateHlsTracks)
         hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, updateHlsTracks)
         hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, updateHlsTracks)
+        // A local-media master lists the title's audio tracks as alternate
+        // renditions: start on the viewer's audio language, as Apple does.
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          const preferred = preferredAudioRef.current
+          if (cancelled || !preferred || hls.audioTracks.length < 2) return
+          const i = preferredTrackIndex(
+            hls.audioTracks.map((t) => ({ language: t.lang, label: t.name })),
+            preferred,
+          )
+          if (i >= 0 && i !== hls.audioTrack) {
+            hls.audioTrack = i
+            setSelectedAudio(i)
+          }
+        })
 
         // Fatal-error recovery. Without this a transient manifest/segment error
         // — e.g. a transcoder still emitting its first segment (HTTP 503 during

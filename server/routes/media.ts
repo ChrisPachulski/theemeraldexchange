@@ -76,6 +76,11 @@ type Caps = {
    *  (it did: the field was added to the type + capsQuery but not the handler, so
    *  every AVPlayer grant lost multi-audio). PlaybackRequest keeps it optional. */
   native_hls: boolean
+  /** hls.js client that switches HLS alternate-audio renditions: the
+   *  transcoder segments each extra audio track into its own rendition and the
+   *  grant points at a master listing them. Non-optional like native_hls so the
+   *  POST handler can't silently drop it. */
+  alt_audio: boolean
   /** Client pipeline applies Dolby Vision RPUs itself (DV-capable Apple
    *  device). Gates DV direct-play and the transcoder's DV copy passthrough. */
   dolby_vision?: boolean
@@ -90,6 +95,7 @@ const DEFAULT_CAPS: Caps = {
   aac_max_channels: 2,
   hls_fmp4_hevc: false,
   native_hls: false,
+  alt_audio: false,
   dolby_vision: false,
 }
 
@@ -103,6 +109,7 @@ function capsQuery(caps: Caps, startSecs?: number, forceTranscode = false): stri
   p.set('aac_max_channels', String(caps.aac_max_channels))
   p.set('hls_fmp4_hevc', String(Boolean(caps.hls_fmp4_hevc)))
   if (caps.native_hls) p.set('native_hls', 'true')
+  if (caps.alt_audio) p.set('alt_audio', 'true')
   if (caps.dolby_vision) p.set('dolby_vision', 'true')
   if (startSecs !== undefined) p.set('start_secs', String(startSecs))
   if (forceTranscode) p.set('force_transcode', 'true')
@@ -225,6 +232,7 @@ media.post('/playback/:kind/:id', async (c) => {
         : DEFAULT_CAPS.aac_max_channels,
     hls_fmp4_hevc: Boolean(reqCaps.hls_fmp4_hevc),
     native_hls: Boolean(reqCaps.native_hls),
+    alt_audio: Boolean(reqCaps.alt_audio),
     dolby_vision: Boolean(reqCaps.dolby_vision),
   }
   const startSecs =
@@ -305,6 +313,8 @@ media.post('/playback/:kind/:id', async (c) => {
   let handoff: {
     sessionId?: string
     manifestUrl?: string
+    /** Alternate-audio master (alt_audio + a multi-audio title), else null. */
+    masterUrl?: string | null
     heartbeatUrl?: string
     subtitle?: { url: string; language?: string | null; forced?: boolean } | null
   }
@@ -427,7 +437,9 @@ media.post('/playback/:kind/:id', async (c) => {
 
   return c.json({
     delivery: 'hls',
-    url: withToken(handoff.manifestUrl),
+    // The master when the transcoder made alternate-audio renditions; its
+    // variant is the same index.m3u8 the readiness probe above waited on.
+    url: withToken(handoff.masterUrl || handoff.manifestUrl),
     heartbeatUrl: handoff.heartbeatUrl ? withToken(handoff.heartbeatUrl) : null,
     stopUrl: withToken(stopPath),
     sessionId: sid,

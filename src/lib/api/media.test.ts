@@ -499,6 +499,17 @@ describe('probedCaps', () => {
     expect(caps.audio_codecs).toEqual(['aac'])
   })
 
+  it('asks for alternate-audio renditions only when hls.js (MSE) will play the grant', async () => {
+    stubDecoding(() => true)
+    expect((await probedCaps()).alt_audio).toBe(false) // no window: no MSE
+    resetProbedCapsForTest()
+    vi.stubGlobal('window', { MediaSource: class {} })
+    expect((await probedCaps()).alt_audio).toBe(true)
+    resetProbedCapsForTest()
+    vi.stubGlobal('window', { ManagedMediaSource: class {} }) // iOS 17.1+ Safari
+    expect((await probedCaps()).alt_audio).toBe(true)
+  })
+
   it('is cached: a second call does not re-probe', async () => {
     const spy = vi.fn(() =>
       Promise.resolve({ supported: true, smooth: true, powerEfficient: true }),

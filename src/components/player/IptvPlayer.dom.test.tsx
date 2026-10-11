@@ -151,6 +151,38 @@ describe('IptvPlayer (mounted) — hls.js engine wiring', () => {
   })
 })
 
+describe('IptvPlayer (mounted) — hls.js alternate audio', () => {
+  it('starts on the preferred audio language and lists the renditions by language', async () => {
+    render(<IptvPlayer grant={hlsGrant()} preferredAudioLanguage="es" />)
+    await waitFor(() => expect(hlsInstances).toHaveLength(1))
+    const hls = hlsInstances[0]
+    hls.audioTracks = [
+      { name: 'eng', lang: 'eng' },
+      { name: 'spa', lang: 'spa' },
+    ]
+    hls.audioTrack = 0
+
+    act(() => {
+      hls.emit(FakeHls.Events.MANIFEST_PARSED)
+    })
+
+    expect(hls.audioTrack).toBe(1)
+    const select = screen.getByRole('combobox', { name: 'Audio' })
+    expect(select).toHaveValue('1')
+    expect(Array.from((select as HTMLSelectElement).options).map((o) => o.text)).toEqual(['English', 'Spanish'])
+  })
+
+  it('leaves the engine pick alone without a preference (IPTV)', async () => {
+    const { hls } = await mountHlsPlayer()
+    hls.audioTracks = [{ name: 'English' }, { name: 'French' }]
+    hls.audioTrack = 0
+    act(() => {
+      hls.emit(FakeHls.Events.MANIFEST_PARSED)
+    })
+    expect(hls.audioTrack).toBe(0)
+  })
+})
+
 describe('IptvPlayer (mounted) — MEDIA_ERROR recovery ladder', () => {
   it('first fatal media error → recoverMediaError() only, player still alive', async () => {
     const { hls } = await mountHlsPlayer()

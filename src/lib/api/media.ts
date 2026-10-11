@@ -219,6 +219,10 @@ export type PlaybackCaps = {
   /** This client's HLS player can play HEVC carried in fMP4 segments, so the
    *  transcoder may copy-remux HEVC instead of re-encoding it. */
   hls_fmp4_hevc?: boolean
+  /** The HLS path is hls.js, which switches alternate-audio renditions: the
+   *  transcoder segments a title's extra audio tracks and the grant points at
+   *  a master listing them, filling the player's Audio menu. */
+  alt_audio?: boolean
 }
 
 type PlaybackRequest = PlaybackCaps & {
@@ -472,7 +476,16 @@ async function buildProbedCaps(): Promise<PlaybackCaps> {
     aac_max_channels: aac6 ? 6 : 2,
     // HEVC fMP4 segments need the MSE-side decode (hls.js appends them raw).
     hls_fmp4_hevc: hevcMseMain && hevcMse10,
+    alt_audio: hlsJsPlayback(),
   }
+}
+
+/** hls.js (MSE) plays our HLS grants wherever MediaSource exists (see
+ *  IptvPlayer's selectHlsEngine). Without it the browser's native HLS loads
+ *  the URL, and that player must keep the plain playlist the transcoder
+ *  tailors to it, so alternate audio is only requested with MSE. */
+function hlsJsPlayback(): boolean {
+  return typeof window !== 'undefined' && ('MediaSource' in window || 'ManagedMediaSource' in window)
 }
 
 let probedCapsPromise: Promise<PlaybackCaps> | null = null

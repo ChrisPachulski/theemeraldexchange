@@ -217,12 +217,18 @@ describe('labelForTrack', () => {
     expect(labelForTrack({ label: 'Commentary' }, 0)).toBe('Commentary')
   })
 
-  it('falls back to lang when name and label are absent', () => {
-    expect(labelForTrack({ lang: 'spa' }, 1)).toBe('spa')
+  it('falls back to lang when name and label are absent, shown as its language', () => {
+    expect(labelForTrack({ lang: 'spa' }, 1)).toBe('Spanish')
   })
 
   it('falls back to language when name, label, and lang are absent', () => {
-    expect(labelForTrack({ language: 'fra' }, 2)).toBe('fra')
+    expect(labelForTrack({ language: 'fra' }, 2)).toBe('French')
+  })
+
+  it('reads a bare-tag rendition name as its language, keeps any other name', () => {
+    expect(labelForTrack({ name: 'eng', lang: 'eng' }, 0)).toBe('English')
+    expect(labelForTrack({ name: 'eng (2)', lang: 'eng' }, 1)).toBe('eng (2)')
+    expect(labelForTrack({ name: 'Commentary', lang: 'eng' }, 1)).toBe('Commentary')
   })
 
   it('honors the name > label > lang > language precedence', () => {
@@ -252,7 +258,7 @@ describe('audioOptionsFromVideo', () => {
     const video = fakeVideoWithAudio([{ name: 'English' }, { lang: 'spa' }])
     expect(audioOptionsFromVideo(video as never)).toEqual([
       { id: 0, label: 'English' },
-      { id: 1, label: 'spa' },
+      { id: 1, label: 'Spanish' },
     ])
   })
 })
@@ -269,7 +275,7 @@ describe('subtitleOptionsFromVideo', () => {
     ])
     expect(subtitleOptionsFromVideo(video as never)).toEqual([
       { id: 0, label: 'English CC' },
-      { id: 1, label: 'spa' },
+      { id: 1, label: 'Spanish' },
     ])
   })
 })
