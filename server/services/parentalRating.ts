@@ -130,6 +130,14 @@ export function _setCertificationResolverForTests(fn: Resolver | null): void {
 
 type SessionLike = { sub: string; role: string }
 
+/** The cap a policy enforces: an explicit cap wins, and a kid profile without
+ * one is held to PG — the same default both clients browse under (Swift
+ * ParentalPolicy, src/lib/parentalGate.ts), so the grant gate matches what the
+ * UI already hides. */
+export function effectiveCap(policy: { maxContentRating: string | null; kid: boolean }): string | null {
+  return policy.maxContentRating ?? (policy.kid ? 'PG' : null)
+}
+
 /** True when the caller's rating cap forbids this media-core title. */
 export async function ratingBlocked(
   session: SessionLike,
@@ -138,7 +146,7 @@ export async function ratingBlocked(
 ): Promise<boolean> {
   if (session.role === 'admin') return false
   if (kind === 'track') return false
-  const cap = (await getPolicy(session.sub)).maxContentRating
+  const cap = effectiveCap(await getPolicy(session.sub))
   if (cap === null) return false
   // A YouTube video carries no certification: an unrated catalog, blocked
   // under any cap (the capBlocksUnrated rule for IPTV).
@@ -154,5 +162,5 @@ export async function ratingBlocked(
  * series / catchup — provider content carries no certification). */
 export async function capBlocksUnrated(session: SessionLike): Promise<boolean> {
   if (session.role === 'admin') return false
-  return (await getPolicy(session.sub)).maxContentRating !== null
+  return effectiveCap(await getPolicy(session.sub)) !== null
 }

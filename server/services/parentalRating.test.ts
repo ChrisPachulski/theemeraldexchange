@@ -6,6 +6,7 @@ import {
   ratingAllowed,
   ratingBlocked,
   capBlocksUnrated,
+  effectiveCap,
   _setCertificationResolverForTests,
 } from './parentalRating.js'
 import { setPolicy, _setUserPoliciesPathForTests } from './userPolicies.js'
@@ -117,5 +118,22 @@ describe('capBlocksUnrated (IPTV VOD gate)', () => {
     expect(await capBlocksUnrated(user)).toBe(true)
     await setPolicy(admin.sub, { maxContentRating: 'G', allowedSections: null, kid: false })
     expect(await capBlocksUnrated(admin)).toBe(false)
+  })
+})
+
+describe('kid profile without an explicit cap', () => {
+  it('defaults to PG; an explicit cap still wins', () => {
+    expect(effectiveCap({ maxContentRating: null, kid: true })).toBe('PG')
+    expect(effectiveCap({ maxContentRating: 'PG-13', kid: true })).toBe('PG-13')
+    expect(effectiveCap({ maxContentRating: null, kid: false })).toBeNull()
+  })
+
+  it('blocks above-PG grants and unrated catalogs', async () => {
+    await setPolicy(user.sub, { maxContentRating: null, allowedSections: null, kid: true })
+    _setCertificationResolverForTests(async () => 'PG-13')
+    expect(await ratingBlocked(user, 'movie', 1)).toBe(true)
+    _setCertificationResolverForTests(async () => 'PG')
+    expect(await ratingBlocked(user, 'movie', 2)).toBe(false)
+    expect(await capBlocksUnrated(user)).toBe(true)
   })
 })
