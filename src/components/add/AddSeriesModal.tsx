@@ -59,11 +59,16 @@ export function AddSeriesModal({ series, onClose, onAdded, onError }: Props) {
 
   // Snapshot the active series via adjust-state-during-render (the supported
   // React pattern) so the closing dialog keeps painting its content, and reset
-  // the inline error exactly when a new series opens.
+  // the inline error and the Quality/Folder picks exactly when a new series
+  // opens. The dialog stays mounted between shows, so a pick left in place
+  // silently applies to every later add (2026-10-09: four shows in a row
+  // went in as Ultra-HD).
   const [shownSeries, setShownSeries] = useState(series)
   if (series && series !== shownSeries) {
     setShownSeries(series)
     setError(null)
+    setProfileChoice(null)
+    setFolderChoice(null)
   }
 
   // Specials (seasonNumber 0) are intentionally excluded from the
