@@ -6,6 +6,15 @@
 .home {
   flex: 1 1 auto;
   min-height: 100vh;
+  /* Bottom-row room kept free for ReplayButton (label + gap; icon-only
+     below 1024px) so the entry pills never run under it. */
+  --replay-room: 116px;
+}
+
+@media (max-width: 1023px) {
+  .home {
+    --replay-room: 40px;
+  }
 }
 
 /* Scroll cue sits at the bottom of the first viewport — anchored to
@@ -338,11 +347,13 @@
 .home__entries {
   position: fixed;
   bottom: var(--pod-inset, 16px);
-  left: 50%;
-  transform: translateX(-50%);
+  /* Centred between symmetric gutters that keep Replay (bottom-right) clear. */
+  left: calc(var(--pod-inset, 16px) + var(--replay-room));
+  right: calc(var(--pod-inset, 16px) + var(--replay-room));
   z-index: var(--z-nav, 200);
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--s-3);
   flex-wrap: nowrap;
 }
@@ -355,7 +366,11 @@
   text-transform: uppercase;
   color: var(--text);
   padding: var(--s-4) var(--s-6);
-  min-width: 180px;
+  /* 180px each while the row has room, shrinking toward the label (never
+     below it) when it doesn't. */
+  flex: 0 1 180px;
+  min-width: max-content;
+  white-space: nowrap;
   text-align: center;
   background: color-mix(in oklch, var(--surface) 78%, transparent);
   backdrop-filter: blur(14px) saturate(140%);
@@ -412,16 +427,17 @@
 
   .home__entries {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 104px), 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 96px), 1fr));
     left: var(--s-4);
-    right: var(--s-4);
-    transform: none;
+    right: calc(var(--pod-inset, 8px) + var(--replay-room));
     width: auto;
   }
 
   .home__entry {
     min-width: 0;
-    padding: var(--s-3) var(--s-4);
+    padding: var(--s-3) var(--s-2);
+    font-size: var(--t-xs);
+    letter-spacing: 0.08em;
   }
 }
 
@@ -448,9 +464,14 @@
    on desktop. With four pills (admin user) that's 756px of row in a
    768px viewport. Drop to 140 so the row keeps breathing space. */
 @media (min-width: 721px) and (max-width: 1023px) {
+  .home__entries {
+    gap: var(--s-2);
+  }
+
   .home__entry {
-    min-width: 140px;
-    padding: var(--s-4) var(--s-5);
+    flex-basis: 140px;
+    padding: var(--s-3) var(--s-4);
+    font-size: var(--t-xs);
   }
 }
 
@@ -458,9 +479,8 @@
    label so the row still fits one line instead of running off both edges. */
 @media (min-width: 721px) {
   .home__entries:has(> :nth-child(6)) .home__entry {
-    min-width: 0;
+    flex-basis: auto;
     padding-inline: var(--s-4);
-    white-space: nowrap;
   }
 }
 

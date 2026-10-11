@@ -61,7 +61,9 @@
   flex-shrink: 0;
 }
 
-@media (max-width: 480px) {
+/* Icon-only below desktop: the label crowded the bottom row Home's entry
+   pills and the catalog mode toggle share with it. */
+@media (max-width: 1023px) {
   .replay-btn__label {
     display: none;
   }
