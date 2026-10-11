@@ -42,6 +42,7 @@ vi.mock('../../lib/api/iptv', async () => {
 vi.mock('../player/IptvPlayer', () => ({ default: () => null }))
 vi.mock('./EpgGuide', () => ({ default: () => null }))
 vi.mock('../iptv/ConnectionsWidget', () => ({ ConnectionsWidget: () => null }))
+vi.mock('../iptv/LibrarySearchResults', () => ({ LibrarySearchResults: () => null }))
 
 vi.mock('../../lib/hooks/useDebounced', () => ({ useDebounced: <T,>(v: T) => v }))
 vi.mock('../../lib/hooks/useIptvCategories', () => ({ useIptvCategories: () => ({ data: [] }) }))

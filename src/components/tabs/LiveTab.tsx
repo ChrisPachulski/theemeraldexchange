@@ -34,6 +34,7 @@ import {
 import type { CategoryDto } from '../../lib/api/iptv'
 import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import { ConnectionsWidget } from '../iptv/ConnectionsWidget'
+import { LibrarySearchResults } from '../iptv/LibrarySearchResults'
 import { LivePlayerModal, type LivePlaying } from '../iptv/LivePlayerModal'
 import {
   concurrencyPayloadFromError,
@@ -310,6 +311,7 @@ export default function LiveTab() {
         onPlayLive={(hit) => void playChannel({ stream_id: hit.streamId, name: hit.channelName })}
         onShowInGuide={(hit) => void showHitInGuide(hit)}
       />
+      <LibrarySearchResults q={debounced} />
       {view === 'guide' ? (
         <EpgGuide
           categoryId={categoryId}
