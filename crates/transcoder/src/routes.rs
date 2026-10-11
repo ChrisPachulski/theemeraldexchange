@@ -542,12 +542,22 @@ async fn grant(
                     "forced": s.forced,
                 })
             });
+            // An alt_audio session with extra tracks plays from its audio
+            // master. Asked of the SESSION, not this plan: a coalesced grant
+            // may land on a live session started without web renditions.
+            let master_url = state.sessions.web_master(&session_id).await.map(|_| {
+                format!(
+                    "/api/transcode/session/{session_id}/{}",
+                    crate::trickplay::AUDIO_MASTER_NAME
+                )
+            });
             Json(json!({
                 "directPlay": false,
                 "transcode": true,
                 "sessionId": session_id,
                 "plan": plan,
                 "manifestUrl": format!("/api/transcode/session/{session_id}/index.m3u8"),
+                "masterUrl": master_url,
                 "heartbeatUrl": format!("/api/transcode/session/{session_id}/heartbeat"),
                 "subtitle": subtitle,
             }))
@@ -762,6 +772,25 @@ async fn session_segment(
             None => session_not_found(),
         };
     }
+    // The alternate-audio master an `alt_audio` (hls.js) grant points at; any
+    // other session falls through to the plain asset 404, as before.
+    if segment == crate::trickplay::AUDIO_MASTER_NAME
+        && let Some(body) = state.sessions.web_master(&id).await
+    {
+        return m3u8_response(body);
+    }
+    // Browser scrub previews: a trick-play thumbnail as JPEG, converted from
+    // its `.ts` on first request and then served like any other asset below.
+    if segment.starts_with("thumb_")
+        && segment.ends_with(".jpg")
+        && !state.sessions.thumb_jpeg(&id, &segment).await
+    {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "thumbnail not available" })),
+        )
+            .into_response();
+    }
 
     // `asset_path` rejects unknown sessions and any traversal-unsafe name.
     let Some(path) = state.sessions.asset_path(&id, &segment).await else {
@@ -782,11 +811,11 @@ async fn session_segment(
     // fetches it as soon as the master advertises the subs rendition, which can
     // race the detached one-shot extraction on session start. Alternate-audio
     // rendition assets (audio_{n}.m3u8 + its segments) race their own detached
-    // pass the same way, so they get the same brief wait.
-    if is_native_hls_client(&headers)
-        && (segment_index(&segment).is_some()
-            || segment == SIDECAR_SUBTITLE_NAME
-            || crate::session::is_audio_rendition_asset(&segment))
+    // pass the same way, so they get the same brief wait — for hls.js too,
+    // whose alt_audio master can name a rendition its pass hasn't written yet.
+    if ((is_native_hls_client(&headers)
+        && (segment_index(&segment).is_some() || segment == SIDECAR_SUBTITLE_NAME))
+        || crate::session::is_audio_rendition_asset(&segment))
         && !tokio::fs::try_exists(&path).await.unwrap_or(false)
     {
         let mut waited = Duration::ZERO;
@@ -832,6 +861,8 @@ async fn session_segment(
     } else if segment.ends_with(".vtt") {
         // The pre-extracted sidecar subtitle, loaded by the player as a <track>.
         "text/vtt"
+    } else if segment.ends_with(".jpg") {
+        "image/jpeg"
     } else {
         "video/mp2t"
     };
@@ -1023,6 +1054,8 @@ mod tests {
              mkdir -p \"$d\"\n\
              case \"$last\" in *subtitles.vtt.partial)\n\
                printf 'WEBVTT\\n' > \"$last\"; exit 0;; esac\n\
+             case \"$last\" in *.jpg.*.partial)\n\
+               printf 'JPEG' > \"$last\"; exit 0;; esac\n\
              printf '#EXTM3U\\n' > \"$last\"\n\
              printf 'seg' > \"$d/seg_00000.ts\"\n\
              sleep 30\n";
@@ -1476,6 +1509,170 @@ mod tests {
         }
         // (Non-200 = ffmpeg stub hasn't written the on-disk playlist yet —
         // equally proves the master was not served.)
+    }
+
+    async fn get(app: &Router, uri: String) -> (StatusCode, String, String) {
+        let resp = app
+            .clone()
+            .oneshot(HttpRequest::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let ctype = resp
+            .headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        (status, ctype, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    async fn grant_json(app: &Router, body: Value) -> Value {
+        let resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        serde_json::from_slice(
+            &axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                .await
+                .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn alt_audio_grant_serves_a_master_and_flag_absent_is_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = router(state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        ));
+        let mut file = h264_file();
+        file.size_bytes = 62_500_000; // 5 Mbps over the 100 s title
+        file.audio_tracks_json =
+            "[{\"index\":1,\"codec\":\"aac\",\"channels\":2,\"language\":\"eng\"},\
+             {\"index\":2,\"codec\":\"ac3\",\"channels\":6,\"language\":\"spa\"}]"
+                .into();
+        let body = |media_id: i64, alt_audio: bool| {
+            json!({
+                "file": file,
+                "caps": { "containers": ["mp4"], "video_codecs": ["h264"], "alt_audio": alt_audio },
+                "media_kind": "movie", "media_id": media_id, "sub": "plex:42", "start_secs": 0
+            })
+        };
+
+        // Flag absent: no master, the web keeps the plain on-disk playlist.
+        let v = grant_json(&app, body(7, false)).await;
+        let plain = v["sessionId"].as_str().unwrap().to_string();
+        assert!(v["masterUrl"].is_null(), "{v}");
+        assert_eq!(
+            v["manifestUrl"],
+            format!("/api/transcode/session/{plain}/index.m3u8")
+        );
+        let (status, ..) = get(&app, format!("/api/transcode/session/{plain}/master.m3u8")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        // Flag set: a master over the same index.m3u8, the Spanish track as a
+        // separate rendition the web pass writes.
+        let v = grant_json(&app, body(8, true)).await;
+        let sid = v["sessionId"].as_str().unwrap().to_string();
+        assert_eq!(
+            v["masterUrl"],
+            format!("/api/transcode/session/{sid}/master.m3u8")
+        );
+        let (status, ctype, master) =
+            get(&app, format!("/api/transcode/session/{sid}/master.m3u8")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(ctype, "application/vnd.apple.mpegurl");
+        assert_eq!(
+            master,
+            "#EXTM3U\n#EXT-X-VERSION:4\n\
+             #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"eng\",LANGUAGE=\"eng\",AUTOSELECT=YES,DEFAULT=YES\n\
+             #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aud\",NAME=\"spa\",LANGUAGE=\"spa\",AUTOSELECT=YES,DEFAULT=NO,URI=\"audio_1.m3u8\"\n\
+             #EXT-X-STREAM-INF:BANDWIDTH=5000000,AUDIO=\"aud\"\nindex.m3u8\n"
+        );
+        // The rendition playlist is fetchable by hls.js (no native UA): the
+        // brief wait covers the pass racing the first request.
+        let (status, ctype, _) =
+            get(&app, format!("/api/transcode/session/{sid}/audio_1.m3u8")).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(ctype, "application/vnd.apple.mpegurl");
+
+        // index.m3u8 is the same on-disk playlist with or without the flag.
+        let (s1, _, plain_index) =
+            get(&app, format!("/api/transcode/session/{plain}/index.m3u8")).await;
+        let (s2, _, alt_index) =
+            get(&app, format!("/api/transcode/session/{sid}/index.m3u8")).await;
+        assert_eq!((s1, s2), (StatusCode::OK, StatusCode::OK));
+        assert_eq!(plain_index, alt_index);
+    }
+
+    #[tokio::test]
+    async fn thumbnail_jpeg_is_converted_from_the_trickplay_segment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        );
+        let app = router(state.clone());
+        let v = grant_json(
+            &app,
+            serde_json::from_str(&grant_body(&h264_file())).unwrap(),
+        )
+        .await;
+        let sid = v["sessionId"].as_str().unwrap().to_string();
+        // Stand in for the sampler's single-I-frame segment.
+        let ts = state
+            .sessions
+            .asset_path(&sid, "thumb_00001.ts")
+            .await
+            .unwrap();
+        std::fs::write(&ts, b"ts").unwrap();
+
+        let (status, ctype, body) = get(
+            &app,
+            format!("/api/transcode/session/{sid}/thumb_00001.jpg"),
+        )
+        .await;
+        assert_eq!(
+            (status, ctype.as_str(), body.as_str()),
+            (StatusCode::OK, "image/jpeg", "JPEG")
+        );
+        // Cached: served again without its .ts.
+        std::fs::remove_file(&ts).unwrap();
+        let (status, ..) = get(
+            &app,
+            format!("/api/transcode/session/{sid}/thumb_00001.jpg"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // Not sampled yet (or a copy-remux session): no thumbnail.
+        let (status, ..) = get(
+            &app,
+            format!("/api/transcode/session/{sid}/thumb_00009.jpg"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

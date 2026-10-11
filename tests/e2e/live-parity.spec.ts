@@ -255,9 +255,11 @@ test('an off-air channel shows Channel offline instead of a dead end', async ({ 
   await page.goto('/#/live')
   await page.getByTitle('Watch US ABC live').click()
 
-  // hls.js retries a 503 manifest a few times before surfacing it (~11 s).
+  // hls.js retries a 503 manifest a few times before surfacing it (~11 s); if
+  // the first round loses the body to an aborted XHR, the player reloads the
+  // source and a second round runs (~24 s), slower still on a loaded runner.
   const card = page.getByRole('alert').filter({ hasText: 'Channel offline' })
-  await expect(card).toBeVisible({ timeout: 30_000 })
+  await expect(card).toBeVisible({ timeout: 45_000 })
   expect(kills).toContain(`live:${ABC.stream_id}`)
   await card.getByRole('button', { name: 'Open guide' }).click()
   await expect(page.getByRole('region', { name: 'Channel guide' })).toBeVisible()

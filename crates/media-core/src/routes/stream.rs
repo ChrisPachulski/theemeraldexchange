@@ -135,6 +135,10 @@ pub(super) struct StreamCapsQuery {
     /// language switching. Browser/MSE clients omit it (single English track).
     #[serde(default)]
     native_hls: bool,
+    /// hls.js client that switches alternate-audio renditions (see
+    /// [`ClientCaps::alt_audio`]); forwarded to the transcoder grant.
+    #[serde(default)]
+    alt_audio: bool,
     /// Client pipeline applies Dolby Vision RPUs itself — gates DV
     /// direct-play and the transcoder's DV copy passthrough.
     #[serde(default)]
@@ -189,6 +193,7 @@ impl StreamCapsQuery {
             aac_max_channels: self.aac_max_channels.unwrap_or(defaults.aac_max_channels),
             hls_fmp4_hevc: self.hls_fmp4_hevc,
             native_hls: self.native_hls,
+            alt_audio: self.alt_audio,
             dolby_vision: self.dolby_vision,
         }
     }
@@ -279,6 +284,7 @@ impl TranscodeHandoff<'_> {
                 "audio_codecs": self.caps.audio_codecs,
                 "aac_max_channels": self.caps.aac_max_channels,
                 "hls_fmp4_hevc": self.caps.hls_fmp4_hevc,
+                "alt_audio": self.caps.alt_audio,
                 "dolby_vision": self.caps.dolby_vision,
             },
             "media_kind": self.kind,
@@ -351,12 +357,16 @@ pub(super) async fn handoff_to_transcoder(
         // asset path; the Node grant layer stream-token-wraps it like the
         // manifest before the player loads it as a <track>.
         let subtitle = payload.get("subtitle").cloned().unwrap_or(Value::Null);
+        // The alternate-audio master (alt_audio clients with a multi-audio
+        // title), forwarded verbatim; null otherwise.
+        let master_url = payload.get("masterUrl").cloned().unwrap_or(Value::Null);
 
         return Ok(Json(json!({
             "transcode": true,
             "directPlay": false,
             "sessionId": session_id,
             "manifestUrl": manifest_url,
+            "masterUrl": master_url,
             "heartbeatUrl": heartbeat_url,
             "subtitle": subtitle,
             "reason": reason,
@@ -874,6 +884,53 @@ mod tests {
         assert_eq!(body["force_transcode"], true);
         assert_eq!(body["start_secs"], 42);
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn stream_handoff_forwards_alt_audio_and_master_url() {
+        // The web opts into alternate-audio renditions with ?alt_audio=true:
+        // the cap must reach the transcoder grant body, and the transcoder's
+        // masterUrl must come back to the Node grant layer. Without the param
+        // the cap stays false (every existing client) and masterUrl is null.
+        for (query, want_cap) in [("&alt_audio=true", true), ("", false)] {
+            let grant = json!({
+                "directPlay": false,
+                "transcode": true,
+                "sessionId": "sess-alt",
+                "manifestUrl": "/api/transcode/session/sess-alt/index.m3u8",
+                "heartbeatUrl": "/api/transcode/session/sess-alt/heartbeat",
+                "masterUrl": if want_cap { json!("/api/transcode/session/sess-alt/master.m3u8") } else { Value::Null },
+            });
+            let seen = Arc::new(tokio::sync::Mutex::new(None));
+            let (base, handle) =
+                spawn_mock_transcoder_capture(grant, StatusCode::OK, seen.clone()).await;
+            let state = test_state_with_transcoder(&base).await;
+            let file_id = seed_media_file(&state, "/lib/dual-audio.mkv").await;
+            let movie_id = seed_movie_for_file(&state, file_id).await;
+
+            let resp = crate::build_router(state)
+                .oneshot(req(
+                    "GET",
+                    format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1{query}"
+                    ),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let v = body_json(resp).await;
+            let body = seen.lock().await.clone().expect("transcoder grant body");
+            assert_eq!(body["caps"]["alt_audio"], want_cap, "query {query:?}");
+            if want_cap {
+                assert_eq!(
+                    v["masterUrl"],
+                    "/api/transcode/session/sess-alt/master.m3u8"
+                );
+            } else {
+                assert!(v["masterUrl"].is_null(), "{v}");
+            }
+            handle.abort();
+        }
     }
 
     #[tokio::test]

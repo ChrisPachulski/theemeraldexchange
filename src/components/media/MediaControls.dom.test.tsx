@@ -8,7 +8,7 @@
 // the seek split (element seek in-session, re-grant below the floor).
 
 import '@testing-library/jest-dom/vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MediaControls } from './MediaControls'
 import type { MediaEpisode } from '../../lib/api/media'
@@ -405,5 +405,53 @@ describe('MediaControls parity controls', () => {
       <MediaControls video={makeVideo()} offsetSecs={0} totalDurationSecs={100} onSeekBelowOffset={() => undefined} chapters={[]} />,
     )
     expect(screen.queryByRole('region', { name: 'Chapters', hidden: true })).toBeNull()
+  })
+})
+
+describe('MediaControls seek preview', () => {
+  const PLAYLIST =
+    '#EXTM3U\n#EXT-X-I-FRAMES-ONLY\n#EXTINF:10.000000,\nthumb_00000.ts?t=T\n#EXTINF:10.000000,\nthumb_00001.ts?t=T\n#EXT-X-ENDLIST\n'
+  afterEach(() => vi.unstubAllGlobals())
+
+  function renderBar(trickplayUrl?: string) {
+    const utils = render(
+      <MediaControls
+        video={makeVideo()}
+        offsetSecs={0}
+        totalDurationSecs={20}
+        onSeekBelowOffset={() => undefined}
+        trickplayUrl={trickplayUrl}
+      />,
+    )
+    const scrubber = screen.getByLabelText('Seek')
+    scrubber.getBoundingClientRect = () => ({ left: 0, width: 100 }) as DOMRect
+    const preview = () => utils.container.querySelector('.media-controls__preview')
+    return { scrubber, preview }
+  }
+
+  it('floats the trick-play frame under the pointer above the scrubber', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, text: () => Promise.resolve(PLAYLIST) })))
+    const { scrubber, preview } = renderBar('http://api.test/s/iframe.m3u8?t=T')
+
+    // 75% of a 20 s title is 0:15, inside the second thumbnail's span.
+    await waitFor(() => {
+      fireEvent.pointerMove(scrubber, { clientX: 75 })
+      expect(preview()).toHaveTextContent('0:15')
+    })
+    await waitFor(() =>
+      expect(preview()?.querySelector('img')).toHaveAttribute('src', 'http://api.test/s/thumb_00001.jpg?t=T'),
+    )
+
+    fireEvent.pointerLeave(scrubber)
+    expect(preview()).toBeNull()
+  })
+
+  it('shows nothing without a trick-play playlist (copy-remux, direct play)', () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const { scrubber, preview } = renderBar()
+    fireEvent.pointerMove(scrubber, { clientX: 75 })
+    expect(preview()).toBeNull()
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

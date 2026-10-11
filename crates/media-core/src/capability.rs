@@ -55,6 +55,14 @@ pub struct ClientCaps {
     /// predates this field — and the whole browser path — is unaffected.
     #[serde(default)]
     pub native_hls: bool,
+    /// True for an hls.js (MSE) client that can switch HLS alternate-audio
+    /// renditions (`EXT-X-MEDIA TYPE=AUDIO` with a `URI`). The transcoder then
+    /// segments each extra audio track into its own rendition beside the
+    /// session and serves a master playlist for it; in-band multi-audio (the
+    /// `native_hls` path) is useless to hls.js, which only demuxes one audio
+    /// PID. Defaults false so every existing client is unaffected.
+    #[serde(default)]
+    pub alt_audio: bool,
     /// True when the client's decode+display pipeline handles Dolby Vision
     /// AS-IS (applies the RPU itself — e.g. AVPlayer on a DV-capable Apple
     /// device). Gates both DV direct-play and the transcoder's DV copy
@@ -87,6 +95,7 @@ impl Default for ClientCaps {
             aac_max_channels: default_aac_max_channels(),
             hls_fmp4_hevc: false,
             native_hls: false,
+            alt_audio: false,
             dolby_vision: false,
         }
     }

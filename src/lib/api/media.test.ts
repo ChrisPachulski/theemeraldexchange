@@ -274,6 +274,25 @@ describe('mediaApi playback + watch', () => {
     expect(grant.sessionId).toBe('sid')
   })
 
+  it('absolutizes the trick-play playlist url (null when the grant has none)', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        delivery: 'hls',
+        url: '/api/transcode/session/sid/index.m3u8?t=TOK',
+        sessionId: 'sid',
+        durationSecs: 600,
+        trickplayUrl: '/api/transcode/session/sid/iframe.m3u8?t=TOK',
+      }),
+    )
+    const grant = await mediaApi.playback('movie', 7)
+    expect(grant.trickplayUrl).toBe('http://localhost/api/transcode/session/sid/iframe.m3u8?t=TOK')
+
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({ delivery: 'progressive', url: '/api/media/stream/movie/7?t=TOK', durationSecs: 600 }),
+    )
+    expect((await mediaApi.playback('movie', 7)).trickplayUrl).toBeNull()
+  })
+
   it('progressive grant has no stopUrl (nothing to reap)', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonRes({ delivery: 'progressive', url: '/api/media/stream/movie/7?t=TOK', durationSecs: 1200 }),
@@ -514,6 +533,17 @@ describe('probedCaps', () => {
     })
     const caps = await probedCaps()
     expect(caps.audio_codecs).toEqual(['aac'])
+  })
+
+  it('asks for alternate-audio renditions only when hls.js (MSE) will play the grant', async () => {
+    stubDecoding(() => true)
+    expect((await probedCaps()).alt_audio).toBe(false) // no window: no MSE
+    resetProbedCapsForTest()
+    vi.stubGlobal('window', { MediaSource: class {} })
+    expect((await probedCaps()).alt_audio).toBe(true)
+    resetProbedCapsForTest()
+    vi.stubGlobal('window', { ManagedMediaSource: class {} }) // iOS 17.1+ Safari
+    expect((await probedCaps()).alt_audio).toBe(true)
   })
 
   it('is cached: a second call does not re-probe', async () => {

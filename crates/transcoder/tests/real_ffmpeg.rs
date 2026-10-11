@@ -143,6 +143,7 @@ fn production_argv_produces_playable_hls() {
         segment_format: SegmentFormat::MpegTs,
         audio_index: 0,
         extra_audio: Vec::new(),
+        alt_audio: Vec::new(),
         reason: "real-ffmpeg integration: remux to HLS".into(),
     };
     let argv = ffmpeg_args(

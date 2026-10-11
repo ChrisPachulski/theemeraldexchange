@@ -76,6 +76,8 @@ export type MediaPlayerViewProps = {
   sessionOffsetSecs?: number
   /** Full title length for the controls' scrubber/total readout. */
   titleDurationSecs?: number | null
+  /** The grant's trick-play playlist: seek-preview thumbnails on the scrubber. */
+  trickplayUrl?: string | null
   containerRef?: Ref<HTMLDivElement>
   onClose: () => void
   onRetry: () => void
@@ -137,6 +139,7 @@ export function MediaPlayerView({
   resumePromptSecs,
   sessionOffsetSecs,
   titleDurationSecs,
+  trickplayUrl,
   containerRef,
   onClose,
   onRetry,
@@ -237,6 +240,7 @@ export function MediaPlayerView({
               markers={upNext || stillWatching ? undefined : markers}
               chapters={chapters}
               episodeNav={episodeNav}
+              trickplayUrl={trickplayUrl}
             />
           )}
         </>
@@ -780,6 +784,7 @@ export function MediaPlayer({
       resumePromptSecs={effectiveStartSecs == null ? (startPositionSecs ?? null) : null}
       sessionOffsetSecs={sessionOffsetSecs}
       titleDurationSecs={grant?.durationSecs ?? null}
+      trickplayUrl={grant?.trickplayUrl ?? null}
       containerRef={modalRef}
       onClose={onClose}
       onRetry={retry}

@@ -179,6 +179,13 @@ pub enum TranscodePlan {
         /// path is then byte-identical to before. See [`plan_extra_audio`].
         #[serde(default)]
         extra_audio: Vec<(usize, AudioOp)>,
+        /// Extra audio tracks for an `alt_audio` (hls.js) client, same shape as
+        /// `extra_audio` but NEVER muxed in-band: each is segmented into its own
+        /// `audio_{n}.m3u8` rendition by a separate pass, and the session serves
+        /// a master advertising them. Empty for every other client, which then
+        /// gets byte-identical args/playlists. See [`plan_alt_audio`].
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        alt_audio: Vec<(usize, AudioOp)>,
         /// Echo of why direct-play was denied — useful for telemetry/inventory.
         reason: String,
     },
@@ -458,6 +465,7 @@ fn plan_transcode_ops_with(
                 segment_format: SegmentFormat::Fmp4,
                 audio_index: preferred_audio_index(file),
                 extra_audio: plan_extra_audio(file, caps),
+                alt_audio: plan_alt_audio(file, caps),
                 reason: format!("{reason} (dolby vision P{dv_profile} passthrough)"),
             };
         }
@@ -475,6 +483,7 @@ fn plan_transcode_ops_with(
             segment_format: SegmentFormat::MpegTs,
             audio_index: preferred_audio_index(file),
             extra_audio: plan_extra_audio(file, caps),
+            alt_audio: plan_alt_audio(file, caps),
             reason: format!("{reason} (dolby vision: libplacebo RPU re-encode)"),
         };
     }
@@ -564,6 +573,7 @@ fn plan_transcode_ops_with(
         segment_format,
         audio_index: preferred_audio_index(file),
         extra_audio: plan_extra_audio(file, caps),
+        alt_audio: plan_alt_audio(file, caps),
         reason,
     }
 }
@@ -671,6 +681,26 @@ pub fn plan_extra_audio(file: &MediaFileRow, caps: &ClientCaps) -> Vec<(usize, A
     if !caps.native_hls {
         return Vec::new();
     }
+    other_audio_tracks(file, caps)
+}
+
+/// The extra audio tracks to deliver as SEPARATE HLS renditions to an
+/// `alt_audio` (hls.js) client, in the same `(audio-relative index, op)` shape
+/// as [`plan_extra_audio`]. hls.js demuxes only the first audio PID of a TS,
+/// so in-band muxing is useless there; the primary stays in-band in the video
+/// variant and each extra becomes its own `audio_{n}.m3u8`. Empty unless the
+/// client opted in (a `native_hls` client keeps its in-band path instead) and
+/// the file has a second track.
+pub fn plan_alt_audio(file: &MediaFileRow, caps: &ClientCaps) -> Vec<(usize, AudioOp)> {
+    if !caps.alt_audio || caps.native_hls {
+        return Vec::new();
+    }
+    other_audio_tracks(file, caps)
+}
+
+/// Every audio track except the primary ([`preferred_audio_index`]), each with
+/// its own copy-vs-encode op, in probe order. Empty for a single-track file.
+fn other_audio_tracks(file: &MediaFileRow, caps: &ClientCaps) -> Vec<(usize, AudioOp)> {
     let tracks = file.audio_tracks();
     if tracks.len() < 2 {
         return Vec::new();
@@ -823,13 +853,78 @@ mod tests {
             TranscodePlan::Transcode {
                 audio_index,
                 extra_audio,
+                alt_audio,
                 ..
             } => {
                 assert_eq!(audio_index, 1);
                 assert!(extra_audio.is_empty(), "browser gets English only");
+                assert!(
+                    alt_audio.is_empty(),
+                    "no renditions without the alt_audio flag"
+                );
             }
             other => panic!("expected transcode, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn alt_audio_client_gets_renditions_not_in_band_tracks() {
+        // hls.js opted in: the extras become separate renditions (alt_audio),
+        // never in-band (extra_audio), each gated like the primary — the DTS
+        // track is re-encoded to stereo AAC, the AAC one copied.
+        let mut caps = caps_h264_1080_sdr();
+        caps.alt_audio = true;
+        let dts = AudioTrack {
+            codec: Some("dts".into()),
+            channels: Some(6),
+            ..audio_lang(2, Some("fra"))
+        };
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![audio_lang(0, Some("ita")), audio_lang(1, Some("eng")), dts],
+            vec![],
+        );
+        match plan_transcode(&f, &caps) {
+            TranscodePlan::Transcode {
+                audio_index,
+                extra_audio,
+                alt_audio,
+                ..
+            } => {
+                assert_eq!(audio_index, 1, "English stays the in-band primary");
+                assert!(extra_audio.is_empty(), "nothing muxed in-band for hls.js");
+                assert_eq!(
+                    alt_audio,
+                    vec![
+                        (0, AudioOp::Copy),
+                        (
+                            2,
+                            AudioOp::EncodeAac {
+                                bitrate_kbps: DOWNMIX_AAC_BITRATE_KBPS
+                            }
+                        ),
+                    ]
+                );
+            }
+            other => panic!("expected transcode, got {other:?}"),
+        }
+        // A native client keeps its in-band path even if it also sent the flag.
+        caps.native_hls = true;
+        assert!(plan_alt_audio(&f, &caps).is_empty());
+        // A single-track title has nothing to offer.
+        caps.native_hls = false;
+        let single = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![audio_lang(0, Some("eng"))],
+            vec![],
+        );
+        assert!(plan_alt_audio(&single, &caps).is_empty());
     }
 
     #[test]
@@ -926,6 +1021,7 @@ mod tests {
             segment_format: SegmentFormat::MpegTs,
             audio_index: 0,
             extra_audio: Vec::new(),
+            alt_audio: Vec::new(),
             reason: "container".into(),
         };
         assert!(
@@ -944,6 +1040,7 @@ mod tests {
             segment_format: SegmentFormat::MpegTs,
             audio_index: 0,
             extra_audio: Vec::new(),
+            alt_audio: Vec::new(),
             reason: "hevc".into(),
         };
         assert!(encode.reencodes_video());

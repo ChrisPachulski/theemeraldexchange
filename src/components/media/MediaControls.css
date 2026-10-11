@@ -171,6 +171,43 @@
   box-shadow: 0 0 0 4px var(--emerald-ghost);
 }
 
+/* Seek preview: the trick-play frame under the pointer, floating above the bar
+ * (Apple's transport preview). Centered on the pointer, clamped inside the bar;
+ * never takes the pointer, so the scrubber keeps every event. */
+.media-controls__preview {
+  --preview-w: 10rem;
+  position: absolute;
+  bottom: calc(100% + var(--s-2));
+  left: clamp(calc(var(--preview-w) / 2), var(--preview-x), calc(100% - var(--preview-w) / 2));
+  transform: translateX(-50%);
+  width: var(--preview-w);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-1);
+  background: color-mix(in oklch, var(--surface) 92%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--elev-card);
+  pointer-events: none;
+}
+.media-controls__preview img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain;
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+}
+.media-controls__preview span {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  letter-spacing: var(--tr-hud);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Firefox */
 .media-controls__scrubber::-moz-range-track {
   height: var(--track-h);

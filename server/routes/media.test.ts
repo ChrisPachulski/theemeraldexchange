@@ -1051,4 +1051,85 @@ describe('media playback grant', () => {
     const handoff = new URL(String(mockFetchTimed.mock.calls[1][0]))
     expect(handoff.searchParams.get('max_bitrate')).toBe(forwarded === undefined ? null : String(forwarded))
   })
+
+  it('forwards alt_audio and plays the alternate-audio master when the transcoder made one', async () => {
+    mockFetchTimed
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ directPlay: false, file: { duration_secs: 100 } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            transcode: true,
+            sessionId: 'sa',
+            manifestUrl: '/api/transcode/session/sa/index.m3u8',
+            masterUrl: '/api/transcode/session/sa/master.m3u8',
+            heartbeatUrl: '/api/transcode/session/sa/heartbeat',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValue(
+        new Response('#EXTM3U\n#EXTINF:6.0,\nseg_00000.ts\n', {
+          status: 200,
+          headers: { 'Content-Type': 'application/vnd.apple.mpegurl' },
+        }),
+      )
+
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({ alt_audio: true }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(String(mockFetchTimed.mock.calls[1][0])).toContain('alt_audio=true')
+    // Readiness is still probed on the media playlist the master points at.
+    expect(String(mockFetchTimed.mock.calls[2][0])).toContain('/session/sa/index.m3u8')
+    const body = (await res.json()) as { url: string; stopUrl: string }
+    expect(body.url).toMatch(/^\/api\/transcode\/session\/sa\/master\.m3u8\?t=/)
+    expect(body.stopUrl).toMatch(/^\/api\/transcode\/session\/sa\/stop\?t=/)
+  })
+
+  it('without alt_audio the handoff omits the param and the grant plays index.m3u8', async () => {
+    mockFetchTimed
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ directPlay: false, file: { duration_secs: 100 } }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            transcode: true,
+            sessionId: 'sb',
+            manifestUrl: '/api/transcode/session/sb/index.m3u8',
+            masterUrl: null,
+            heartbeatUrl: '/api/transcode/session/sb/heartbeat',
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValue(
+        new Response('#EXTM3U\n#EXTINF:6.0,\nseg_00000.ts\n', {
+          status: 200,
+          headers: { 'Content-Type': 'application/vnd.apple.mpegurl' },
+        }),
+      )
+
+    const res = await media.request('/playback/movie/7', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+
+    expect(res.status).toBe(200)
+    expect(String(mockFetchTimed.mock.calls[1][0])).not.toContain('alt_audio')
+    const body = (await res.json()) as { url: string }
+    expect(body.url).toMatch(/^\/api\/transcode\/session\/sb\/index\.m3u8\?t=/)
+  })
 })
