@@ -48,7 +48,10 @@
   z-index: 5;
   display: grid;
   gap: var(--s-3);
-  padding: var(--s-7) 0 var(--s-5);
+  /* The search sits above the bottom row that the mode toggle (left) and
+     Replay (right) share: the toggle (40px) plus its inset and a gap. Below
+     ~1460px the centred search reached the toggle and they overlapped. */
+  padding: var(--s-7) 0 calc(var(--pod-inset, 16px) + 52px);
   pointer-events: none;
   background: linear-gradient(
     to top,
@@ -68,7 +71,22 @@
     padding: 0 var(--s-3);
   }
   .tv-tab__dock {
-    padding: var(--s-5) 0 var(--s-4);
+    padding: var(--s-5) 0 calc(var(--pod-inset, 8px) + 48px);
+  }
+  /* The toggle fills the bottom row up to Replay (32px) instead of running
+     under it; tighter tracking keeps three labels and the count on one line. */
+  .tv-tab__mode-anchor {
+    right: calc(var(--pod-inset, 8px) + 32px + var(--s-2));
+  }
+  .tv-tab__mode-anchor .mode-toggle {
+    display: flex;
+    width: 100%;
+  }
+  .tv-tab__mode-anchor .mode-toggle__option {
+    flex: 1 1 auto;
+    justify-content: center;
+    padding: 6px var(--s-2);
+    letter-spacing: 0.08em;
   }
 }
 
