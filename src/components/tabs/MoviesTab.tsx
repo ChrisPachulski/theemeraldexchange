@@ -6,6 +6,9 @@ import { MediaCard } from '../search/MediaCard'
 import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { LibraryAlphabet, libraryBucket, type LibraryLetter } from '../library/LibraryAlphabet'
 import { LibraryFilters, type FilterOption } from '../library/LibraryFilters'
+import { LibraryBrowse, type BrowseRow } from '../library/LibraryBrowse'
+import type { Card } from '../home/HomeShelves'
+import { continueWatching } from '../home/shelves'
 import { DetailModal, type DetailMeta } from '../detail/DetailModal'
 import { ArrAdvancedPanel } from '../detail/ArrAdvancedPanel'
 import { AddMovieModal } from '../add/AddMovieModal'
@@ -29,12 +32,20 @@ import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { movieAvailability, radarr, type Movie, type MovieSearchResult } from '../../lib/api/radarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
+import type { WatchEntry } from '../../lib/api/media'
+import { resumeLabel, watchBadge, watchFraction } from '../../lib/watchState'
 import {
   filterAndSortLibrary,
   byTitleAsc,
   byTitleDesc,
   byYearAsc,
   byYearDesc,
+  byAddedDesc,
+  byRatingDesc,
+  browseShelves,
+  distinctGenres,
+  movieRating,
+  releaseDay,
 } from '../../lib/librarySort'
 import { withViewTransition } from '../../lib/viewTransition'
 import { useIntent } from '../../lib/router'
@@ -105,12 +116,23 @@ function movieRatingPieces(item: MovieSearchResult, ratings: RatingsMap): Rating
   return out
 }
 
-type MovieSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'runtime-desc' | 'runtime-asc' | 'studio'
+type MovieSort =
+  | 'title-asc'
+  | 'title-desc'
+  | 'added-desc'
+  | 'rating-desc'
+  | 'year-desc'
+  | 'year-asc'
+  | 'runtime-desc'
+  | 'runtime-asc'
+  | 'studio'
 type MovieStatus = 'all' | 'released' | 'announced' | 'inCinemas' | 'tba'
 
 const MOVIE_COMPARATORS: Record<MovieSort, (a: Movie, b: Movie) => number> = {
   'title-asc': byTitleAsc,
   'title-desc': byTitleDesc,
+  'added-desc': byAddedDesc,
+  'rating-desc': byRatingDesc<Movie>(movieRating),
   'year-desc': byYearDesc,
   'year-asc': byYearAsc,
   'runtime-desc': (a, b) => (b.runtime ?? 0) - (a.runtime ?? 0) || byTitleAsc(a, b),
@@ -122,6 +144,8 @@ const MOVIE_COMPARATORS: Record<MovieSort, (a: Movie, b: Movie) => number> = {
 const MOVIE_SORT_OPTIONS: ReadonlyArray<FilterOption<MovieSort>> = [
   { value: 'title-asc',    label: 'Title (A–Z)' },
   { value: 'title-desc',   label: 'Title (Z–A)' },
+  { value: 'added-desc',   label: 'Recently added' },
+  { value: 'rating-desc',  label: 'Rating' },
   { value: 'year-desc',    label: 'Year (newest)' },
   { value: 'year-asc',     label: 'Year (oldest)' },
   { value: 'runtime-desc', label: 'Runtime (longest)' },
@@ -143,6 +167,7 @@ export function MoviesTab() {
   const [letter, setLetter] = useState<LibraryLetter>('all')
   const [sort, setSort] = useState<MovieSort>('title-asc')
   const [status, setStatus] = useState<MovieStatus>('all')
+  const [genre, setGenre] = useState('all')
   const debouncedQuery = useDebounced(query, 300)
   const search = useMovieSearch(mode === 'discover' ? debouncedQuery : '')
   const library = useRadarrLibrary()
@@ -194,6 +219,11 @@ export function MoviesTab() {
     viewing && typeof viewing.tmdbId === 'number'
       ? localMovieIdx.data?.get(viewing.tmdbId)
       : undefined
+  // A Radarr title's local watch row (posters' watched badge / resume bar).
+  const movieWatch = (tmdbId: number) => {
+    const id = localMovieIdx.data?.get(tmdbId)
+    return id == null ? undefined : mediaWatch.data?.get(`movie:${id}`)
+  }
   // Whether the viewed IN-LIBRARY movie has anything to play at all. An
   // announced/unreleased title is tracked by Radarr with no file — every
   // play affordance must give way to an availability note for it.
@@ -268,10 +298,52 @@ export function MoviesTab() {
   )
   // Members whose policy denies library management get no Add (it 403s).
   const sections = useSectionAccess()
+  const libraryGenres = useMemo(() => distinctGenres(visibleLibrary), [visibleLibrary])
+  // Show the library grid narrowed to one genre, clearing the other filters so
+  // they can't AND-strand it (Apple's genre route).
+  const showGenre = (g: string) =>
+    withViewTransition(() => {
+      setQuery('')
+      setLetter('all')
+      setStatus('all')
+      setGenre(g)
+      setMode('library')
+    })
+
+  // Browse mode (Apple's Recommended): shelves over the rating-capped titles
+  // that have a file to play.
+  const browseRows = useMemo((): BrowseRow[] => {
+    if (mode !== 'browse') return []
+    const available = (visibleLibrary ?? []).filter((m) => movieAvailability(m) === 'playable')
+    const card = (m: Movie, progress?: number): Card => ({
+      key: String(m.id),
+      title: m.title,
+      meta: m.year ? String(m.year) : null,
+      poster: pickLibraryPoster(m),
+      progress,
+      onOpen: () => setViewing(m),
+    })
+    const byTmdb = new Map(available.map((m) => [m.tmdbId, m]))
+    const tmdbOf = new Map([...(localMovieIdx.data ?? [])].map(([tmdb, id]) => [id, tmdb]))
+    const resume = continueWatching(mediaWatch.data?.values() ?? []).flatMap((r) => {
+      const m = r.mediaKind === 'movie' ? byTmdb.get(tmdbOf.get(r.mediaId) ?? -1) : undefined
+      return m ? [card(m, watchFraction(r) || undefined)] : []
+    })
+    const today = new Date().toISOString().slice(0, 10)
+    const shelves = browseShelves(available, {
+      noun: 'movies',
+      rating: movieRating,
+      released: (m) => releaseDay([m.digitalRelease, m.physicalRelease, m.inCinemas], today),
+    })
+    return [
+      ...(resume.length ? [{ key: 'resume', label: 'Continue watching', cards: resume }] : []),
+      ...shelves.map((sh) => ({ key: sh.key, label: sh.label, cards: sh.items.map((m) => card(m)) })),
+    ]
+  }, [mode, visibleLibrary, localMovieIdx.data, mediaWatch.data])
 
   const textFilteredLibrary = useMemo(
-    () => filterAndSortLibrary(visibleLibrary, { query, status, comparator: MOVIE_COMPARATORS[sort] }),
-    [visibleLibrary, query, status, sort],
+    () => filterAndSortLibrary(visibleLibrary, { query, status, genre, comparator: MOVIE_COMPARATORS[sort] }),
+    [visibleLibrary, query, status, genre, sort],
   )
 
   const availableLetters = useMemo(
@@ -412,6 +484,14 @@ export function MoviesTab() {
             </div>
           )}
         </>
+      ) : mode === 'browse' ? (
+        <LibraryBrowse
+          loading={library.isPending}
+          rows={browseRows}
+          genres={libraryGenres}
+          onGenre={showGenre}
+          emptyHint={library.error ? "Couldn't load your Radarr library." : 'Your library is empty. Add something from Discover.'}
+        />
       ) : (
         <>
           {!library.isPending && !library.error && (visibleLibrary?.length ?? 0) > 0 && (
@@ -425,6 +505,12 @@ export function MoviesTab() {
                 statusValue={status}
                 onStatusChange={(next) => {
                   setStatus(next)
+                  setLetter('all')
+                }}
+                genreOptions={libraryGenres}
+                genreValue={genre}
+                onGenreChange={(next) => {
+                  setGenre(next)
                   setLetter('all')
                 }}
               />
@@ -441,9 +527,11 @@ export function MoviesTab() {
           <LibraryResults
             query={query}
             letter={letter}
+            genre={genre}
             loading={library.isPending}
             error={library.error}
             items={filteredLibrary}
+            watchOf={(m) => movieWatch(m.tmdbId)}
             onCardClick={handleLibraryClick}
           />
         </>
@@ -455,6 +543,8 @@ export function MoviesTab() {
           onChange={(next) => {
             setQuery(next)
             setLetter('all')
+            // Shelves can't be searched: typing searches the library grid.
+            if (mode === 'browse') setMode('library')
           }}
           placeholder={placeholder}
           ariaLabel="Search movies"
@@ -499,6 +589,14 @@ export function MoviesTab() {
           viewing.certification,
         ].filter((x): x is string => Boolean(x)) : []}
         genres={viewing?.genres}
+        onGenreClick={(g) => {
+          // Genres can come from a Discover result that no local title carries;
+          // an empty grid would strand the user, so say so instead.
+          const match = libraryGenres.find((x) => x.toLowerCase() === g.toLowerCase())
+          handleDetailClose()
+          if (match) showGenre(match)
+          else setToast(`No ${g} movies in your library`)
+        }}
         rating={viewing ? movieRatingPieces(viewing, viewingRatings) : undefined}
         overview={viewing?.overview}
         meta={viewing ? buildMovieMeta(viewing) : []}
@@ -535,6 +633,7 @@ export function MoviesTab() {
               }
             : undefined
         }
+        playDirectLabel={viewing ? resumeLabel(movieWatch(viewing.tmdbId)) : undefined}
         onAdd={sections.arr && viewing && !('id' in viewing) ? () => {
           const item = viewing as MovieSearchResult
           setViewing(null)
@@ -640,13 +739,15 @@ function DiscoverResults({ query, loading, error, results, libraryByTmdb, onCard
 type LibraryProps = {
   query: string
   letter: LibraryLetter
+  genre: string
   loading: boolean
   error: unknown
   items: Movie[]
+  watchOf: (m: Movie) => WatchEntry | undefined
   onCardClick: (m: Movie) => void
 }
 
-function LibraryResults({ query, letter, loading, error, items, onCardClick }: LibraryProps) {
+function LibraryResults({ query, letter, genre, loading, error, items, watchOf, onCardClick }: LibraryProps) {
   const ratings = useRatings(items.map((i) => i.imdbId))
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
@@ -658,11 +759,13 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
     )
   }
   if (items.length === 0) {
-    const emptyMsg = query.trim()
-      ? 'Nothing in your library matches.'
-      : letter !== 'all'
-        ? `Nothing under ${letter}.`
-        : 'Your library is empty. Add something from Discover.'
+    const emptyMsg = genre !== 'all'
+      ? `No ${genre} movies ${query.trim() ? 'match your search' : 'in your library'}.`
+      : query.trim()
+        ? 'Nothing in your library matches.'
+        : letter !== 'all'
+          ? `Nothing under ${letter}.`
+          : 'Your library is empty. Add something from Discover.'
     return (
       <div className="tv-tab__empty">
         <EmeraldMark width={56} variant="single" />
@@ -674,7 +777,8 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
   return (
     <ResultGrid>
       {items.map((m) => {
-        const meta = [m.studio, fmtRuntime(m.runtime), m.status]
+        // "Missing": released and tracked, but no file on disk yet.
+        const meta = [m.studio, fmtRuntime(m.runtime), m.status, movieAvailability(m) === 'missing' ? 'Missing' : null]
           .filter((x): x is string => Boolean(x))
           .join(' · ')
         return (
@@ -686,6 +790,7 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
             meta={meta || undefined}
             overview={m.overview}
             rating={movieRatingPieces(m, ratings)}
+            {...watchBadge(watchOf(m))}
             onClick={() => onCardClick(m)}
           />
         )

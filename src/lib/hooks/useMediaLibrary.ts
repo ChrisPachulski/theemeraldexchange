@@ -23,7 +23,7 @@ export function useLocalMovieIndex(enabled: boolean) {
 }
 
 // tmdbId -> local media-core show id, for matching a discover/Sonarr show to a
-// locally-available one (powers the show DetailModal "Watch episodes" button).
+// locally-available one (powers the show detail's Resume/Play and episode rows).
 // Paged (allShows) for the same whole-library reason as useLocalMovieIndex.
 export function useLocalShowIndex(enabled: boolean) {
   return useQuery({

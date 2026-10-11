@@ -1,6 +1,6 @@
 import './ModeToggle.css'
 
-export type Mode = 'discover' | 'library'
+export type Mode = 'discover' | 'browse' | 'library'
 
 type Props = {
   mode: Mode
@@ -19,6 +19,15 @@ export function ModeToggle({ mode, onChange, libraryCount }: Props) {
         onClick={() => onChange('discover')}
       >
         Discover
+      </button>
+      <button
+        type="button"
+        role="tab"
+        aria-selected={mode === 'browse'}
+        className={`mode-toggle__option${mode === 'browse' ? ' mode-toggle__option--active' : ''}`}
+        onClick={() => onChange('browse')}
+      >
+        Browse
       </button>
       <button
         type="button"

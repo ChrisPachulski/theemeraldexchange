@@ -59,8 +59,8 @@ type Props = {
 
 /**
  * Episode picker overlay. Reuses the shared .iptv-player-modal chrome; lists a
- * media-core show's episodes and plays the chosen one. Used by the Media tab and
- * the TV-show detail modal's "Watch episodes" action.
+ * media-core show's episodes and plays the chosen one. Used by Live search's
+ * library hits (the TV detail plays from its own season browser).
  */
 export function EpisodePicker({ showId, showTitle, onClose, onPlay }: Props) {
   const episodes = useMediaEpisodes(showId)

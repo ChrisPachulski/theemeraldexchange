@@ -251,6 +251,12 @@
   border-radius: var(--r-pod);
 }
 
+/* Tappable pill: opens the library filtered to the genre. */
+button.detail__genre:hover {
+  color: var(--emerald);
+  border-color: var(--emerald);
+}
+
 /* Body — scrollable region between hero and footer. */
 .detail__body {
   position: relative;
@@ -485,6 +491,54 @@
   color: var(--text-subtle);
   white-space: nowrap;
   font-feature-settings: 'tnum' 1;
+}
+
+/* A locally downloaded episode: the whole row plays it. */
+.detail__episode--play {
+  width: 100%;
+  text-align: left;
+  border-radius: 0 var(--r-sm) var(--r-sm) 0;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.detail__episode--play:hover,
+.detail__episode--play:focus-visible {
+  background: color-mix(in oklch, var(--emerald) 12%, transparent);
+}
+
+.detail__episode-tag {
+  margin-left: var(--s-2);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  letter-spacing: var(--tr-hud);
+  text-transform: uppercase;
+  color: var(--emerald);
+}
+
+.detail__episode-overview {
+  grid-column: 2 / -1;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--t-xs);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Resume bar while the episode is part-watched. */
+.detail__episode-progress {
+  grid-column: 2 / -1;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.detail__episode-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--emerald);
 }
 
 .detail__season-num {

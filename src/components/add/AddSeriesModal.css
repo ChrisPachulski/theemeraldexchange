@@ -244,6 +244,14 @@
   border-radius: var(--r-md);
 }
 
+/* Quality/Folder options failed to load: the notice carries a Retry. */
+.add-series__load-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+
 .add-series__actions {
   display: flex;
   justify-content: flex-end;

@@ -6,7 +6,10 @@ import { MediaCard } from '../search/MediaCard'
 import { ModeToggle, type Mode } from '../search/ModeToggle'
 import { LibraryAlphabet, libraryBucket, type LibraryLetter } from '../library/LibraryAlphabet'
 import { LibraryFilters, type FilterOption } from '../library/LibraryFilters'
-import { DetailModal, type DetailMeta } from '../detail/DetailModal'
+import { LibraryBrowse, type BrowseRow } from '../library/LibraryBrowse'
+import type { Card } from '../home/HomeShelves'
+import { continueWatching, episodeLabel as resumeEpisodeLabel, titleKey } from '../home/shelves'
+import { DetailModal, type DetailMeta, type SeasonEpisode } from '../detail/DetailModal'
 import { ArrAdvancedPanel } from '../detail/ArrAdvancedPanel'
 import { AddSeriesModal } from '../add/AddSeriesModal'
 import { Toast } from '../toast/Toast'
@@ -25,12 +28,14 @@ import { useRatingGate, useSectionAccess } from '../../lib/hooks/usePolicy'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
 import { resumePosition, useLocalShowIndex, useMediaEpisodes, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
 import { MediaPlayer } from '../media/MediaPlayer'
-import { EpisodePicker, episodeLabel } from '../media/EpisodePicker'
+import { episodeLabel } from '../media/EpisodePicker'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { seriesAvailability, sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
+import type { MediaEpisode } from '../../lib/api/media'
+import { seriesPlayback, watchBadge, watchFraction } from '../../lib/watchState'
 import { withViewTransition } from '../../lib/viewTransition'
 import { useIntent } from '../../lib/router'
 import {
@@ -39,6 +44,11 @@ import {
   byTitleDesc,
   byYearAsc,
   byYearDesc,
+  byAddedDesc,
+  byRatingDesc,
+  browseShelves,
+  distinctGenres,
+  seriesRating,
 } from '../../lib/librarySort'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
 import { pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
@@ -78,7 +88,12 @@ function buildSeriesMeta(item: SeriesSearchResult | Series): DetailMeta[] {
   if (stats?.seasonCount) rows.push({ label: 'Seasons', value: String(stats.seasonCount) })
   if (stats?.episodeCount) {
     const total = stats.totalEpisodeCount ?? stats.episodeCount
-    rows.push({ label: 'Episodes', value: total === stats.episodeCount ? String(stats.episodeCount) : `${stats.episodeCount} of ${total}` })
+    // In the library: downloaded of total, as Apple shows it. A Discover
+    // result has nothing on disk, so it keeps aired of total.
+    const value = 'id' in item
+      ? `${stats.episodeFileCount ?? 0} of ${total}`
+      : total === stats.episodeCount ? String(total) : `${stats.episodeCount} of ${total}`
+    rows.push({ label: 'Episodes', value })
   }
   if (stats?.sizeOnDisk && stats.sizeOnDisk > 0) {
     const gb = stats.sizeOnDisk / (1024 ** 3)
@@ -98,12 +113,14 @@ function seriesRatingPieces(item: SeriesSearchResult, ratings: RatingsMap): Rati
   return [{ kind: 'tvdb', value: r.value.toFixed(1), score: r.value, label: `TVDB ${r.value.toFixed(1)}${votes}` }]
 }
 
-type TvSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'network'
+type TvSort = 'title-asc' | 'title-desc' | 'added-desc' | 'rating-desc' | 'year-desc' | 'year-asc' | 'network'
 type TvStatus = 'all' | 'continuing' | 'ended' | 'upcoming'
 
 const TV_COMPARATORS: Record<TvSort, (a: Series, b: Series) => number> = {
   'title-asc': byTitleAsc,
   'title-desc': byTitleDesc,
+  'added-desc': byAddedDesc,
+  'rating-desc': byRatingDesc<Series>(seriesRating),
   'year-desc': byYearDesc,
   'year-asc': byYearAsc,
   network: (a, b) =>
@@ -111,11 +128,13 @@ const TV_COMPARATORS: Record<TvSort, (a: Series, b: Series) => number> = {
 }
 
 const TV_SORT_OPTIONS: ReadonlyArray<FilterOption<TvSort>> = [
-  { value: 'title-asc',  label: 'Title (A–Z)' },
-  { value: 'title-desc', label: 'Title (Z–A)' },
-  { value: 'year-desc',  label: 'Year (newest)' },
-  { value: 'year-asc',   label: 'Year (oldest)' },
-  { value: 'network',    label: 'Network' },
+  { value: 'title-asc',   label: 'Title (A–Z)' },
+  { value: 'title-desc',  label: 'Title (Z–A)' },
+  { value: 'added-desc',  label: 'Recently added' },
+  { value: 'rating-desc', label: 'Rating' },
+  { value: 'year-desc',   label: 'Year (newest)' },
+  { value: 'year-asc',    label: 'Year (oldest)' },
+  { value: 'network',     label: 'Network' },
 ]
 
 const TV_STATUS_OPTIONS: ReadonlyArray<FilterOption<TvStatus>> = [
@@ -131,6 +150,7 @@ export function TvTab() {
   const [letter, setLetter] = useState<LibraryLetter>('all')
   const [sort, setSort] = useState<TvSort>('title-asc')
   const [status, setStatus] = useState<TvStatus>('all')
+  const [genre, setGenre] = useState('all')
   const debouncedQuery = useDebounced(query, 300)
   const search = useSeriesSearch(mode === 'discover' ? debouncedQuery : '')
   const library = useSonarrLibrary()
@@ -153,8 +173,7 @@ export function TvTab() {
   // modal uses), loaded only when admin so non-admins pay nothing.
   const sonarrProfiles = useSonarrProfiles()
   const sonarrFolders = useSonarrRootFolders()
-  // In-browser playback of a locally-available show: pick an episode, then play.
-  const [pickShow, setPickShow] = useState<{ id: number; title: string } | null>(null)
+  // In-browser playback of a locally-available show's episode.
   const [playingEpisode, setPlayingEpisode] = useState<{
     id: number
     title: string
@@ -187,6 +206,30 @@ export function TvTab() {
     viewing && typeof viewing.tmdbId === 'number'
       ? localShowIdx.data?.get(viewing.tmdbId)
       : undefined
+  // The viewed show's local episodes: the one-tap Resume/Play target, and the
+  // season browser's play buttons and watch state (joined by season:episode).
+  const viewingEpisodes = useMediaEpisodes(localShowId ?? null)
+  const playback = useMemo(
+    () => seriesPlayback(viewingEpisodes.data?.items ?? [], mediaWatch.data),
+    [viewingEpisodes.data, mediaWatch.data],
+  )
+  const localByCode = useMemo(
+    () => new Map((viewingEpisodes.data?.items ?? []).map((e) => [`${e.season}:${e.episode}`, e])),
+    [viewingEpisodes.data],
+  )
+  const playTarget = playback.target
+  const playEpisode = (ep: MediaEpisode) => {
+    if (!viewing || localShowId == null) return
+    const showTitle = viewing.title
+    setViewing(null)
+    setPlayingEpisode({
+      id: ep.id,
+      title: episodeLabel(showTitle, ep),
+      startPositionSecs: resumePosition(mediaWatch.data?.get(`episode:${ep.id}`)),
+      showId: localShowId,
+      showTitle,
+    })
+  }
   // Whether the viewed IN-LIBRARY show has anything to play at all. A
   // tracked-but-unaired show has zero episode files — play affordances
   // give way to an availability note for it (movieAvailability twin).
@@ -254,7 +297,7 @@ export function TvTab() {
   const viewingId = viewing && 'id' in viewing ? viewing.id : null
   const episodes = useSonarrEpisodes(viewingId)
   const episodesBySeason = useMemo(() => {
-    const map = new Map<number, Array<{ episodeNumber: number; title: string; airDate?: string; hasFile?: boolean }>>()
+    const map = new Map<number, SeasonEpisode[]>()
     if (!episodes.data) return map
     for (const ep of episodes.data) {
       const list = map.get(ep.seasonNumber) ?? []
@@ -263,6 +306,7 @@ export function TvTab() {
         title: ep.title,
         airDate: ep.airDate ?? ep.airDateUtc,
         hasFile: ep.hasFile,
+        overview: ep.overview,
       })
       map.set(ep.seasonNumber, list)
     }
@@ -281,13 +325,52 @@ export function TvTab() {
   )
   // Members whose policy denies library management get no Add (it 403s).
   const sections = useSectionAccess()
+  const libraryGenres = useMemo(() => distinctGenres(visibleLibrary), [visibleLibrary])
+  // Show the library grid narrowed to one genre, clearing the other filters so
+  // they can't AND-strand it (Apple's genre route).
+  const showGenre = (g: string) =>
+    withViewTransition(() => {
+      setQuery('')
+      setLetter('all')
+      setStatus('all')
+      setGenre(g)
+      setMode('library')
+    })
+
+  // Browse mode (Apple's Recommended): shelves over the rating-capped shows
+  // with an episode on disk. Resume rows join by show title, as Home does.
+  const browseRows = useMemo((): BrowseRow[] => {
+    if (mode !== 'browse') return []
+    const available = (visibleLibrary ?? []).filter((s) => seriesAvailability(s) === 'playable')
+    const card = (s: Series, meta?: string | null, progress?: number): Card => ({
+      key: String(s.id),
+      title: s.title,
+      meta: meta ?? (s.year ? String(s.year) : null),
+      poster: pickLibraryPoster(s),
+      progress,
+      onOpen: () => setViewing(s),
+    })
+    const byTitle = new Map(available.map((s) => [titleKey(s.title), s]))
+    const seen = new Set<number>()
+    const resume = continueWatching(mediaWatch.data?.values() ?? []).flatMap((r) => {
+      const s = r.mediaKind === 'episode' && r.showTitle ? byTitle.get(titleKey(r.showTitle)) : undefined
+      if (!s || seen.has(s.id)) return []
+      seen.add(s.id)
+      return [card(s, resumeEpisodeLabel(r), watchFraction(r) || undefined)]
+    })
+    const shelves = browseShelves(available, { noun: 'shows', rating: seriesRating })
+    return [
+      ...(resume.length ? [{ key: 'resume', label: 'Continue watching', cards: resume }] : []),
+      ...shelves.map((sh) => ({ key: sh.key, label: sh.label, cards: sh.items.map((s) => card(s)) })),
+    ]
+  }, [mode, visibleLibrary, mediaWatch.data])
 
   // Text + status filter, then sort. Article-stripped sort key is used
   // for title sorts (Plex behavior — "The Mandalorian" sorts under M).
   // Alphabet bucket runs against the same key so the bar matches the sort.
   const textFilteredLibrary = useMemo(
-    () => filterAndSortLibrary(visibleLibrary, { query, status, comparator: TV_COMPARATORS[sort] }),
-    [visibleLibrary, query, status, sort],
+    () => filterAndSortLibrary(visibleLibrary, { query, status, genre, comparator: TV_COMPARATORS[sort] }),
+    [visibleLibrary, query, status, genre, sort],
   )
 
   const availableLetters = useMemo(
@@ -429,6 +512,14 @@ export function TvTab() {
             </div>
           )}
         </>
+      ) : mode === 'browse' ? (
+        <LibraryBrowse
+          loading={library.isPending}
+          rows={browseRows}
+          genres={libraryGenres}
+          onGenre={showGenre}
+          emptyHint={library.error ? "Couldn't load your Sonarr library." : 'Your library is empty. Add something from Discover.'}
+        />
       ) : (
         <>
           {!library.isPending && !library.error && (visibleLibrary?.length ?? 0) > 0 && (
@@ -442,6 +533,12 @@ export function TvTab() {
                 statusValue={status}
                 onStatusChange={(next) => {
                   setStatus(next)
+                  setLetter('all')
+                }}
+                genreOptions={libraryGenres}
+                genreValue={genre}
+                onGenreChange={(next) => {
+                  setGenre(next)
                   setLetter('all')
                 }}
               />
@@ -458,6 +555,7 @@ export function TvTab() {
           <LibraryResults
             query={query}
             letter={letter}
+            genre={genre}
             loading={library.isPending}
             error={library.error}
             items={filteredLibrary}
@@ -472,6 +570,8 @@ export function TvTab() {
           onChange={(next) => {
             setQuery(next)
             setLetter('all')
+            // Shelves can't be searched: typing searches the library grid.
+            if (mode === 'browse') setMode('library')
           }}
           placeholder={placeholder}
           ariaLabel="Search TV shows"
@@ -515,6 +615,14 @@ export function TvTab() {
           viewing.certification,
         ].filter((x): x is string => Boolean(x)) : []}
         genres={viewing?.genres}
+        onGenreClick={(g) => {
+          // Genres can come from a Discover result that no local title carries;
+          // an empty grid would strand the user, so say so instead.
+          const match = libraryGenres.find((x) => x.toLowerCase() === g.toLowerCase())
+          handleDetailClose()
+          if (match) showGenre(match)
+          else setToast(`No ${g} shows in your library`)
+        }}
         rating={viewing ? seriesRatingPieces(viewing, viewingRatings) : undefined}
         overview={viewing?.overview}
         meta={viewing ? buildSeriesMeta(viewing) : []}
@@ -543,15 +651,12 @@ export function TvTab() {
               : null
         }
         onPlayDirect={
-          viewing && localShowId != null
-            ? () => {
-                const t = viewing.title
-                setViewing(null)
-                setPickShow({ id: localShowId, title: t })
-              }
-            : undefined
+          // Apple's series play: resume the latest unfinished episode, else S1E1.
+          playTarget ? () => playEpisode(playTarget) : undefined
         }
-        playDirectLabel="Watch episodes here"
+        playDirectLabel={
+          playTarget ? `${playback.isResume ? 'Resume' : 'Play'} S${playTarget.season}E${playTarget.episode}` : undefined
+        }
         seasons={viewing && 'id' in viewing && viewing.seasons ? viewing.seasons.map((s) => {
           const eps = episodesBySeason.get(s.seasonNumber)
           const firstAired = eps && eps.length > 0
@@ -567,9 +672,17 @@ export function TvTab() {
             totalEpisodeCount: s.statistics?.totalEpisodeCount ?? 0,
             episodeFileCount: s.statistics?.episodeFileCount ?? 0,
             airDate: firstAired,
-            episodes: eps,
+            episodes: eps?.map((e) => {
+              const local = localByCode.get(`${s.seasonNumber}:${e.episodeNumber}`)
+              if (!local) return e
+              return { ...e, ...watchBadge(mediaWatch.data?.get(`episode:${local.id}`)), onPlay: () => playEpisode(local) }
+            }),
+            watchedCount: viewingEpisodes.data?.items.filter(
+              (e) => e.season === s.seasonNumber && mediaWatch.data?.get(`episode:${e.id}`)?.completed,
+            ).length,
           }
         }) : undefined}
+        defaultSeason={playback.defaultSeason}
         onAddSeason={isAdmin && viewing && 'id' in viewing ? (seasonNumber) => {
           const seriesId = (viewing as Series).id
           monitorSeasonMutation.mutate({ seriesId, seasonNumber })
@@ -607,25 +720,15 @@ export function TvTab() {
         autoShowAdvanced={viewing !== null && 'id' in viewing && transient?.id === viewing.id}
       />
 
-      {pickShow && (
-        <EpisodePicker
-          showId={pickShow.id}
-          showTitle={pickShow.title}
-          onClose={() => setPickShow(null)}
-          onPlay={(ep, label) => {
-            const startPositionSecs = resumePosition(mediaWatch.data?.get(`episode:${ep.id}`))
-            setPickShow(null)
-            setPlayingEpisode({ id: ep.id, title: label, startPositionSecs, showId: pickShow.id, showTitle: pickShow.title })
-          }}
-        />
-      )}
       {playingEpisode && (
-        // Not keyed by episode: the player swaps episodes in place.
+        // Not keyed by episode: the player swaps episodes in place. The pick
+        // (Resume SxEy or an episode row) is already the resume choice.
         <MediaPlayer
           kind="episode"
           id={playingEpisode.id}
           title={playingEpisode.title}
           startPositionSecs={playingEpisode.startPositionSecs}
+          autoResume
           episodes={playingEpisodes.data?.items}
           onPlayEpisode={(ep) =>
             setPlayingEpisode((cur) =>
@@ -697,13 +800,14 @@ function DiscoverResults({ query, loading, error, results, libraryByTvdb, onCard
 type LibraryProps = {
   query: string
   letter: LibraryLetter
+  genre: string
   loading: boolean
   error: unknown
   items: Series[]
   onCardClick: (s: Series) => void
 }
 
-function LibraryResults({ query, letter, loading, error, items, onCardClick }: LibraryProps) {
+function LibraryResults({ query, letter, genre, loading, error, items, onCardClick }: LibraryProps) {
   const ratings = useRatings(items.map((i) => i.imdbId))
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
@@ -715,11 +819,13 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
     )
   }
   if (items.length === 0) {
-    const emptyMsg = query.trim()
-      ? 'Nothing in your library matches.'
-      : letter !== 'all'
-        ? `Nothing under ${letter}.`
-        : 'Your library is empty. Add something from Discover.'
+    const emptyMsg = genre !== 'all'
+      ? `No ${genre} shows ${query.trim() ? 'match your search' : 'in your library'}.`
+      : query.trim()
+        ? 'Nothing in your library matches.'
+        : letter !== 'all'
+          ? `Nothing under ${letter}.`
+          : 'Your library is empty. Add something from Discover.'
     return (
       <div className="tv-tab__empty">
         <EmeraldMark width={56} variant="single" />
@@ -731,7 +837,8 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
   return (
     <ResultGrid>
       {items.map((s) => {
-        const meta = [s.network, s.status]
+        // "Missing": aired but nothing downloaded yet.
+        const meta = [s.network, s.status, seriesAvailability(s) === 'missing' ? 'Missing' : null]
           .filter((x): x is string => Boolean(x))
           .join(' · ')
         return (

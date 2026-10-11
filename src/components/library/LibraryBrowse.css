@@ -1,0 +1,12 @@
+/* Browse mode reuses Home's frosted shelf band (HomeTab.css); the tab's own
+   top padding already clears the HUD pod. */
+.home__shelves.lib-browse {
+  margin-top: 0;
+}
+
+.lib-browse__genres {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  padding-bottom: var(--s-2);
+}

@@ -36,6 +36,14 @@ export type SeasonEpisode = {
   title: string
   airDate?: string
   hasFile?: boolean
+  /** Sonarr synopsis, clamped to two lines. */
+  overview?: string
+  /** Downloaded locally: the row becomes a button that plays it. */
+  onPlay?: () => void
+  /** Local playback finished. */
+  watched?: boolean
+  /** Local playback in progress (0..1): a resume bar under the row. */
+  progress?: number | null
 }
 
 export type SeasonRow = {
@@ -51,6 +59,9 @@ export type SeasonRow = {
   airDate?: string
   /** Per-episode list for the disclosure. */
   episodes?: SeasonEpisode[]
+  /** Episodes watched to the end, when the show plays locally; drives the
+   *  "N unwatched" count. */
+  watchedCount?: number
 }
 
 type Props = {
@@ -68,6 +79,9 @@ type Props = {
   metaStrip: string[]
   /** Genres → rendered as inline pills. */
   genres?: string[]
+  /** Makes each genre pill a button: the tab closes the detail and filters
+   *  its library to that genre. */
+  onGenreClick?: (genre: string) => void
   /** Plot / summary text. */
   overview?: string
   /** Detail key/value rows for the metadata block. */
@@ -97,6 +111,9 @@ type Props = {
   onAddSeason?: (seasonNumber: number) => void
   /** seasonNumber currently in-flight (UI disables that row's button). */
   addingSeason?: number | null
+  /** Season the browser opens on (the resume target's, else the last
+   *  watched); also opens the Seasons section. */
+  defaultSeason?: number | null
   /** Movie-only: trigger a manual upgrade search. Admin + in-library. */
   onUpgrade?: () => void
   /** Whether the upgrade mutation is in flight (disables the button). */
@@ -109,8 +126,8 @@ type Props = {
    *  primary "Play Direct here" button that streams it in-browser (direct-play
    *  or transcoded HLS) instead of bouncing to Plex. */
   onPlayDirect?: () => void
-  /** Label for the direct-play button (e.g. "Play Direct here" for a movie,
-   *  "Watch episodes" for a show). Defaults to "Play Direct here". */
+  /** Label for the direct-play button (e.g. "Resume · 42 min left" for a
+   *  movie, "Resume S1E2" for a show). Defaults to "Play Direct here". */
   playDirectLabel?: string
   /** In library but nothing exists to play yet (unreleased title, or
    *  released but not downloaded). Rendered as a non-interactive status
@@ -141,6 +158,7 @@ export function DetailModal({
   year,
   metaStrip,
   genres,
+  onGenreClick,
   overview,
   meta,
   rating,
@@ -154,6 +172,7 @@ export function DetailModal({
   seasons,
   onAddSeason,
   addingSeason,
+  defaultSeason,
   onUpgrade,
   upgrading,
   playUrl,
@@ -262,9 +281,17 @@ export function DetailModal({
             {rating && rating.length > 0 && <RatingChips pieces={rating} size="lg" />}
             {genres && genres.length > 0 && (
               <ul className="detail__genres">
-                {genres.map((g) => (
-                  <li key={g} className="detail__genre">{g}</li>
-                ))}
+                {genres.map((g) =>
+                  onGenreClick ? (
+                    <li key={g}>
+                      <button type="button" className="detail__genre" onClick={() => onGenreClick(g)}>
+                        {g}
+                      </button>
+                    </li>
+                  ) : (
+                    <li key={g} className="detail__genre">{g}</li>
+                  ),
+                )}
               </ul>
             )}
           </div>
@@ -293,7 +320,7 @@ export function DetailModal({
           )}
 
           {inLibrary && seasons && seasons.length > 0 && (
-            <details className="detail__section detail__seasons-disclosure">
+            <details className="detail__section detail__seasons-disclosure" open={defaultSeason != null}>
               <summary className="detail__cast-summary">
                 <span className="detail__section-title detail__cast-summary-title">Seasons</span>
                 <span className="detail__cast-count">
@@ -321,16 +348,18 @@ export function DetailModal({
                       aired && !complete && onAddSeason
                     const triggerLabel = s.monitored ? 'Get missing' : 'Add'
                     const isAdding = addingSeason === s.seasonNumber
-                    const status = s.monitored
-                      ? complete
-                        ? 'Complete'
-                        : `Monitored · ${s.episodeFileCount} of ${s.episodeCount}`
-                      : aired
-                        ? `Unmonitored · ${s.episodeCount} aired`
-                        : 'Upcoming'
+                    // Apple's season card: downloaded of total, then what is
+                    // left to watch when the show plays locally.
+                    const total = Math.max(s.totalEpisodeCount || s.episodeCount, s.episodeFileCount)
+                    const unwatched = s.watchedCount == null ? null : Math.max(0, total - s.watchedCount)
+                    const status = !aired
+                      ? 'Upcoming'
+                      : `${s.episodeFileCount} of ${total} downloaded${
+                          unwatched == null ? '' : unwatched ? ` · ${unwatched} unwatched` : ' · All watched'
+                        }`
                     return (
                       <li key={s.seasonNumber} className="detail__season-item">
-                        <details className="detail__season-details">
+                        <details className="detail__season-details" open={s.seasonNumber === defaultSeason}>
                           <summary className="detail__season-row">
                             <span className="detail__season-num">Season {s.seasonNumber}</span>
                             <span className="detail__season-air">{fmtAirDate(s.airDate)}</span>
@@ -360,18 +389,40 @@ export function DetailModal({
                                   const future = ep.airDate
                                     ? new Date(ep.airDate).getTime() > Date.now()
                                     : false
-                                  return (
-                                    <li
-                                      key={ep.episodeNumber}
-                                      className={`detail__episode${future ? ' detail__episode--future' : ''}${ep.hasFile ? ' detail__episode--ready' : ''}`}
-                                    >
+                                  const className = `detail__episode${future ? ' detail__episode--future' : ''}${ep.hasFile ? ' detail__episode--ready' : ''}`
+                                  const row = (
+                                    <>
                                       <span className="detail__episode-num">
                                         {String(ep.episodeNumber).padStart(2, '0')}
                                       </span>
-                                      <span className="detail__episode-title">{ep.title}</span>
+                                      <span className="detail__episode-title">
+                                        {ep.title}
+                                        {ep.watched && <span className="detail__episode-tag">Watched</span>}
+                                      </span>
                                       <span className="detail__episode-air">
                                         {fmtAirDate(ep.airDate) ?? '—'}
                                       </span>
+                                      {ep.overview && <span className="detail__episode-overview">{ep.overview}</span>}
+                                      {ep.progress != null && (
+                                        <span className="detail__episode-progress" aria-hidden="true">
+                                          <span style={{ width: `${Math.round(ep.progress * 100)}%` }} />
+                                        </span>
+                                      )}
+                                    </>
+                                  )
+                                  return ep.onPlay ? (
+                                    <li key={ep.episodeNumber}>
+                                      <button
+                                        type="button"
+                                        className={`${className} detail__episode--play`}
+                                        onClick={ep.onPlay}
+                                      >
+                                        {row}
+                                      </button>
+                                    </li>
+                                  ) : (
+                                    <li key={ep.episodeNumber} className={className}>
+                                      {row}
                                     </li>
                                   )
                                 })}
