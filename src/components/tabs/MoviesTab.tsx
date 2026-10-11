@@ -35,6 +35,9 @@ import {
   byTitleDesc,
   byYearAsc,
   byYearDesc,
+  byAddedDesc,
+  byRatingDesc,
+  movieRating,
 } from '../../lib/librarySort'
 import { withViewTransition } from '../../lib/viewTransition'
 import { useIntent } from '../../lib/router'
@@ -105,12 +108,23 @@ function movieRatingPieces(item: MovieSearchResult, ratings: RatingsMap): Rating
   return out
 }
 
-type MovieSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'runtime-desc' | 'runtime-asc' | 'studio'
+type MovieSort =
+  | 'title-asc'
+  | 'title-desc'
+  | 'added-desc'
+  | 'rating-desc'
+  | 'year-desc'
+  | 'year-asc'
+  | 'runtime-desc'
+  | 'runtime-asc'
+  | 'studio'
 type MovieStatus = 'all' | 'released' | 'announced' | 'inCinemas' | 'tba'
 
 const MOVIE_COMPARATORS: Record<MovieSort, (a: Movie, b: Movie) => number> = {
   'title-asc': byTitleAsc,
   'title-desc': byTitleDesc,
+  'added-desc': byAddedDesc,
+  'rating-desc': byRatingDesc<Movie>(movieRating),
   'year-desc': byYearDesc,
   'year-asc': byYearAsc,
   'runtime-desc': (a, b) => (b.runtime ?? 0) - (a.runtime ?? 0) || byTitleAsc(a, b),
@@ -122,6 +136,8 @@ const MOVIE_COMPARATORS: Record<MovieSort, (a: Movie, b: Movie) => number> = {
 const MOVIE_SORT_OPTIONS: ReadonlyArray<FilterOption<MovieSort>> = [
   { value: 'title-asc',    label: 'Title (A–Z)' },
   { value: 'title-desc',   label: 'Title (Z–A)' },
+  { value: 'added-desc',   label: 'Recently added' },
+  { value: 'rating-desc',  label: 'Rating' },
   { value: 'year-desc',    label: 'Year (newest)' },
   { value: 'year-asc',     label: 'Year (oldest)' },
   { value: 'runtime-desc', label: 'Runtime (longest)' },

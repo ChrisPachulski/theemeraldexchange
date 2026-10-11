@@ -39,6 +39,9 @@ import {
   byTitleDesc,
   byYearAsc,
   byYearDesc,
+  byAddedDesc,
+  byRatingDesc,
+  seriesRating,
 } from '../../lib/librarySort'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
 import { pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
@@ -98,12 +101,14 @@ function seriesRatingPieces(item: SeriesSearchResult, ratings: RatingsMap): Rati
   return [{ kind: 'tvdb', value: r.value.toFixed(1), score: r.value, label: `TVDB ${r.value.toFixed(1)}${votes}` }]
 }
 
-type TvSort = 'title-asc' | 'title-desc' | 'year-desc' | 'year-asc' | 'network'
+type TvSort = 'title-asc' | 'title-desc' | 'added-desc' | 'rating-desc' | 'year-desc' | 'year-asc' | 'network'
 type TvStatus = 'all' | 'continuing' | 'ended' | 'upcoming'
 
 const TV_COMPARATORS: Record<TvSort, (a: Series, b: Series) => number> = {
   'title-asc': byTitleAsc,
   'title-desc': byTitleDesc,
+  'added-desc': byAddedDesc,
+  'rating-desc': byRatingDesc<Series>(seriesRating),
   'year-desc': byYearDesc,
   'year-asc': byYearAsc,
   network: (a, b) =>
@@ -111,11 +116,13 @@ const TV_COMPARATORS: Record<TvSort, (a: Series, b: Series) => number> = {
 }
 
 const TV_SORT_OPTIONS: ReadonlyArray<FilterOption<TvSort>> = [
-  { value: 'title-asc',  label: 'Title (A–Z)' },
-  { value: 'title-desc', label: 'Title (Z–A)' },
-  { value: 'year-desc',  label: 'Year (newest)' },
-  { value: 'year-asc',   label: 'Year (oldest)' },
-  { value: 'network',    label: 'Network' },
+  { value: 'title-asc',   label: 'Title (A–Z)' },
+  { value: 'title-desc',  label: 'Title (Z–A)' },
+  { value: 'added-desc',  label: 'Recently added' },
+  { value: 'rating-desc', label: 'Rating' },
+  { value: 'year-desc',   label: 'Year (newest)' },
+  { value: 'year-asc',    label: 'Year (oldest)' },
+  { value: 'network',     label: 'Network' },
 ]
 
 const TV_STATUS_OPTIONS: ReadonlyArray<FilterOption<TvStatus>> = [
