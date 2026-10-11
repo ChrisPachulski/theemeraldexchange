@@ -5,13 +5,17 @@ import {
   createInvite,
   listInvites,
   listMembers,
+  listPolicies,
   revokeInvite,
   revokeMember,
+  setPolicy,
   type CreatedInvite,
   type InviteView,
   type MemberView,
 } from '../../lib/auth'
 import { ApiError } from '../../lib/api/errors'
+import { useLimits } from '../../lib/hooks/useLimits'
+import { OPEN_POLICY, type Policy } from '../../lib/parentalGate'
 import './InvitesPanel.css'
 
 // Owner-only allowlist management: issue single-use invite codes (shown
@@ -23,6 +27,11 @@ import './InvitesPanel.css'
 
 const INVITES_KEY = ['admin', 'invites'] as const
 const MEMBERS_KEY = ['admin', 'members'] as const
+const POLICIES_KEY = ['admin', 'policies'] as const
+
+// Movie ladder only: the gate maps TV ratings onto the same scale, so a
+// PG-13 cap also caps TV at TV-14.
+const CAP_OPTIONS = [null, 'G', 'PG', 'PG-13', 'R'] as const
 
 function fmtDate(iso: string | null): string {
   if (!iso) return 'never'
@@ -57,6 +66,7 @@ export function InvitesPanel() {
   const [copied, setCopied] = useState(false)
   const [label, setLabel] = useState('')
   const [expiresInDays, setExpiresInDays] = useState(14)
+  const [policyTarget, setPolicyTarget] = useState<MemberView | null>(null)
 
   const invitesQ = useQuery({
     queryKey: INVITES_KEY,
@@ -238,6 +248,13 @@ export function InvitesPanel() {
       {/* Members */}
       <section className="invites-panel__section" aria-label="Members">
         <p className="invites-panel__section-title">Members</p>
+        {/* Always shown: Restrictions sits only on non-owner rows, so an
+            owner-only household would otherwise never learn it exists. */}
+        <p className="invites-panel__hint">
+          Parental controls: choose Restrictions on a member to set a rating cap
+          (G to R), limit sections, or mark a kid profile. Owners are never
+          restricted.
+        </p>
         {membersQ.isLoading && <p className="invites-panel__loading">Loading…</p>}
         {!membersQ.isLoading && members.length === 0 && (
           <p className="invites-panel__empty">No members yet.</p>
@@ -259,18 +276,35 @@ export function InvitesPanel() {
                   </span>
                 </div>
                 {!m.revoked_at && !m.is_admin && (
-                  <button
-                    type="button"
-                    className="invites-panel__btn invites-panel__btn--danger"
-                    onClick={() => revokeMem.mutate(m.sub)}
-                    disabled={revokeMem.isPending}
-                  >
-                    Revoke
-                  </button>
+                  <div className="invites-panel__item-actions">
+                    <button
+                      type="button"
+                      className="invites-panel__btn"
+                      aria-expanded={policyTarget?.sub === m.sub}
+                      onClick={() => setPolicyTarget(policyTarget?.sub === m.sub ? null : m)}
+                    >
+                      Restrictions
+                    </button>
+                    <button
+                      type="button"
+                      className="invites-panel__btn invites-panel__btn--danger"
+                      onClick={() => revokeMem.mutate(m.sub)}
+                      disabled={revokeMem.isPending}
+                    >
+                      Revoke
+                    </button>
+                  </div>
                 )}
               </li>
             ))}
           </ul>
+        )}
+        {policyTarget && (
+          <MemberRestrictions
+            key={policyTarget.sub}
+            member={policyTarget}
+            onClose={() => setPolicyTarget(null)}
+          />
         )}
       </section>
 
@@ -280,5 +314,127 @@ export function InvitesPanel() {
         </p>
       )}
     </details>
+  )
+}
+
+// Admin editor for one member's policy. The form only ever starts from a
+// successful read: a failed read shows Retry, never a default-open form
+// whose Save would silently wipe the member's real restrictions.
+function MemberRestrictions({ member, onClose }: { member: MemberView; onClose: () => void }) {
+  // staleTime 0: each open re-reads, so the form never starts from a cache
+  // older than another admin's edit.
+  const q = useQuery({ queryKey: POLICIES_KEY, queryFn: listPolicies, staleTime: 0 })
+  const name = member.display_name || member.sub
+  return (
+    <div className="invites-panel__restrictions" role="group" aria-label={`Restrictions for ${name}`}>
+      <p className="invites-panel__section-title">Restrictions: {name}</p>
+      {q.isFetching ? (
+        <p className="invites-panel__loading">Loading…</p>
+      ) : q.isSuccess ? (
+        <RestrictionsForm sub={member.sub} initial={q.data[member.sub] ?? OPEN_POLICY} onClose={onClose} />
+      ) : (
+        <>
+          <p className="invites-panel__error" role="alert">
+            {errMessage(q.error, 'Could not load restrictions.')}
+          </p>
+          <button type="button" className="invites-panel__btn" onClick={() => void q.refetch()}>
+            Retry
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
+function RestrictionsForm({
+  sub,
+  initial,
+  onClose,
+}: {
+  sub: string
+  initial: Policy
+  onClose: () => void
+}) {
+  const qc = useQueryClient()
+  const limits = useLimits().data
+  const [cap, setCap] = useState(initial.maxContentRating)
+  const [live, setLive] = useState(initial.allowedSections?.live ?? true)
+  const [downloads, setDownloads] = useState(initial.allowedSections?.downloads ?? true)
+  const [arr, setArr] = useState(initial.allowedSections?.arr ?? true)
+  const [kid, setKid] = useState(initial.kid)
+
+  const save = useMutation({
+    mutationFn: () =>
+      setPolicy(sub, {
+        maxContentRating: cap,
+        allowedSections: live && downloads && arr ? null : { live, downloads, arr },
+        kid,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: POLICIES_KEY })
+      onClose()
+    },
+  })
+
+  // A toggle shows only when this server runs that section. A hidden toggle
+  // keeps its loaded value, so Save never changes what the admin can't see.
+  const toggles = [
+    { label: 'Live TV', on: live, set: setLive, show: limits?.iptvEnabled !== false },
+    { label: 'Downloads', on: downloads, set: setDownloads, show: limits?.sabEnabled !== false },
+    {
+      label: 'Library management',
+      on: arr,
+      set: setArr,
+      show: limits?.sonarrEnabled !== false || limits?.radarrEnabled !== false,
+    },
+    { label: 'Kid profile', on: kid, set: setKid, show: true },
+  ]
+
+  return (
+    <>
+      <p className="invites-panel__hint">
+        Titles above the cap are hidden and unplayable for this member. Unrated
+        titles are blocked whenever a cap is set.
+      </p>
+      <div className="invites-panel__item-actions" role="group" aria-label="Content rating cap">
+        {CAP_OPTIONS.map((opt) => (
+          <button
+            key={opt ?? 'none'}
+            type="button"
+            className={`invites-panel__btn${cap === opt ? ' invites-panel__btn--primary' : ''}`}
+            aria-pressed={cap === opt}
+            onClick={() => setCap(opt)}
+          >
+            {opt ?? 'None'}
+          </button>
+        ))}
+      </div>
+      {toggles
+        .filter((t) => t.show)
+        .map((t) => (
+          <label key={t.label} className="invites-panel__toggle">
+            <input type="checkbox" checked={t.on} onChange={(e) => t.set(e.target.checked)} />
+            {t.label}
+          </label>
+        ))}
+      {save.error && (
+        <p className="invites-panel__error" role="alert">
+          {errMessage(save.error, 'Could not save restrictions. Try again.')}
+        </p>
+      )}
+      <div className="invites-panel__item-actions">
+        <button
+          type="button"
+          className="invites-panel__btn invites-panel__btn--primary"
+          onClick={() => save.mutate()}
+          disabled={save.isPending}
+        >
+          {save.isPending ? 'Saving…' : 'Save'}
+        </button>
+        <button type="button" className="invites-panel__btn invites-panel__btn--ghost" onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </>
   )
 }
