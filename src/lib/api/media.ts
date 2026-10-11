@@ -264,6 +264,9 @@ export type PlaybackGrant = {
   sessionId?: string
   /** Sidecar subtitle for the transcode path; `null` when the title has none. */
   subtitle?: PlaybackSubtitle | null
+  /** The session's trick-play (I-frames-only) playlist, which drives the
+   *  scrubber's seek previews. Re-encode sessions only; null otherwise. */
+  trickplayUrl?: string | null
 }
 
 /** An intro/credits window (media-core markers, title-scoped). */
@@ -604,6 +607,7 @@ type RawPlaybackGrant = {
   stopUrl?: string | null
   sessionId?: string
   subtitle?: { url: string; language?: string | null; forced?: boolean } | null
+  trickplayUrl?: string | null
 }
 
 // The grant's url/heartbeatUrl are returned root-relative; resolve them through
@@ -636,6 +640,11 @@ function absolutizeGrant(g: RawPlaybackGrant): PlaybackGrant {
             forced: g.subtitle.forced ?? false,
           }
         : null,
+    trickplayUrl: g.trickplayUrl
+      ? g.trickplayUrl.startsWith('/')
+        ? apiUrl(g.trickplayUrl)
+        : g.trickplayUrl
+      : null,
   }
 }
 

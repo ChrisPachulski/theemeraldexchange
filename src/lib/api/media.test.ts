@@ -257,6 +257,25 @@ describe('mediaApi playback + watch', () => {
     expect(grant.sessionId).toBe('sid')
   })
 
+  it('absolutizes the trick-play playlist url (null when the grant has none)', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({
+        delivery: 'hls',
+        url: '/api/transcode/session/sid/index.m3u8?t=TOK',
+        sessionId: 'sid',
+        durationSecs: 600,
+        trickplayUrl: '/api/transcode/session/sid/iframe.m3u8?t=TOK',
+      }),
+    )
+    const grant = await mediaApi.playback('movie', 7)
+    expect(grant.trickplayUrl).toBe('http://localhost/api/transcode/session/sid/iframe.m3u8?t=TOK')
+
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({ delivery: 'progressive', url: '/api/media/stream/movie/7?t=TOK', durationSecs: 600 }),
+    )
+    expect((await mediaApi.playback('movie', 7)).trickplayUrl).toBeNull()
+  })
+
   it('progressive grant has no stopUrl (nothing to reap)', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonRes({ delivery: 'progressive', url: '/api/media/stream/movie/7?t=TOK', durationSecs: 1200 }),

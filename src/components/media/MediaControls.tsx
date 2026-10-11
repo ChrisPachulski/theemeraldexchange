@@ -1,10 +1,11 @@
 /* eslint-disable react-refresh/only-export-components -- exports the pure
    seek-resolution helper alongside the component so the node vitest env can
    drive it directly; fast-refresh is irrelevant for a pure function. */
-import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useId, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
 import { formatPlaybackTime } from './playbackSession'
 import { EpisodeList } from './EpisodePicker'
 import { PlaybackSettingsFields } from './PlaybackSettings'
+import { parseTrickplayPlaylist, thumbAt, type TrickplayThumb } from './trickplay'
 import type { MediaEpisode, MediaMarker } from '../../lib/api/media'
 import {
   SPEED_OPTIONS,
@@ -177,6 +178,9 @@ const VOLUME_STEP = 0.1
 // On-screen skip buttons (Apple's tvOS chrome: back 10, forward 30).
 const SEEK_BACK_SECS = 10
 const SEEK_FORWARD_SECS = 30
+// The seek preview requests the thumbnail where the pointer rests this long,
+// not every one a fast sweep crosses (each is a fetch over the tunnel).
+const PREVIEW_SETTLE_MS = 80
 
 export function resolveSeekTarget(args: {
   targetSecs: number
@@ -314,6 +318,9 @@ type Props = {
   markers?: ReadonlyArray<MediaMarker>
   /** Episode prev/next + queue; its show also keys the remembered subtitle pick. */
   episodeNav?: EpisodeNav | null
+  /** The grant's trick-play playlist (re-encode sessions): hovering or
+   *  dragging the scrubber previews the frame there. Absent = no preview. */
+  trickplayUrl?: string | null
 }
 
 export function MediaControls({
@@ -326,6 +333,7 @@ export function MediaControls({
   delivery,
   markers,
   episodeNav,
+  trickplayUrl,
 }: Props) {
   const [paused, setPaused] = useState(video.paused)
   const [muted, setMuted] = useState(video.muted)
@@ -458,6 +466,41 @@ export function MediaControls({
 
   const totalSecs =
     totalDurationSecs ?? (elementDurationSecs != null ? offsetSecs + elementDurationSecs : null)
+
+  // Seek previews, as Apple floats the trick-play frame over its transport.
+  // Thumbnails are keyed by the playlist they came from so a new grant never
+  // shows the previous title's frames.
+  const [trickplay, setTrickplay] = useState<{ url: string; thumbs: TrickplayThumb[] } | null>(null)
+  useEffect(() => {
+    if (!trickplayUrl) return undefined
+    let live = true
+    fetch(trickplayUrl)
+      .then((r) => (r.ok ? r.text() : ''))
+      .then((text) => {
+        if (live) setTrickplay({ url: trickplayUrl, thumbs: parseTrickplayPlaylist(text, trickplayUrl) })
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [trickplayUrl])
+  const thumbs = trickplayUrl && trickplay?.url === trickplayUrl ? trickplay.thumbs : null
+  // The pointer over the scrubber: its title time and x within the bar.
+  const [scrubPointer, setScrubPointer] = useState<{ secs: number; x: number } | null>(null)
+  const previewThumb = scrubPointer && thumbs ? thumbAt(thumbs, scrubPointer.secs) : null
+  const [previewSrc, setPreviewSrc] = useState<string | null>(null)
+  useEffect(() => {
+    if (!previewThumb) return undefined
+    const timer = window.setTimeout(() => setPreviewSrc(previewThumb.url), PREVIEW_SETTLE_MS)
+    return () => window.clearTimeout(timer)
+  }, [previewThumb])
+  const trackScrubPointer = (e: PointerEvent<HTMLInputElement>) => {
+    if (!thumbs || totalSecs == null) return
+    const input = e.currentTarget
+    const rect = input.getBoundingClientRect()
+    const fraction = rect.width > 0 ? Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)) : 0
+    setScrubPointer({ secs: fraction * totalSecs, x: input.offsetLeft + fraction * input.offsetWidth })
+  }
 
   const commitSeek = (targetSecs: number) => {
     const resolved = resolveSeekTarget({ targetSecs, offsetSecs, seekableEndSecs })
@@ -731,7 +774,19 @@ export function MediaControls({
           setDragSecs(null)
           if (target != null) commitSeek(target)
         }}
+        onPointerMove={trackScrubPointer}
+        onPointerLeave={() => setScrubPointer(null)}
       />
+      {scrubPointer && previewThumb && (
+        <div
+          className="media-controls__preview"
+          style={{ '--preview-x': `${scrubPointer.x}px` } as CSSProperties}
+          aria-hidden="true"
+        >
+          {previewSrc && <img src={previewSrc} alt="" />}
+          <span>{formatPlaybackTime(scrubPointer.secs)}</span>
+        </div>
+      )}
       <button
         className="media-controls__button"
         type="button"
