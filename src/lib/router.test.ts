@@ -14,7 +14,7 @@ afterEach(() => {
 })
 
 describe('parseHash', () => {
-  const routes: Route[] = ['home', 'tv', 'movies', 'live', 'downloads', 'users']
+  const routes: Route[] = ['home', 'tv', 'movies', 'live', 'downloads', 'users', 'youtube', 'music']
 
   it.each(routes)('resolves canonical #/%s to itself', (route) => {
     stubHash(`#/${route}`)

@@ -12,7 +12,7 @@ import { LinkDeviceModal } from './components/auth/LinkDeviceModal'
 import { clearPendingLinkCode, readPendingLinkCode } from './lib/linkFragment'
 import { AuthProvider, authModeFromUser, useAuth } from './lib/auth'
 import { useLimits } from './lib/hooks/useLimits'
-import { useSectionAccess } from './lib/hooks/usePolicy'
+import { useRatingGate, useSectionAccess } from './lib/hooks/usePolicy'
 // View Transitions cross-fade + persistent-shell view-transition-names.
 // Imported here (always-mounted root) so the ::view-transition rules and
 // the nav/dock view-transition-names are available no matter which tab is
@@ -42,6 +42,12 @@ const UsersTab = lazy(() =>
   import('./components/tabs/UsersTab').then((m) => ({ default: m.UsersTab })),
 )
 const IptvTab = lazy(() => import('./components/tabs/IptvTab'))
+const YouTubeTab = lazy(() =>
+  import('./components/tabs/YouTubeTab').then((m) => ({ default: m.YouTubeTab })),
+)
+const MusicTab = lazy(() =>
+  import('./components/tabs/MusicTab').then((m) => ({ default: m.MusicTab })),
+)
 
 // Walkthrough is the unauthed landing experience. Authed users (the hot
 // path) never see it, so keep it out of the initial chunk. Unauthed users
@@ -58,6 +64,8 @@ const TABS: Record<Route, React.ComponentType> = {
   downloads: DownloadsTab,
   users: UsersTab,
   live: IptvTab,
+  youtube: YouTubeTab,
+  music: MusicTab,
 }
 
 function Shell() {
@@ -68,6 +76,7 @@ function Shell() {
   const { isAdmin, user } = useAuth()
   const limits = useLimits()
   const sections = useSectionAccess()
+  const ratingGate = useRatingGate()
   // The Users tab is admin-only. Non-admins who land on /users via a
   // stale link get bounced home rather than seeing an error page.
   // The Live tab is gated by IPTV_DISABLED — bounce on stale links too
@@ -83,19 +92,28 @@ function Shell() {
   const sonarrEnabled = limits.data?.sonarrEnabled !== false
   const radarrEnabled = limits.data?.radarrEnabled !== false
   const downloadsOk = limits.data?.sabEnabled !== false && sections.downloads
+  // Library tabs default OFF, so wait for the real /api/limits before
+  // bouncing a deep link (the placeholder would always say "off"). YouTube is
+  // an unrated catalog, so a rating-capped profile never gets it (Apple MainView).
+  const youtubeOff = ratingGate.capped || (!limits.isPlaceholderData && limits.data?.youtubeEnabled !== true)
+  const musicOff = !limits.isPlaceholderData && limits.data?.musicEnabled !== true
   useEffect(() => {
     if (route === 'users' && !usersOk) navigate('home')
     if (route === 'live' && !liveOk) navigate('home')
     if (route === 'tv' && !sonarrEnabled) navigate('home')
     if (route === 'movies' && !radarrEnabled) navigate('home')
     if (route === 'downloads' && !downloadsOk) navigate('home')
-  }, [route, usersOk, liveOk, sonarrEnabled, radarrEnabled, downloadsOk, navigate])
+    if (route === 'youtube' && youtubeOff) navigate('home')
+    if (route === 'music' && musicOff) navigate('home')
+  }, [route, usersOk, liveOk, sonarrEnabled, radarrEnabled, downloadsOk, youtubeOff, musicOff, navigate])
   const blocked =
     (route === 'users' && !usersOk) ||
     (route === 'live' && !liveOk) ||
     (route === 'tv' && !sonarrEnabled) ||
     (route === 'movies' && !radarrEnabled) ||
-    (route === 'downloads' && !downloadsOk)
+    (route === 'downloads' && !downloadsOk) ||
+    (route === 'youtube' && youtubeOff) ||
+    (route === 'music' && musicOff)
   const effectiveRoute: Route = blocked ? 'home' : route
   const ActiveTab = TABS[effectiveRoute]
   const krakenVariant = effectiveRoute === 'home' ? 'kraken' : 'resting'

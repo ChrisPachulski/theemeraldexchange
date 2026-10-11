@@ -87,6 +87,34 @@ type RawEpisodeRow = {
   file_id: number
 }
 
+type RawYoutubeVideo = {
+  id: number
+  channel: string
+  title: string
+  upload_date: string | null
+  duration_secs: number | null
+  /** media-core emits this one key camelCase, root-relative. */
+  thumbUrl: string | null
+}
+
+type RawMusicArtist = { id: number; name: string; album_count: number }
+
+type RawMusicAlbum = {
+  id: number
+  artist_name: string
+  title: string
+  year: number | null
+  track_count: number
+  art_url: string | null
+}
+
+type RawMusicTrack = {
+  id: number
+  title: string
+  track_no: number | null
+  duration_secs: number | null
+}
+
 // Some list routes carry `total`; the show-scoped /shows/{id}/episodes
 // and /watch do NOT. Type it optional and default to items.length.
 type RawListResponse<T> = { items: T[]; total?: number }
@@ -129,14 +157,46 @@ export type MediaEpisode = {
 
 export type MediaListResponse<T> = { items: T[]; total: number }
 
+/** A YouTube-library video (ytdl-sub channel folders). `thumbUrl` is already
+ *  absolute (API origin), or null when the scan found no thumbnail. */
+export type YoutubeVideo = {
+  id: number
+  channel: string
+  title: string
+  /** `YYYY-MM-DD`, when known. */
+  uploadDate: string | null
+  durationSecs: number | null
+  thumbUrl: string | null
+}
+
+export type MusicArtist = { id: number; name: string; albumCount: number }
+
+export type MusicAlbum = {
+  id: number
+  artistName: string
+  title: string
+  year: number | null
+  trackCount: number
+  /** Absolute album-art URL, or null when the scan found no art. */
+  artUrl: string | null
+}
+
+export type MusicTrack = {
+  id: number
+  title: string
+  trackNo: number | null
+  durationSecs: number | null
+}
+
 export type ScanStarted = { status: 'started'; jobId?: string | number }
 export type ScanRunning = { status: 'running' }
 export type ScanResponse = ScanStarted | ScanRunning
 
 // ── Playback ─────────────────────────────────────────────────────────
 
-/** Media kinds the playback grant accepts (movies + episodes have a file). */
-export type PlayableKind = 'movie' | 'episode'
+/** Media kinds the playback grant accepts (server/routes/media.ts): 'video' is
+ *  a YouTube-library video, 'track' a music track (always direct-play). */
+export type PlayableKind = 'movie' | 'episode' | 'video' | 'track'
 
 /** Capabilities advertised to the grant. snake_case to match the backend body
  *  (which forwards them to media-core's ClientCaps). */
@@ -448,6 +508,44 @@ function normEpisode(r: RawEpisodeRow): MediaEpisode {
   }
 }
 
+// Thumbnails/art are root-relative and sit behind the session cookie: resolve
+// them against the API origin so a plain <img> sends the (SameSite=None in
+// prod) cookie to the right host.
+function normYoutubeVideo(r: RawYoutubeVideo): YoutubeVideo {
+  return {
+    id: r.id,
+    channel: r.channel,
+    title: r.title,
+    uploadDate: r.upload_date ?? null,
+    durationSecs: r.duration_secs ?? null,
+    thumbUrl: r.thumbUrl ? apiUrl(r.thumbUrl) : null,
+  }
+}
+
+function normMusicArtist(r: RawMusicArtist): MusicArtist {
+  return { id: r.id, name: r.name, albumCount: r.album_count }
+}
+
+function normMusicAlbum(r: RawMusicAlbum): MusicAlbum {
+  return {
+    id: r.id,
+    artistName: r.artist_name,
+    title: r.title,
+    year: r.year ?? null,
+    trackCount: r.track_count,
+    artUrl: r.art_url ? apiUrl(r.art_url) : null,
+  }
+}
+
+function normMusicTrack(r: RawMusicTrack): MusicTrack {
+  return {
+    id: r.id,
+    title: r.title,
+    trackNo: r.track_no ?? null,
+    durationSecs: r.duration_secs ?? null,
+  }
+}
+
 function normList<R, T>(
   raw: RawListResponse<R>,
   map: (r: R) => T,
@@ -555,12 +653,13 @@ async function fetchAllPages<R, T>(
   path: string,
   map: (r: R) => T,
   req?: RequestOpts,
+  params?: Record<string, string | number>,
 ): Promise<T[]> {
   const out: T[] = []
   for (let page = 0; page < MAX_LIST_PAGES; page++) {
     const raw = await get<RawListResponse<R>>(
       path,
-      { limit: LIST_PAGE_SIZE, offset: page * LIST_PAGE_SIZE },
+      { ...params, limit: LIST_PAGE_SIZE, offset: page * LIST_PAGE_SIZE },
       req,
     )
     const items = (raw.items ?? []).map(map)
@@ -593,6 +692,32 @@ export const mediaApi = {
       (raw) => normList(raw, normEpisode),
     ),
   scan: () => post<ScanResponse, Record<string, never>>('/scan', {}),
+
+  /** YouTube channel names, most recent upload first. */
+  youtubeChannels: (req?: RequestOpts) =>
+    get<{ items: { name: string }[] }>('/youtube/channels', undefined, req).then((r) =>
+      (r.items ?? []).map((c) => c.name),
+    ),
+  /** Newest-first videos, optionally one channel's. */
+  youtubeVideos: (channel: string | null, limit: number, req?: RequestOpts) =>
+    get<RawListResponse<RawYoutubeVideo>>(
+      '/youtube/videos',
+      channel ? { channel, limit } : { limit },
+      req,
+    ).then((r) => (r.items ?? []).map(normYoutubeVideo)),
+
+  /** Music browse (Artists -> Albums -> Tracks). Paged past the 200 list cap
+   *  so the tab, which has no pager, always shows the whole level. */
+  musicArtists: (req?: RequestOpts) =>
+    fetchAllPages<RawMusicArtist, MusicArtist>('/music/artists', normMusicArtist, req),
+  musicAlbums: (artistId: number, req?: RequestOpts) =>
+    fetchAllPages<RawMusicAlbum, MusicAlbum>('/music/albums', normMusicAlbum, req, {
+      artist_id: artistId,
+    }),
+  musicTracks: (albumId: number, req?: RequestOpts) =>
+    fetchAllPages<RawMusicTrack, MusicTrack>('/music/tracks', normMusicTrack, req, {
+      album_id: albumId,
+    }),
 
   /** Request a playback grant. Returns a tokenised URL the player loads.
    *  With no explicit caps, the REAL probed capabilities of this browser are

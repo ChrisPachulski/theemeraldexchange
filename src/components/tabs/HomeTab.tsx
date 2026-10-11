@@ -1,14 +1,26 @@
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
 import { authModeFromUser, useAuth } from '../../lib/auth'
-import { useSectionAccess } from '../../lib/hooks/usePolicy'
+import { useLimits } from '../../lib/hooks/useLimits'
+import { useRatingGate, useSectionAccess } from '../../lib/hooks/usePolicy'
 import './HomeTab.css'
 
-type Entry = { route: Route; label: string; adminOnly?: boolean; section?: 'live' | 'downloads' }
+type Entry = {
+  route: Route
+  label: string
+  adminOnly?: boolean
+  section?: 'live' | 'downloads'
+  /** Default-off Limits key: shown only when the server reports that library. */
+  library?: 'youtubeEnabled' | 'musicEnabled'
+  /** Unrated catalog: hidden from rating-capped profiles (Apple MainView). */
+  unrated?: boolean
+}
 
 const ENTRIES: Entry[] = [
   { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
+  { route: 'youtube', label: 'YouTube', library: 'youtubeEnabled', unrated: true },
+  { route: 'music', label: 'Music', library: 'musicEnabled' },
   { route: 'live', label: 'Live', section: 'live' },
   { route: 'downloads', label: 'Downloader', section: 'downloads' },
   // Plex-backed admin sessions only, as in TopNav.
@@ -64,8 +76,14 @@ export function HomeTab() {
   const { isAdmin, user } = useAuth()
   const plexAdmin = isAdmin && user !== null && authModeFromUser(user) === 'plex'
   const sections = useSectionAccess()
+  const ratingGate = useRatingGate()
+  const limits = useLimits()
   const entries = ENTRIES.filter(
-    (e) => (!e.adminOnly || plexAdmin) && (!e.section || sections[e.section]),
+    (e) =>
+      (!e.adminOnly || plexAdmin) &&
+      (!e.section || sections[e.section]) &&
+      (!e.unrated || !ratingGate.capped) &&
+      (!e.library || limits.data?.[e.library] === true),
   )
 
   return (

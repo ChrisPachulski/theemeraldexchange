@@ -31,6 +31,7 @@ vi.mock('./lib/animatedFavicon', () => ({
 vi.mock('./lib/hooks/useLimits', () => ({ useLimits: () => ({ data: {} }) }))
 vi.mock('./lib/hooks/usePolicy', () => ({
   useSectionAccess: () => ({ live: true, downloads: true, arr: true }),
+  useRatingGate: () => ({ capped: false, allows: () => true }),
 }))
 vi.mock('./lib/router', () => ({ useRoute: () => ['home', vi.fn()] }))
 vi.mock('./lib/navTransition', () => ({

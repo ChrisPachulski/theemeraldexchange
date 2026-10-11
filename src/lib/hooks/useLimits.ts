@@ -38,6 +38,11 @@ export type Limits = {
   sonarrEnabled?: boolean
   radarrEnabled?: boolean
   sabEnabled?: boolean
+  /** True when media-core has a YouTube / music library configured — the
+   *  YouTube and Music tabs show. Unlike the flags above these default OFF:
+   *  an older backend without the field has no such library to browse. */
+  youtubeEnabled?: boolean
+  musicEnabled?: boolean
 }
 
 const DEFAULT_LIMITS: Limits = {
@@ -53,6 +58,8 @@ const DEFAULT_LIMITS: Limits = {
   sonarrEnabled: true,
   radarrEnabled: true,
   sabEnabled: true,
+  youtubeEnabled: false,
+  musicEnabled: false,
 }
 
 export function useLimits() {

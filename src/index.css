@@ -357,3 +357,71 @@ div.iptv-tab__status--error p { margin: 0 0 .5rem; }
 .iptv-series-detail__season { margin-bottom:1rem; }
 .iptv-series-detail__episodes { list-style:none; padding:0; margin:0; display:grid; gap:.4rem; }
 .iptv-series-detail__episode { display:grid; grid-template-columns:3rem 1fr; gap:.75rem; align-items:center; background:var(--card-bg,#181818); border-radius:6px; padding:.6rem .75rem; position:relative; overflow:hidden; }
+
+/* ── Library tabs (YouTube, Music) ───────────────────────────────────── */
+.library-tab {
+  padding: var(--hero-pad-top) var(--s-5) var(--s-7);
+  display: grid; gap: var(--s-6);
+  max-width: var(--library-max); margin: 0 auto; width: 100%;
+}
+/* YouTube rows: the Downloads "Recently added" strip, at 16:9. */
+.library-shelf { display: grid; gap: var(--s-3); min-width: 0; }
+.library-shelf__label {
+  margin: 0; font-family: var(--font-display); font-weight: var(--w-display); font-size: var(--t-sm);
+  letter-spacing: var(--tr-eyebrow); text-transform: uppercase; color: var(--text-subtle);
+}
+.library-shelf__row {
+  display: flex; gap: var(--s-3); overflow-x: auto; padding-bottom: var(--s-2);
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+.library-shelf__card {
+  flex: 0 0 auto; width: 240px; display: grid; gap: var(--s-1); padding: 0;
+  background: transparent; border: 0; color: inherit; text-align: left; cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease);
+}
+.library-shelf__card:hover { transform: translateY(-2px); }
+.library-shelf__card:hover .library-shelf__thumb,
+.library-shelf__card:focus-visible .library-shelf__thumb { border-color: var(--emerald); }
+.library-shelf__thumb {
+  display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover;
+  border-radius: var(--r-md); border: 1px solid var(--border); background: var(--surface-2);
+  transition: border-color var(--dur-fast) var(--ease);
+}
+.library-shelf__thumb--fallback {
+  display: grid; place-items: center; font-family: var(--font-display);
+  font-size: var(--t-xl); font-weight: var(--w-display); color: var(--text-subtle);
+}
+.library-shelf__title {
+  font-family: var(--font-display); font-size: var(--t-xs); color: var(--text); line-height: 1.25;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.library-shelf__meta { font-size: var(--t-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  .library-tab { padding-inline: var(--s-4); }
+  .library-shelf__card { width: 200px; }
+}
+/* Music drill (Artists -> Albums -> Tracks): one bordered row per item. */
+.music-header { display: grid; gap: var(--s-2); }
+.music-header__title {
+  margin: 0; font-family: var(--font-display); font-size: var(--t-xl); font-weight: var(--w-display);
+  letter-spacing: var(--tr-display); color: var(--text); line-height: 1.1;
+}
+.music-crumbs { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.music-crumbs button {
+  padding: var(--s-1) var(--s-3); border: 1px solid var(--border); border-radius: var(--r-pod, 999px);
+  background: transparent; color: var(--text-muted); font-size: var(--t-xs); cursor: pointer;
+}
+.music-crumbs button:hover { border-color: var(--emerald); color: var(--emerald); }
+.music-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s-2); max-width: var(--content-max); }
+.music-row {
+  display: flex; align-items: center; gap: var(--s-4); width: 100%; padding: var(--s-3) var(--s-4);
+  text-align: left; color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--r-lg); cursor: pointer; transition: border-color var(--dur-fast) var(--ease);
+}
+.music-row:hover, .music-row:focus-visible { border-color: var(--emerald); }
+.music-row__art {
+  flex: 0 0 auto; width: 48px; height: 48px; object-fit: cover;
+  border-radius: var(--r-md); background: var(--surface-2);
+}
+.music-row__title { flex: 1 1 auto; min-width: 0; font-weight: var(--w-ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music-row__meta { flex: 0 0 auto; font-size: var(--t-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }

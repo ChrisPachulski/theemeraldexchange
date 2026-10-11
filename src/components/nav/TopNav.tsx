@@ -3,7 +3,7 @@ import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
 import { authModeFromUser, useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
-import { useSectionAccess } from '../../lib/hooks/usePolicy'
+import { useRatingGate, useSectionAccess } from '../../lib/hooks/usePolicy'
 import { UserMenu } from '../auth/UserMenu'
 import { usePlexUser } from '../../lib/hooks/usePlexLinks'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
@@ -26,11 +26,18 @@ type Tab = {
   needs?: 'sonarrEnabled' | 'radarrEnabled' | 'sabEnabled'
   /** Policy section gating this tab: hides when the member's policy denies it. */
   section?: 'live' | 'downloads'
+  /** Default-off Limits key: the tab shows only when the server reports
+   *  that library (an older backend without the field has none). */
+  library?: 'youtubeEnabled' | 'musicEnabled'
+  /** Unrated catalog: hidden from rating-capped profiles (Apple MainView). */
+  unrated?: boolean
 }
 
 const TABS: Tab[] = [
   { route: 'tv', label: 'TV Shows', needs: 'sonarrEnabled' },
   { route: 'movies', label: 'Movies', needs: 'radarrEnabled' },
+  { route: 'youtube', label: 'YouTube', library: 'youtubeEnabled', unrated: true },
+  { route: 'music', label: 'Music', library: 'musicEnabled' },
   // `iptv: true` hides the tab when the server boots with IPTV_DISABLED=1
   // (contract §13.3 reviewer-insurance gate).
   { route: 'live', label: 'Live', iptv: true, section: 'live' },
@@ -43,6 +50,8 @@ const TABS: Tab[] = [
 const ROUTE_LABEL: Record<NavRoute, string> = {
   tv: 'TV Shows',
   movies: 'Movies',
+  youtube: 'YouTube',
+  music: 'Music',
   live: 'Live',
   downloads: 'Downloads',
   users: 'Users',
@@ -60,10 +69,13 @@ export function TopNav({ active }: Props) {
   const plexAdmin = isAdmin && user !== null && authModeFromUser(user) === 'plex'
   const limits = useLimits()
   const sections = useSectionAccess()
+  const ratingGate = useRatingGate()
   const iptvEnabled = limits.data?.iptvEnabled !== false // default true on older backends
   const tabRefs = useRef<Record<NavRoute, HTMLButtonElement | null>>({
     tv: null,
     movies: null,
+    youtube: null,
+    music: null,
     live: null,
     downloads: null,
     users: null,
@@ -73,9 +85,11 @@ export function TopNav({ active }: Props) {
       (!t.adminOnly || plexAdmin) &&
       (!t.iptv || iptvEnabled) &&
       (!t.section || sections[t.section]) &&
+      (!t.unrated || !ratingGate.capped) &&
       // Optional integrations (plan 006 Phase 3): default true so older
       // backends without the flags keep every tab.
       (!t.needs || limits.data?.[t.needs] !== false) &&
+      (!t.library || limits.data?.[t.library] === true) &&
       t.route !== active,
   )
 
