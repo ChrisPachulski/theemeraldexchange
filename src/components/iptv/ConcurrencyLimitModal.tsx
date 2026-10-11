@@ -89,6 +89,10 @@ function KickRow({
       >
         {kill.isPending ? 'Kicking…' : 'Kick'}
       </button>
+      {kill.error && (
+        // The pending play only retries after a confirmed kick; say why nothing happened.
+        <p className="iptv-conn-row__error" role="alert">Couldn’t free a slot. Try again.</p>
+      )}
     </li>
   )
 }

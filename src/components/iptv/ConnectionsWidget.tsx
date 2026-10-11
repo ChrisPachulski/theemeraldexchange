@@ -14,7 +14,7 @@ import { relativeTime, kindLabel } from './sessionFormatting'
 
 export function ConnectionsWidget() {
   const [open, setOpen] = useState(false)
-  const { data } = useIptvSessions()
+  const { data, error, isLoading, refetch } = useIptvSessions()
 
   const ours = data?.ours ?? []
   const upstreamActive = data?.upstream?.activeConnections ?? null
@@ -45,6 +45,9 @@ export function ConnectionsWidget() {
           ours={ours}
           upstreamActive={upstreamActive}
           upstreamMax={upstreamMax}
+          // A poll failure after a good load keeps showing the last list.
+          loadState={data ? 'ready' : error ? 'error' : isLoading ? 'loading' : 'ready'}
+          onRetry={() => void refetch()}
           onClose={() => setOpen(false)}
         />
       )}
@@ -56,11 +59,15 @@ function ConnectionsPanel({
   ours,
   upstreamActive,
   upstreamMax,
+  loadState,
+  onRetry,
   onClose,
 }: {
   ours: SessionRow[]
   upstreamActive: number | null
   upstreamMax: number | null
+  loadState: 'loading' | 'error' | 'ready'
+  onRetry: () => void
   onClose: () => void
 }) {
   // Plain-div dialog: useModalA11y supplies the focus trap, Escape-to-close,
@@ -79,6 +86,15 @@ function ConnectionsPanel({
           >×</button>
         </header>
 
+        {loadState === 'loading' && <p className="iptv-conn-modal__empty">Loading connections…</p>}
+        {loadState === 'error' && (
+          <div className="iptv-conn-modal__empty" role="alert">
+            <p>Couldn’t load the connections.</p>
+            <button type="button" className="iptv-tab__retry" onClick={onRetry}>Retry</button>
+          </div>
+        )}
+        {loadState === 'ready' && (
+        <>
         <p className="iptv-conn-modal__summary">
           Upstream account allows <strong>{upstreamMax ?? '?'}</strong> simultaneous streams.
           {' '}<strong>{upstreamActive ?? '?'}</strong> currently in use upstream.
@@ -95,6 +111,8 @@ function ConnectionsPanel({
           <ul className="iptv-conn-modal__list">
             {ours.map((s) => <ConnectionRow key={s.sessionId} session={s} />)}
           </ul>
+        )}
+        </>
         )}
       </div>
     </div>
@@ -123,6 +141,7 @@ function ConnectionRow({ session }: { session: SessionRow }) {
       >
         {kill.isPending ? 'Kicking…' : 'Kick'}
       </button>
+      {kill.error && <p className="iptv-conn-row__error" role="alert">Couldn’t free a slot. Try again.</p>}
     </li>
   )
 }
