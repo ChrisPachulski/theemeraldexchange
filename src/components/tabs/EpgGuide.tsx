@@ -10,6 +10,7 @@
 // grid stays smooth across the full has-EPG set (~11.5k channels).
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ReplayButton } from '../nav/ReplayButton'
+import { GuidePreview } from '../iptv/GuidePreview'
 import { ProgrammeDialog } from '../iptv/ProgrammeDialog'
 import { type EpgGridDto, type EpgProgrammeDto } from '../../lib/api/iptv'
 import { useIptvEpgGrid } from '../../lib/hooks/useIptvEpg'
@@ -93,6 +94,7 @@ export default function EpgGuide({
   onToggleFavorite,
   onPlayLive,
   onPlayCatchup,
+  livePreview = false,
 }: {
   categoryId?: number
   // Curated category set fed to the default ("All") guide view — US + sports by
@@ -108,6 +110,9 @@ export default function EpgGuide({
   onToggleFavorite?: (streamId: number, isFav: boolean) => void
   onPlayLive: (channel: { stream_id: number; name: string }) => void
   onPlayCatchup: (channel: GuideChannel, programme: EpgProgrammeDto) => void
+  // Muted preview of a live programme in the detail pane. The owner turns it
+  // off while its player is open, so a preview never competes with a watch.
+  livePreview?: boolean
 }) {
   // A 30-min bucketed anchor keeps the fetch window (and react-query key) stable
   // for half an hour while the now-line still updates every 30s.
@@ -273,7 +278,7 @@ export default function EpgGuide({
           <button type="button" className="iptv-tab__retry" onClick={retry}>Retry</button>
         </div>
       )}
-      <GuideDetailPane detail={activeDetail} nowMs={nowMs} onJumpToLive={jumpToLive} />
+      <GuideDetailPane detail={activeDetail} nowMs={nowMs} onJumpToLive={jumpToLive} livePreview={livePreview} />
       <div className="epg-guide" ref={scrollRef} role="grid" aria-label="Programme guide">
       <div className="epg-guide__content" style={{ width: contentWidth }}>
         {/* sticky header: top-left corner + scrollable time axis */}
@@ -333,10 +338,12 @@ function GuideDetailPane({
   detail,
   nowMs,
   onJumpToLive,
+  livePreview,
 }: {
   detail: { row: EpgGridDto; prog: EpgProgrammeDto | null; live: boolean } | null
   nowMs: number
   onJumpToLive: () => void
+  livePreview: boolean
 }) {
   const jump = (
     <>
@@ -359,8 +366,10 @@ function GuideDetailPane({
   const next = nextProgramme(row, prog.start_utc)
   const startMs = ms(prog.start_utc)
   const stopMs = ms(prog.stop_utc)
+  const preview = live && livePreview
   return (
-    <div className="epg-detail">
+    <div className={'epg-detail' + (preview ? ' epg-detail--preview' : '')}>
+      {preview && <GuidePreview key={row.stream_id} streamId={row.stream_id} name={row.name} />}
       <div className="epg-detail__head">
         <span className="epg-detail__chan-num">{row.num}</span>
         <span className="epg-detail__chan-name">{row.name}</span>

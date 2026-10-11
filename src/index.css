@@ -228,6 +228,7 @@ div.iptv-conn-modal__empty p { margin: 0 0 .5rem; }
   border: 1px solid rgba(255,255,255,.18); background: rgba(255,255,255,.08); color: #f5f5f5;
 }
 .iptv-tab__guide-cats:hover { background: rgba(255,255,255,.14); }
+.iptv-tab__guide-cats[aria-pressed="true"] { border-color: rgba(127,224,176,.5); background: rgba(29,92,64,.55); color: #7fe0b0; }
 /* Guide-categories picker (reuses .iptv-guide-modal shell). */
 .iptv-guide-cats__reset {
   margin: 0 1rem .5rem; padding: .4rem .8rem; align-self: flex-start; cursor: pointer;
@@ -561,6 +562,18 @@ div.iptv-guide-modal__status p { margin:0 0 .5rem; }
 .epg-detail__next strong { color:#5bbf90; font-size:.68rem; letter-spacing:.1em; }
 .epg-detail__next-time { font-variant-numeric:tabular-nums; flex-shrink:0; }
 .epg-detail__next-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* Opt-in muted live preview, pinned to the pane's right edge. */
+.epg-detail--preview { position:relative; padding-right:calc(176px + 1.4rem); min-height:calc(99px + 1.1rem); }
+.epg-detail__preview {
+  position:absolute; top:.55rem; right:.8rem; width:176px; aspect-ratio:16/9; overflow:hidden;
+  display:flex; align-items:center; justify-content:center; border-radius:4px;
+  background:#000; border:1px solid rgba(255,255,255,.12); color:var(--text-dim,#9a9a9a); font-size:.75rem; text-align:center;
+}
+.epg-detail__preview .iptv-player, .epg-detail__preview .iptv-player__video { width:100%; height:100%; max-height:none; object-fit:contain; }
+@media (max-width: 640px) {
+  .epg-detail--preview { padding-right:calc(112px + 1.4rem); min-height:96px; }
+  .epg-detail__preview { width:112px; }
+}
 
 /* Active (hovered/focused) cell highlight + a live emerald rail on the now block. */
 .epg-guide__chan--active { background:#22302a; }

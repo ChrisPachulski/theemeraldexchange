@@ -3,9 +3,9 @@ import { test, expect, type Page, type Route } from '@playwright/test'
 import { ADMIN_USER, REGULAR_USER, installBackgroundMocks, mockMe, type MockUser } from './helpers/mockApi'
 
 // DVR parity with the Apple app (the dvr lane): future-programme details and
-// Record from the guide, and the Recordings panel (list, detail, play, delete).
-// DVR surfaces exist only when /api/limits says dvrEnabled. Every /api call is
-// mocked.
+// Record from the guide, the Recordings panel (list, detail, play, delete), and
+// the opt-in muted live preview in the guide's detail pane. DVR surfaces exist
+// only when /api/limits says dvrEnabled. Every /api call is mocked.
 
 const FIXTURE_DIR = 'tests/fixtures/hls'
 
@@ -301,4 +301,30 @@ test('deleting a recording asks first, and a failed delete puts the row back', a
   await expect(panel.getByRole('button', { name: /Big Match/ })).toHaveCount(0)
   await expect(panel.getByRole('button', { name: /Old Game/ })).toBeVisible()
   expect(dvrCalls.filter((c) => c === 'DELETE /api/dvr/recordings/r2')).toHaveLength(2)
+})
+
+test('live preview is off by default, then previews after a rest and yields to the player', async ({ page }) => {
+  const { grants, kills } = await setup(page)
+  await page.goto('/#/live')
+  const liveBlock = page.getByTitle(/^Morning Live · 60 min$/)
+
+  // Off by default: resting on a live programme mints nothing.
+  await liveBlock.hover()
+  await page.waitForTimeout(2_000)
+  expect(grants).toEqual([])
+
+  const toggle = page.getByRole('button', { name: 'Live preview' })
+  await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true')
+  await page.getByTitle('Watch US ABC live').hover()
+  await liveBlock.hover()
+  await expect.poll(() => grants).toEqual(['/api/iptv/stream/live/101/grant?client=avplayer&intent=preview'])
+  await expect(page.getByRole('group', { name: 'US ABC live preview' }).locator('video')).toHaveJSProperty('muted', true)
+
+  // Opening the real player tears the preview down and releases its session.
+  await liveBlock.click()
+  await expect(page.getByRole('dialog', { name: 'US ABC' })).toBeVisible()
+  await expect.poll(() => kills).toContain('preview:101')
+  await page.waitForTimeout(2_000)
+  expect(grants.filter((g) => g.includes('intent=preview'))).toHaveLength(1)
 })

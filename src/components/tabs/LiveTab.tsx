@@ -30,7 +30,9 @@ import {
   formatGuideCategoryNames,
   isAdultCategory,
   readGuideCategoryNames,
+  readGuidePreview,
   writeGuideCategoryNames,
+  writeGuidePreview,
 } from '../../lib/guideCategories'
 import { useDvrEnabled } from '../../lib/hooks/useDvr'
 import type { CategoryDto } from '../../lib/api/iptv'
@@ -110,6 +112,7 @@ export default function LiveTab() {
   // US+sports default. Held in state so toggling re-renders the guide immediately.
   const [guideNames, setGuideNames] = useState(() => readGuideCategoryNames())
   const [showGuideCats, setShowGuideCats] = useState(false)
+  const [guidePreview, setGuidePreview] = useState(() => readGuidePreview())
   const [showRecordings, setShowRecordings] = useState(false)
   const dvrEnabled = useDvrEnabled()
   const debounced = useDebounced(q, 250)
@@ -333,6 +336,7 @@ export default function LiveTab() {
           }
           onPlayLive={(channel) => void playChannel(channel)}
           onPlayCatchup={(channel, programme) => void playCatchup(channel, programme)}
+          livePreview={guidePreview && !playing}
         />
       ) : (
       <>
@@ -477,6 +481,20 @@ export default function LiveTab() {
             title="Choose which categories the guide shows"
           >
             Guide categories
+          </button>
+        )}
+        {view === 'guide' && (
+          <button
+            type="button"
+            className="iptv-tab__guide-cats"
+            aria-pressed={guidePreview}
+            onClick={() => {
+              setGuidePreview(!guidePreview)
+              writeGuidePreview(!guidePreview)
+            }}
+            title="Play a muted preview after resting on a live programme"
+          >
+            Live preview
           </button>
         )}
         <button type="button" onClick={async () => {

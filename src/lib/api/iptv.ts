@@ -360,10 +360,14 @@ export const iptvApi = Object.assign({
   // for everyone. With one shared ffmpeg per channel a client reconnect only
   // re-reads segments from disk; the upstream connection is never re-dialed.
   // `avplayer: false` opts back into the raw .ts path (VLC-style clients).
-  grantLive: (streamId: string, opts?: { avplayer?: boolean }) => {
-    const avplayer = opts?.avplayer ?? true
-    const suffix = avplayer ? '?client=avplayer' : ''
-    return grant(`/stream/live/${streamId}/grant${suffix}`)
+  // `intent: 'preview'` marks a guide thumbnail, not a watch: the server then
+  // leaves this account's other live tuners alone (streamLive.ts isPreview).
+  grantLive: (streamId: string, opts?: { avplayer?: boolean; intent?: 'preview' }) => {
+    const query = new URLSearchParams()
+    if (opts?.avplayer ?? true) query.set('client', 'avplayer')
+    if (opts?.intent) query.set('intent', opts.intent)
+    const qs = query.toString()
+    return grant(`/stream/live/${streamId}/grant${qs ? `?${qs}` : ''}`)
   },
   grantVod: (streamId: string) => grant(`/stream/vod/${streamId}/grant`),
   grantSeries: (episodeId: string) => grant(`/stream/series/${episodeId}/grant`),
