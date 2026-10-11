@@ -220,3 +220,44 @@
     gap: var(--s-1);
   }
 }
+
+/* Phones: four or five pills can't share the band with the brand and the
+   account cluster (they wrapped over EMERALD EXCHANGE), so they get their own
+   single row beneath it that scrolls sideways. --hero-pad-top clears it. */
+@media (max-width: 520px) {
+  .top-nav__tabs {
+    top: calc(var(--pod-inset, 8px) + 56px);
+    left: var(--pod-inset, 8px);
+    right: var(--pod-inset, 8px);
+    transform: none;
+    max-width: none;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    overflow-x: auto;
+    /* Room for the hover lift and focus ring inside the scroller. */
+    padding: 4px 0;
+    scrollbar-width: none;
+  }
+
+  .top-nav__tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .top-nav__tab {
+    flex-shrink: 0;
+  }
+}
+
+/* Phones: the "you are here" label sits beside the brand, not under it, so
+   the pill row above can start right below the brand. */
+@media (max-width: 520px) {
+  .top-nav__brand-stack {
+    display: flex;
+    align-items: center;
+    gap: 0;
+  }
+
+  .top-nav__here {
+    margin-left: 0;
+  }
+}

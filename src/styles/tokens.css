@@ -143,7 +143,7 @@
   :root {
     --pod-h: 48px;
     --pod-inset: 8px;
-    --hero-pad-top: 96px;
+    --hero-pad-top: 120px;      /* clears the phone nav's own pill row */
     --t-2xl: 2rem;
   }
 }

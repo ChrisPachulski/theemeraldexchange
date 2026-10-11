@@ -81,21 +81,23 @@ test('a programme search finds the channel airing it and tunes that channel', as
     const p = url.pathname
     if (p.endsWith('/epg/search')) {
       searches.push(url.searchParams.get('q') ?? '')
+      // The same game on the channel and its HD copy: one card, two feeds.
+      const airing = (streamId: number, channelName: string) => ({
+        streamId,
+        channelName,
+        categoryId: 21,
+        programIndex: 0,
+        programme: {
+          channel_id: `tsn4-${streamId}.ca`,
+          start_utc: new Date(now - 20 * 60_000).toISOString(),
+          stop_utc: new Date(now + 100 * 60_000).toISOString(),
+          title: 'NHL Hockey : Toronto Maple Leafs at Boston Bruins',
+          description: null,
+        },
+      })
       return route.fulfill(json({
-        total: 1,
-        hits: [{
-          streamId: hitChannel.stream_id,
-          channelName: hitChannel.name,
-          categoryId: 21,
-          programIndex: 0,
-          programme: {
-            channel_id: 'tsn4.ca',
-            start_utc: new Date(now - 20 * 60_000).toISOString(),
-            stop_utc: new Date(now + 100 * 60_000).toISOString(),
-            title: 'NHL: Toronto Maple Leafs at Boston Bruins',
-            description: null,
-          },
-        }],
+        total: 2,
+        hits: [airing(hitChannel.stream_id, hitChannel.name), airing(300002, 'CA: TSN 4 HD')],
       }))
     }
     if (p.endsWith('/grant')) {
@@ -114,10 +116,12 @@ test('a programme search finds the channel airing it and tunes that channel', as
 
   await page.goto('/#/live')
   await page.getByPlaceholder('Search channels and programs…').fill('maple leafs')
-  const hit = page.getByRole('button', { name: /Toronto Maple Leafs at Boston Bruins/ })
-  await expect(hit).toBeVisible()
-  await expect(hit).toContainText('LIVE')
-  await expect(hit).toContainText(hitChannel.name)
+  const cards = page.getByRole('region', { name: 'Matching programs' }).getByRole('listitem')
+  await expect(cards).toHaveCount(1)
+  await expect(cards).toContainText('Toronto Maple Leafs at Boston Bruins')
+  await expect(cards).toContainText(/live/i)
+  await expect(cards.getByRole('button', { name: 'Watch CA: TSN 4 HD live' })).toBeVisible()
+  const hit = cards.getByRole('button', { name: `Watch ${hitChannel.name} live` })
   expect(searches).toContain('maple leafs')
 
   const grant = page.waitForRequest((r) => r.url().includes(`/stream/live/${hitChannel.stream_id}/grant`))

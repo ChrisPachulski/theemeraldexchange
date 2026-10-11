@@ -41,6 +41,7 @@ import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import { ConnectionsWidget } from '../iptv/ConnectionsWidget'
 import { LibrarySearchResults } from '../iptv/LibrarySearchResults'
 import { LivePlayerModal, type LivePlaying } from '../iptv/LivePlayerModal'
+import { groupAirings, type Airing } from '../iptv/programmeAirings'
 import { RecordingsPanel } from '../iptv/RecordingsPanel'
 import {
   concurrencyPayloadFromError,
@@ -496,7 +497,7 @@ export default function LiveTab() {
         {view === 'guide' && (
           <button
             type="button"
-            className="iptv-tab__guide-cats"
+            className="iptv-tab__guide-cats iptv-tab__live-preview"
             aria-pressed={guidePreview}
             onClick={() => {
               setGuidePreview(!guidePreview)
@@ -872,43 +873,95 @@ function ProgrammeResults({
     return [...live, ...later]
   }, [search.data, nowMs])
 
+  const airings = useMemo(() => groupAirings(hits), [hits])
+
   if (q.trim().length < EPG_SEARCH_MIN_CHARS) return null
   if (search.isLoading) return <p className="iptv-tab__status">Searching programs…</p>
   if (search.error) return <p className="iptv-tab__status iptv-tab__status--error">Program search failed.</p>
-  if (hits.length === 0) return null
+  if (airings.length === 0) return null
 
-  const total = search.data?.total ?? hits.length
+  const more = (search.data?.total ?? hits.length) > hits.length
   return (
     <section className="iptv-prog-results" aria-label="Matching programs">
       <h2 className="iptv-prog-results__head">
-        Programs <span>{total > hits.length ? `${hits.length} of ${total}` : hits.length}</span>
+        Programs <span className="iptv-prog-results__count">{airings.length}</span>
+        {hits.length > airings.length && (
+          <span className="iptv-prog-results__feeds">
+            <span aria-hidden="true">--</span> on {hits.length}
+            {more ? '+' : ''} channels
+          </span>
+        )}
       </h2>
       <ul className="iptv-prog-results__list">
-        {hits.map((hit) => {
-          const airing = isAiring(hit.programme, nowMs)
-          return (
-            <li key={`${hit.streamId}#${hit.programIndex}`}>
-              <button
-                type="button"
-                className="iptv-prog-results__item"
-                onClick={() => (airing ? onPlayLive(hit) : onShowInGuide(hit))}
-                title={airing ? `Watch ${hit.channelName} live` : `Show ${hit.channelName} in the guide`}
-              >
-                <span className="iptv-prog-results__title">{epgTitle(hit.programme.title)}</span>
-                <span className="iptv-prog-results__meta">
-                  {airing && <strong className="iptv-prog-results__live">LIVE</strong>}
-                  <span className="iptv-prog-results__chan">{hit.channelName}</span>
-                  <span className="iptv-prog-results__time">
-                    {airing
-                      ? `until ${formatClock(hit.programme.stop_utc)}`
-                      : formatDayClock(hit.programme.start_utc)}
-                  </span>
-                </span>
-              </button>
-            </li>
-          )
-        })}
+        {airings.map((airing) => (
+          <AiringCard
+            key={airing.key}
+            airing={airing}
+            live={isAiring(airing.hits[0].programme, nowMs)}
+            onPlayLive={onPlayLive}
+            onShowInGuide={onShowInGuide}
+          />
+        ))}
       </ul>
     </section>
+  )
+}
+
+// Feeds shown before "+N more": a game is often on a channel's HD, SD, 4K and
+// backup copies, and the first few cover the choice.
+const AIRING_FEEDS_SHOWN = 3
+
+function AiringCard({
+  airing,
+  live,
+  onPlayLive,
+  onShowInGuide,
+}: {
+  airing: Airing
+  live: boolean
+  onPlayLive: (hit: EpgSearchHit) => void
+  onShowInGuide: (hit: EpgSearchHit) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const shown = expanded ? airing.hits : airing.hits.slice(0, AIRING_FEEDS_SHOWN)
+  const hidden = airing.hits.length - shown.length
+  return (
+    <li className={'iptv-prog-card' + (live ? ' iptv-prog-card--live' : '')}>
+      <p className="iptv-prog-card__when">
+        {live ? (
+          <>
+            <span className="iptv-prog-card__live">Live</span> until {formatClock(airing.stopUtc)}
+          </>
+        ) : (
+          formatDayClock(airing.startUtc)
+        )}
+        {airing.eyebrow && (
+          <>
+            {' '}
+            <span className="iptv-prog-card__sep" aria-hidden="true">--</span> {airing.eyebrow}
+          </>
+        )}
+      </p>
+      <h3 className="iptv-prog-card__title">{airing.title}</h3>
+      <div className="iptv-prog-card__feeds">
+        {shown.map((hit) => (
+          <button
+            key={`${hit.streamId}#${hit.programIndex}`}
+            type="button"
+            className="iptv-prog-card__feed"
+            onClick={() => (live ? onPlayLive(hit) : onShowInGuide(hit))}
+            title={live ? `Watch ${hit.channelName} live` : `Show ${hit.channelName} in the guide`}
+            aria-label={live ? `Watch ${hit.channelName} live` : `Show ${hit.channelName} in the guide`}
+          >
+            {hit.channelName}
+          </button>
+        ))}
+        {hidden > 0 && (
+          <button type="button" className="iptv-prog-card__more" onClick={() => setExpanded(true)}>
+            +{hidden} more
+          </button>
+        )}
+      </div>
+    </li>
   )
 }
