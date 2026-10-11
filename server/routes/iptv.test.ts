@@ -477,7 +477,9 @@ describe('playlist token lifecycle', () => {
           [sub]: {
             maxContentRating,
             allowedSections: { live: true, downloads: true, arr: true },
-            kid: true,
+            // A kid flag alone now implies PG; keep it tied to the cap so
+            // "no cap" really means unrestricted.
+            kid: maxContentRating !== null,
           },
         }),
       )
@@ -1131,7 +1133,9 @@ describe('live stream grant + proxy', () => {
           [sub]: {
             maxContentRating,
             allowedSections: { live: true, downloads: true, arr: true },
-            kid: true,
+            // A kid flag alone now implies PG; keep it tied to the cap so
+            // "no cap" really means unrestricted.
+            kid: maxContentRating !== null,
           },
         }),
       )
