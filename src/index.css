@@ -285,6 +285,18 @@ div.iptv-tab__status p { margin: 0 0 .5rem; }
 .media-still-watching p { margin: 0; }
 .media-still-watching .media-resume__choices { margin-top: var(--s-3); justify-content: center; }
 .media-still-watching__title { font-size: var(--t-lg, 1.25rem); font-weight: 700; color: var(--text); }
+/* End card after a movie or a show's last episode: dims the last frame. */
+.media-end-card {
+  position: absolute; inset: 0; z-index: 3; overflow-y: auto;
+  display: flex; flex-direction: column; justify-content: center; gap: var(--s-5);
+  padding: var(--s-6); color: var(--text); background: rgb(0 0 0 / 0.78);
+}
+.media-end-card p { margin: 0; }
+.media-end-card__head {
+  display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--s-4);
+}
+.media-end-card__title { font-size: var(--t-xl, 1.5rem); font-weight: 700; }
+.media-end-card .trending { margin: 0; }
 /* Subtitle appearance from the playback prefs (data-subtitle-style and the
    --cue-* variables are set on the modal only when overridden). Fallbacks
    match the browser's own cue styling. */

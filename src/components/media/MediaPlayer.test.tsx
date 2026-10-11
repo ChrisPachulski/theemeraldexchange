@@ -134,6 +134,24 @@ describe('MediaPlayerView', () => {
   })
 })
 
+describe('MediaPlayerView end card', () => {
+  it('shows Finished with Replay and Done once a movie or last episode ends', () => {
+    const html = renderToStaticMarkup(
+      <MediaPlayerView {...viewProps({ streamGrant: progressiveStreamGrant(), endCard: { onReplay: noop } })} />,
+    )
+    expect(html).toContain('aria-label="Finished"')
+    expect(html).toContain('>Replay<')
+    expect(html).toContain('>Done<')
+    // No related source: no More like this row (and no TMDB fetch).
+    expect(html).not.toContain('More like this')
+  })
+
+  it('is absent while playing', () => {
+    const html = renderToStaticMarkup(<MediaPlayerView {...viewProps({ streamGrant: progressiveStreamGrant() })} />)
+    expect(html).not.toContain('aria-label="Finished"')
+  })
+})
+
 describe('MediaPlayer', () => {
   it('renders the starting state as a labelled dialog before any grant resolves', () => {
     const html = renderToStaticMarkup(

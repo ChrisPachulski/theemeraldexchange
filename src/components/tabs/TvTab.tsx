@@ -36,6 +36,9 @@ import { seriesAvailability, sonarr, type Series, type SeriesSearchResult } from
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import type { MediaEpisode } from '../../lib/api/media'
 import { seriesPlayback, watchBadge, watchFraction } from '../../lib/watchState'
+import { mediaApi } from '../../lib/api/media'
+import type { RelatedItem } from '../../lib/api/tmdb'
+import { episodeQueue } from '../media/playbackSession'
 import { withViewTransition } from '../../lib/viewTransition'
 import { useIntent } from '../../lib/router'
 import {
@@ -180,6 +183,7 @@ export function TvTab() {
     startPositionSecs?: number
     showId: number
     showTitle: string
+    tvdbId?: number
   } | null>(null)
   // The playing show's episodes power the player's Up Next, prev/next and queue.
   const playingEpisodes = useMediaEpisodes(playingEpisode?.showId ?? null)
@@ -228,6 +232,8 @@ export function TvTab() {
       startPositionSecs: resumePosition(mediaWatch.data?.get(`episode:${ep.id}`)),
       showId: localShowId,
       showTitle,
+      // Feeds the end card's More like this after the show's last episode.
+      tvdbId: viewing.tvdbId,
     })
   }
   // Whether the viewed IN-LIBRARY show has anything to play at all. A
@@ -270,10 +276,12 @@ export function TvTab() {
   }
   // Resolve a `tmdb:N` / `tvdb:N` term through Sonarr, then open the library
   // entry if we own it, else the Discover detail. Shared by the strip and the
-  // `#/tv/<term>` intent.
-  const openLookup = async (term: string) => {
+  // `#/tv/<term>` intent. The title fallback covers a `tmdb:` term Sonarr
+  // can't resolve (Apple's openRelated).
+  const openLookup = async (term: string, fallbackTitle?: string) => {
     try {
-      const results = await sonarr.lookup(term)
+      let results = await sonarr.lookup(term)
+      if (!results[0] && fallbackTitle) results = await sonarr.lookup(fallbackTitle)
       const hit = results[0]
       if (!hit) {
         setToast("Couldn't find that show on TVDB")
@@ -281,6 +289,41 @@ export function TvTab() {
       }
       openIfAllowed(libraryByTvdb.get(hit.tvdbId) ?? hit)
     } catch (e) {
+      setToast(e instanceof Error ? e.message : String(e))
+    }
+  }
+  const openRelated = async (item: RelatedItem) => {
+    setTrendingPending(item.id)
+    await openLookup(`tmdb:${item.id}`, item.title)
+    setTrendingPending(null)
+  }
+  // End-card pick (Apple playPick): a local show plays its first episode in
+  // place, anything else opens its detail.
+  const playRelated = async (item: RelatedItem) => {
+    const showId = localShowIdx.data?.get(item.id)
+    if (showId == null) {
+      setPlayingEpisode(null)
+      return openRelated(item)
+    }
+    try {
+      const eps = await qc.fetchQuery({
+        queryKey: ['media', 'episodes', showId],
+        queryFn: ({ signal }) => mediaApi.episodes(showId, { signal }),
+        staleTime: 60_000,
+      })
+      const sorted = episodeQueue(eps.items, -1).episodes
+      // Season 1 over specials, which sort first.
+      const first = sorted.find((e) => e.season > 0) ?? sorted[0]
+      if (!first) throw new Error(`No episodes of ${item.title} to play`)
+      setPlayingEpisode({
+        id: first.id,
+        title: episodeLabel(item.title, first),
+        startPositionSecs: resumePosition(mediaWatch.data?.get(`episode:${first.id}`)),
+        showId,
+        showTitle: item.title,
+      })
+    } catch (e) {
+      setPlayingEpisode(null)
       setToast(e instanceof Error ? e.message : String(e))
     }
   }
@@ -718,6 +761,9 @@ export function TvTab() {
           />
         ) : undefined}
         autoShowAdvanced={viewing !== null && 'id' in viewing && transient?.id === viewing.id}
+        extras={viewing ? { kind: 'tv', id: viewing.tvdbId, tmdbId: viewing.tmdbId } : undefined}
+        onPickRelated={(item) => void openRelated(item)}
+        relatedPendingId={trendingPending}
       />
 
       {playingEpisode && (
@@ -730,6 +776,9 @@ export function TvTab() {
           startPositionSecs={playingEpisode.startPositionSecs}
           autoResume
           episodes={playingEpisodes.data?.items}
+          // Related titles carry no certification: withheld under a cap.
+          related={ratingGate.capped || !playingEpisode.tvdbId ? undefined : { kind: 'tv', id: playingEpisode.tvdbId }}
+          onPickRelated={(item) => void playRelated(item)}
           onPlayEpisode={(ep) =>
             setPlayingEpisode((cur) =>
               cur && {

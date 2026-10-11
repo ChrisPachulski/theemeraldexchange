@@ -83,6 +83,19 @@ vi.mock('../../lib/hooks/usePolicy', () => ({
   useSectionAccess: () => ({ live: true, downloads: true, arr: true }),
 }))
 vi.mock('../../lib/hooks/useCast', () => ({ useCast: () => ({ data: [], isLoading: false }) }))
+vi.mock('../../lib/hooks/useTmdbExtras', () => ({
+  useVideos: () => ({ data: [] }),
+  useRelated: () => ({ data: [] }),
+  usePerson: () => ({ data: undefined, isPending: false, error: null }),
+}))
+vi.mock('../../lib/hooks/useWatchlist', () => ({
+  useWatchlist: () => ({ data: [], error: null }),
+  useToggleWatchlist: () => ({ mutate: () => {}, isPending: false }),
+}))
+vi.mock('../../lib/hooks/useUserFeedback', () => ({
+  useFeedback: () => ({ data: undefined, error: null }),
+  useSetFeedback: () => ({ mutate: () => {} }),
+}))
 vi.mock('../../lib/hooks/usePlexLinks', () => ({
   usePlexLinks: () => ({ linkFor: () => null, isLoading: false }),
 }))

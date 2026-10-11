@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fetchCast, castCharacter, type CastMember } from './tmdb'
+import { fetchCast, fetchPerson, fetchRelated, fetchVideos, castCharacter, type CastMember } from './tmdb'
 
 const fetchMock = vi.fn()
 
@@ -140,5 +140,59 @@ describe('castCharacter', () => {
     castCharacter(member)
     expect(roles[0].character).toBe('A')
     expect(roles[1].character).toBe('B')
+  })
+})
+
+describe('fetchVideos / fetchRelated', () => {
+  it('keys a movie by tmdbId and a show by tvdbId', async () => {
+    fetchMock.mockResolvedValueOnce(jsonRes({ videos: [{ key: 'abcdefghijk', name: 'Trailer', type: 'Trailer', official: true }] }))
+    fetchMock.mockResolvedValueOnce(jsonRes({ items: [] }))
+
+    await expect(fetchVideos({ kind: 'movie', id: 603 })).resolves.toHaveLength(1)
+    await fetchRelated({ kind: 'tv', id: 81189 })
+
+    const movie = new URL(String(fetchMock.mock.calls[0][0]))
+    expect(movie.pathname).toBe('/api/tmdb/videos')
+    expect(Object.fromEntries(movie.searchParams)).toEqual({ type: 'movie', tmdbId: '603' })
+    const tv = new URL(String(fetchMock.mock.calls[1][0]))
+    expect(tv.pathname).toBe('/api/tmdb/related')
+    expect(Object.fromEntries(tv.searchParams)).toEqual({ type: 'tv', tvdbId: '81189' })
+  })
+
+  it('shapes related rows for TrendingRow', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonRes({ items: [{ tmdbId: 1, title: 'A', year: 1999, posterPath: '/a.jpg' }, { tmdbId: 2, title: 'B', year: null, posterPath: null }] }),
+    )
+
+    await expect(fetchRelated({ kind: 'movie', id: 603 })).resolves.toEqual([
+      { id: 1, title: 'A', year: 1999, posterPath: '/a.jpg' },
+      { id: 2, title: 'B', year: undefined, posterPath: null },
+    ])
+  })
+
+  it('treats a 503 (key not configured) or a missing list as nothing', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 503 }))
+    fetchMock.mockResolvedValueOnce(jsonRes({}))
+
+    await expect(fetchVideos({ kind: 'movie', id: 603 })).resolves.toEqual([])
+    await expect(fetchRelated({ kind: 'movie', id: 603 })).resolves.toEqual([])
+  })
+})
+
+describe('fetchPerson', () => {
+  it('returns the person, or null when TMDB is not configured', async () => {
+    const person = { id: 6384, name: 'Keanu Reeves', profile_path: null, biography: 'Bio', known_for_department: 'Acting', cast: [] }
+    fetchMock.mockResolvedValueOnce(jsonRes(person))
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 503 }))
+
+    await expect(fetchPerson(6384)).resolves.toEqual(person)
+    expect(new URL(String(fetchMock.mock.calls[0][0])).pathname).toBe('/api/tmdb/person/6384')
+    await expect(fetchPerson(6384)).resolves.toBeNull()
+  })
+
+  it('throws on other failures', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 502 }))
+
+    await expect(fetchPerson(1)).rejects.toThrow(/TMDB person failed: 502/)
   })
 })

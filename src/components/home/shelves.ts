@@ -1,5 +1,7 @@
 import type { WatchEntry } from '../../lib/api/media'
 import type { EpgNowRow, EpgProgrammeDto } from '../../lib/api/iptv'
+import type { WatchlistEntry } from '../../lib/api/watchlist'
+import type { IntentRoute } from '../../lib/router'
 
 // Pure selectors behind the Home shelves (Apple HomeScreen.swift parity).
 
@@ -39,6 +41,18 @@ export function titleKey(title: string): string {
     .filter(Boolean)
   if (parts.length > 1 && /^(19|20)\d\d$/.test(parts[parts.length - 1])) parts.pop()
   return parts.join(' ')
+}
+
+/** Where a Watchlist row opens: its tab, by the id the row stores (TMDB for a
+ *  movie, TVDB for a show). The tab resolves it library-first. */
+export function watchlistIntent(e: Pick<WatchlistEntry, 'kind' | 'id'>): [IntentRoute, string] {
+  return e.kind === 'movie' ? ['movies', `tmdb:${e.id}`] : ['tv', `tvdb:${e.id}`]
+}
+
+/** A Watchlist row's poster: an *arr URL as stored, or a bare TMDB path. */
+export function watchlistPoster(path: string | undefined): string | null {
+  if (!path) return null
+  return path.startsWith('http') ? path : `${TMDB_POSTER_BASE}${path}`
 }
 
 export type Airing = { streamId: number; programme: EpgProgrammeDto; startMs: number; stopMs: number }

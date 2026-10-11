@@ -34,6 +34,7 @@ import { movieAvailability, radarr, type Movie, type MovieSearchResult } from '.
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import type { WatchEntry } from '../../lib/api/media'
 import { resumeLabel, watchBadge, watchFraction } from '../../lib/watchState'
+import type { RelatedItem } from '../../lib/api/tmdb'
 import {
   filterAndSortLibrary,
   byTitleAsc,
@@ -195,6 +196,8 @@ export function MoviesTab() {
     id: number
     title: string
     startPositionSecs?: number
+    /** For the end card's More like this. */
+    tmdbId: number
   } | null>(null)
 
   const cast = useCast({
@@ -278,6 +281,18 @@ export function MoviesTab() {
     } finally {
       setTrendingPending(null)
     }
+  }
+  // End-card pick (Apple playPick): a local movie plays in place, anything
+  // else opens its detail.
+  const playRelated = (item: RelatedItem) => {
+    const id = localMovieIdx.data?.get(item.id)
+    if (id == null) {
+      setPlayingLocal(null)
+      void openTmdb(item.id)
+      return
+    }
+    const startPositionSecs = resumePosition(mediaWatch.data?.get(`movie:${id}`))
+    setPlayingLocal({ id, title: item.title, startPositionSecs, tmdbId: item.id })
   }
   // Open-a-title intent from another surface (Home shelves, Downloads).
   useIntent('movies', !library.isPending, (ref) => {
@@ -629,7 +644,7 @@ export function MoviesTab() {
                 const t = viewing.title
                 const startPositionSecs = resumePosition(mediaWatch.data?.get(`movie:${localMovieId}`))
                 setViewing(null)
-                setPlayingLocal({ id: localMovieId, title: t, startPositionSecs })
+                setPlayingLocal({ id: localMovieId, title: t, startPositionSecs, tmdbId: viewing.tmdbId })
               }
             : undefined
         }
@@ -670,6 +685,9 @@ export function MoviesTab() {
           />
         ) : undefined}
         autoShowAdvanced={viewing !== null && 'id' in viewing && transient?.id === viewing.id}
+        extras={viewing ? { kind: 'movie', id: viewing.tmdbId, tmdbId: viewing.tmdbId } : undefined}
+        onPickRelated={(item) => void openTmdb(item.id)}
+        relatedPendingId={trendingPending}
       />
 
       {playingLocal && (
@@ -679,6 +697,9 @@ export function MoviesTab() {
           id={playingLocal.id}
           title={playingLocal.title}
           startPositionSecs={playingLocal.startPositionSecs}
+          // Related titles carry no certification: withheld under a cap.
+          related={ratingGate.capped ? undefined : { kind: 'movie', id: playingLocal.tmdbId }}
+          onPickRelated={playRelated}
           onClose={() => setPlayingLocal(null)}
         />
       )}
