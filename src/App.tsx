@@ -41,6 +41,9 @@ const UsersTab = lazy(() =>
   import('./components/tabs/UsersTab').then((m) => ({ default: m.UsersTab })),
 )
 const IptvTab = lazy(() => import('./components/tabs/IptvTab'))
+const YouTubeTab = lazy(() =>
+  import('./components/tabs/YouTubeTab').then((m) => ({ default: m.YouTubeTab })),
+)
 
 // Walkthrough is the unauthed landing experience. Authed users (the hot
 // path) never see it, so keep it out of the initial chunk. Unauthed users
@@ -57,6 +60,7 @@ const TABS: Record<Route, React.ComponentType> = {
   downloads: DownloadsTab,
   users: UsersTab,
   live: IptvTab,
+  youtube: YouTubeTab,
 }
 
 function Shell() {
@@ -77,19 +81,25 @@ function Shell() {
   const sonarrEnabled = limits.data?.sonarrEnabled !== false
   const radarrEnabled = limits.data?.radarrEnabled !== false
   const sabEnabled = limits.data?.sabEnabled !== false
+  // Library tabs default OFF, so wait for the real /api/limits before
+  // bouncing a deep link (the placeholder would always say "off").
+  // TODO(policy): YouTube is unrated; also bounce rating-capped profiles (Apple MainView).
+  const youtubeOff = !limits.isPlaceholderData && limits.data?.youtubeEnabled !== true
   useEffect(() => {
     if (route === 'users' && !isAdmin) navigate('home')
     if (route === 'live' && !iptvEnabled) navigate('home')
     if (route === 'tv' && !sonarrEnabled) navigate('home')
     if (route === 'movies' && !radarrEnabled) navigate('home')
     if (route === 'downloads' && !sabEnabled) navigate('home')
-  }, [route, isAdmin, iptvEnabled, sonarrEnabled, radarrEnabled, sabEnabled, navigate])
+    if (route === 'youtube' && youtubeOff) navigate('home')
+  }, [route, isAdmin, iptvEnabled, sonarrEnabled, radarrEnabled, sabEnabled, youtubeOff, navigate])
   const blocked =
     (route === 'users' && !isAdmin) ||
     (route === 'live' && !iptvEnabled) ||
     (route === 'tv' && !sonarrEnabled) ||
     (route === 'movies' && !radarrEnabled) ||
-    (route === 'downloads' && !sabEnabled)
+    (route === 'downloads' && !sabEnabled) ||
+    (route === 'youtube' && youtubeOff)
   const effectiveRoute: Route = blocked ? 'home' : route
   const ActiveTab = TABS[effectiveRoute]
   const krakenVariant = effectiveRoute === 'home' ? 'kraken' : 'resting'

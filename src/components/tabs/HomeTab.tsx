@@ -1,13 +1,22 @@
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
 import { useAuth } from '../../lib/auth'
+import { useLimits } from '../../lib/hooks/useLimits'
 import './HomeTab.css'
 
-type Entry = { route: Route; label: string; adminOnly?: boolean }
+type Entry = {
+  route: Route
+  label: string
+  adminOnly?: boolean
+  /** Default-off Limits key: shown only when the server reports that library. */
+  library?: 'youtubeEnabled'
+}
 
 const ENTRIES: Entry[] = [
   { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
+  // TODO(policy): YouTube is unrated; also hide it from rating-capped profiles (Apple MainView).
+  { route: 'youtube', label: 'YouTube', library: 'youtubeEnabled' },
   { route: 'live', label: 'Live' },
   { route: 'downloads', label: 'Downloader' },
   { route: 'users', label: 'Users', adminOnly: true },
@@ -60,7 +69,10 @@ function ChevronDown() {
 export function HomeTab() {
   const { transitionTo } = useNavTransition()
   const { isAdmin } = useAuth()
-  const entries = ENTRIES.filter((e) => !e.adminOnly || isAdmin)
+  const limits = useLimits()
+  const entries = ENTRIES.filter(
+    (e) => (!e.adminOnly || isAdmin) && (!e.library || limits.data?.[e.library] === true),
+  )
 
   return (
     <section className="home" aria-label="Emerald Exchange home">

@@ -23,11 +23,16 @@ type Tab = {
   /** Limits key gating this tab (plan 006 Phase 3): tab hides when the
    *  matching integration is unconfigured on this install. */
   needs?: 'sonarrEnabled' | 'radarrEnabled' | 'sabEnabled'
+  /** Default-off Limits key: the tab shows only when the server reports
+   *  that library (an older backend without the field has none). */
+  library?: 'youtubeEnabled'
 }
 
 const TABS: Tab[] = [
   { route: 'tv', label: 'TV Shows', needs: 'sonarrEnabled' },
   { route: 'movies', label: 'Movies', needs: 'radarrEnabled' },
+  // TODO(policy): YouTube is unrated; also hide it from rating-capped profiles (Apple MainView).
+  { route: 'youtube', label: 'YouTube', library: 'youtubeEnabled' },
   // `iptv: true` hides the tab when the server boots with IPTV_DISABLED=1
   // (contract §13.3 reviewer-insurance gate).
   { route: 'live', label: 'Live', iptv: true },
@@ -38,6 +43,7 @@ const TABS: Tab[] = [
 const ROUTE_LABEL: Record<NavRoute, string> = {
   tv: 'TV Shows',
   movies: 'Movies',
+  youtube: 'YouTube',
   live: 'Live',
   downloads: 'Downloads',
   users: 'Users',
@@ -57,6 +63,7 @@ export function TopNav({ active }: Props) {
   const tabRefs = useRef<Record<NavRoute, HTMLButtonElement | null>>({
     tv: null,
     movies: null,
+    youtube: null,
     live: null,
     downloads: null,
     users: null,
@@ -68,6 +75,7 @@ export function TopNav({ active }: Props) {
       // Optional integrations (plan 006 Phase 3): default true so older
       // backends without the flags keep every tab.
       (!t.needs || limits.data?.[t.needs] !== false) &&
+      (!t.library || limits.data?.[t.library] === true) &&
       t.route !== active,
   )
 
