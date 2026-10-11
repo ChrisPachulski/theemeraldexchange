@@ -1,15 +1,16 @@
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
 import { useAuth } from '../../lib/auth'
+import { useSectionAccess } from '../../lib/hooks/usePolicy'
 import './HomeTab.css'
 
-type Entry = { route: Route; label: string; adminOnly?: boolean }
+type Entry = { route: Route; label: string; adminOnly?: boolean; section?: 'live' | 'downloads' }
 
 const ENTRIES: Entry[] = [
   { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
-  { route: 'live', label: 'Live' },
-  { route: 'downloads', label: 'Downloader' },
+  { route: 'live', label: 'Live', section: 'live' },
+  { route: 'downloads', label: 'Downloader', section: 'downloads' },
   { route: 'users', label: 'Users', adminOnly: true },
 ]
 
@@ -60,7 +61,10 @@ function ChevronDown() {
 export function HomeTab() {
   const { transitionTo } = useNavTransition()
   const { isAdmin } = useAuth()
-  const entries = ENTRIES.filter((e) => !e.adminOnly || isAdmin)
+  const sections = useSectionAccess()
+  const entries = ENTRIES.filter(
+    (e) => (!e.adminOnly || isAdmin) && (!e.section || sections[e.section]),
+  )
 
   return (
     <section className="home" aria-label="Emerald Exchange home">

@@ -12,6 +12,7 @@ import { LinkDeviceModal } from './components/auth/LinkDeviceModal'
 import { clearPendingLinkCode, readPendingLinkCode } from './lib/linkFragment'
 import { AuthProvider, useAuth } from './lib/auth'
 import { useLimits } from './lib/hooks/useLimits'
+import { useSectionAccess } from './lib/hooks/usePolicy'
 // View Transitions cross-fade + persistent-shell view-transition-names.
 // Imported here (always-mounted root) so the ::view-transition rules and
 // the nav/dock view-transition-names are available no matter which tab is
@@ -66,7 +67,7 @@ function Shell() {
   const [linkCode, setLinkCode] = useState<string | null>(() => readPendingLinkCode())
   const { isAdmin } = useAuth()
   const limits = useLimits()
-  const iptvEnabled = limits.data?.iptvEnabled !== false
+  const sections = useSectionAccess()
   // The Users tab is admin-only. Non-admins who land on /users via a
   // stale link get bounced home rather than seeing an error page.
   // The Live tab is gated by IPTV_DISABLED — bounce on stale links too
@@ -74,22 +75,24 @@ function Shell() {
   // SPA itself; they just round-trip to home).
   // Optional integrations (plan 006 Phase 3): a tab whose backing service
   // is unconfigured bounces home, same as the IPTV gate.
+  // A member's policy can also deny Live or Downloads (those calls 403).
+  const liveOk = limits.data?.iptvEnabled !== false && sections.live
   const sonarrEnabled = limits.data?.sonarrEnabled !== false
   const radarrEnabled = limits.data?.radarrEnabled !== false
-  const sabEnabled = limits.data?.sabEnabled !== false
+  const downloadsOk = limits.data?.sabEnabled !== false && sections.downloads
   useEffect(() => {
     if (route === 'users' && !isAdmin) navigate('home')
-    if (route === 'live' && !iptvEnabled) navigate('home')
+    if (route === 'live' && !liveOk) navigate('home')
     if (route === 'tv' && !sonarrEnabled) navigate('home')
     if (route === 'movies' && !radarrEnabled) navigate('home')
-    if (route === 'downloads' && !sabEnabled) navigate('home')
-  }, [route, isAdmin, iptvEnabled, sonarrEnabled, radarrEnabled, sabEnabled, navigate])
+    if (route === 'downloads' && !downloadsOk) navigate('home')
+  }, [route, isAdmin, liveOk, sonarrEnabled, radarrEnabled, downloadsOk, navigate])
   const blocked =
     (route === 'users' && !isAdmin) ||
-    (route === 'live' && !iptvEnabled) ||
+    (route === 'live' && !liveOk) ||
     (route === 'tv' && !sonarrEnabled) ||
     (route === 'movies' && !radarrEnabled) ||
-    (route === 'downloads' && !sabEnabled)
+    (route === 'downloads' && !downloadsOk)
   const effectiveRoute: Route = blocked ? 'home' : route
   const ActiveTab = TABS[effectiveRoute]
   const krakenVariant = effectiveRoute === 'home' ? 'kraken' : 'resting'

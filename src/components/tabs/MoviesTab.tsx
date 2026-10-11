@@ -20,6 +20,7 @@ import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
 import { useRadarrLibrary, useRadarrProfiles, useRadarrRootFolders } from '../../lib/hooks/useRadarrLibrary'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
 import { useLimits } from '../../lib/hooks/useLimits'
+import { useRatingGate, useSectionAccess } from '../../lib/hooks/usePolicy'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
 import { resumePosition, useLocalMovieIndex, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
 import { MediaPlayer } from '../media/MediaPlayer'
@@ -237,9 +238,23 @@ export function MoviesTab() {
     }
   }
 
+  // A rating-capped profile never sees a title above its cap (unrated fails
+  // closed), so filter before search, sort, A-Z and counts all inherit it.
+  const ratingGate = useRatingGate()
+  const visibleLibrary = useMemo(
+    () => library.data?.filter((x) => ratingGate.allows(x.certification)),
+    [library.data, ratingGate],
+  )
+  const visibleResults = useMemo(
+    () => (search.data ?? []).filter((x) => ratingGate.allows(x.certification)),
+    [search.data, ratingGate],
+  )
+  // Members whose policy denies library management get no Add (it 403s).
+  const sections = useSectionAccess()
+
   const textFilteredLibrary = useMemo(
-    () => filterAndSortLibrary(library.data, { query, status, comparator: MOVIE_COMPARATORS[sort] }),
-    [library.data, query, status, sort],
+    () => filterAndSortLibrary(visibleLibrary, { query, status, comparator: MOVIE_COMPARATORS[sort] }),
+    [visibleLibrary, query, status, sort],
   )
 
   const availableLetters = useMemo(
@@ -356,11 +371,12 @@ export function MoviesTab() {
             query={debouncedQuery}
             loading={search.isPending && debouncedQuery.length >= 2}
             error={search.error}
-            results={search.data ?? []}
+            results={visibleResults}
             libraryByTmdb={libraryByTmdb}
             onCardClick={handleSearchClick}
           />
-          {debouncedQuery.length < 2 && (
+          {/* Suggestions carry no certification: withheld under a cap. */}
+          {debouncedQuery.length < 2 && !ratingGate.capped && (
             <div className="tv-tab__trending-below-fold">
               <TrendingRow
                 items={strip.items}
@@ -381,7 +397,7 @@ export function MoviesTab() {
         </>
       ) : (
         <>
-          {!library.isPending && !library.error && (library.data?.length ?? 0) > 0 && (
+          {!library.isPending && !library.error && (visibleLibrary?.length ?? 0) > 0 && (
             <>
               <LibraryFilters
                 sortOptions={MOVIE_SORT_OPTIONS}
@@ -438,7 +454,7 @@ export function MoviesTab() {
               if (next === 'discover') setLetter('all')
             })
           }}
-          libraryCount={library.data?.length}
+          libraryCount={visibleLibrary?.length}
         />
       </div>
 
@@ -502,7 +518,7 @@ export function MoviesTab() {
               }
             : undefined
         }
-        onAdd={viewing && !('id' in viewing) ? () => {
+        onAdd={sections.arr && viewing && !('id' in viewing) ? () => {
           const item = viewing as MovieSearchResult
           setViewing(null)
           setAdding(item)
