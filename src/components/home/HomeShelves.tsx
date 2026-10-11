@@ -11,6 +11,7 @@ import { resumePosition, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
 import { useIptvFavoriteSet } from '../../lib/hooks/useIptvFavorites'
 import { useIptvEpgNow } from '../../lib/hooks/useIptvEpg'
+import { useWatchlist } from '../../lib/hooks/useWatchlist'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import type { WatchEntry } from '../../lib/api/media'
 import {
@@ -21,6 +22,8 @@ import {
   resumeTitle,
   timeLeft,
   titleKey,
+  watchlistIntent,
+  watchlistPoster,
 } from './shelves'
 
 // The player only loads once something is resumed.
@@ -262,6 +265,28 @@ export function HomeShelves() {
     }),
     [movies.data, shows.data],
   )
+  // Watchlist rows carry no rating: a capped profile matches them to the
+  // library by the id they store (not in the library fails closed).
+  const watchlist = useWatchlist()
+  const certByWatchId = useMemo(
+    () => ({
+      movie: new Map((movies.data ?? []).map((m) => [m.tmdbId, m.certification])),
+      tv: new Map((shows.data ?? []).map((s) => [s.tvdbId, s.certification])),
+    }),
+    [movies.data, shows.data],
+  )
+  const watchlistCards: Card[] = (watchlist.data ?? [])
+    .filter(
+      (e) =>
+        (e.kind === 'movie' ? radarrEnabled : sonarrEnabled) &&
+        ratingGate.allows(certByWatchId[e.kind].get(e.id)),
+    )
+    .map((e) => ({
+      key: `${e.kind}:${e.id}`,
+      title: e.title,
+      poster: watchlistPoster(e.poster_path),
+      onOpen: () => openIntent(...watchlistIntent(e)),
+    }))
 
   const recentCards = (kind: 'movie' | 'tv'): Card[] =>
     recent
@@ -283,6 +308,7 @@ export function HomeShelves() {
   return (
     <div className="home__shelves">
       {mediaEnabled && <ContinueWatchingShelf movies={movies.data} shows={shows.data} />}
+      <PosterShelf label="Watchlist" cards={watchlistCards} />
       {radarrEnabled && <PosterShelf label="Recently added movies" cards={recentCards('movie')} />}
       {sonarrEnabled && <PosterShelf label="Recently added shows" cards={recentCards('tv')} />}
       {iptvEnabled && sections.live && <LiveNowShelf />}

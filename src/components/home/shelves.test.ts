@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { WatchEntry } from '../../lib/api/media'
 import type { EpgNowRow } from '../../lib/api/iptv'
-import { airingNow, continueWatching, episodeLabel, resumeTitle, timeLeft, titleKey } from './shelves'
+import {
+  airingNow,
+  continueWatching,
+  episodeLabel,
+  resumeTitle,
+  timeLeft,
+  titleKey,
+  watchlistIntent,
+  watchlistPoster,
+} from './shelves'
 
 const row = (over: Partial<WatchEntry>): WatchEntry => ({
   mediaKind: 'movie',
@@ -80,5 +89,18 @@ describe('airingNow', () => {
     expect(timeLeft(at('2026-10-10T21:00:00Z'), at('2026-10-10T20:48:00Z'))).toBe('12m')
     expect(timeLeft(at('2026-10-10T22:05:00Z'), at('2026-10-10T21:00:00Z'))).toBe('1h 5m')
     expect(timeLeft(at('2026-10-10T21:00:00Z'), at('2026-10-10T20:59:50Z'))).toBe('1m')
+  })
+})
+
+describe('watchlist rows', () => {
+  it('open movies by TMDB id and shows by TVDB id', () => {
+    expect(watchlistIntent({ kind: 'movie', id: 603 })).toEqual(['movies', 'tmdb:603'])
+    expect(watchlistIntent({ kind: 'tv', id: 81189 })).toEqual(['tv', 'tvdb:81189'])
+  })
+
+  it('keep a stored *arr poster URL and complete a bare TMDB path', () => {
+    expect(watchlistPoster('https://artworks.thetvdb.com/p.jpg')).toBe('https://artworks.thetvdb.com/p.jpg')
+    expect(watchlistPoster('/p.jpg')).toBe('https://image.tmdb.org/t/p/w342/p.jpg')
+    expect(watchlistPoster(undefined)).toBeNull()
   })
 })
