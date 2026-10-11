@@ -12,13 +12,15 @@
 
 import '@testing-library/jest-dom/vitest'
 import { act, fireEvent, render, screen, cleanup } from '@testing-library/react'
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MediaPlayer } from './MediaPlayer'
 import { HEARTBEAT_INTERVAL_MS } from './playbackSession'
-import type { PlaybackGrant } from '../../lib/api/media'
+import type { MediaEpisode, PlaybackGrant } from '../../lib/api/media'
 
-const { playbackMock, heartbeatMock, stopMock, flushWatchMock, reportMock, engineProps } = vi.hoisted(() => ({
+const { playbackMock, heartbeatMock, stopMock, flushWatchMock, markersMock, reportMock, engineProps } = vi.hoisted(() => ({
   playbackMock: vi.fn(),
+  markersMock: vi.fn(),
   heartbeatMock: vi.fn(),
   stopMock: vi.fn(),
   flushWatchMock: vi.fn(),
@@ -43,6 +45,7 @@ vi.mock('../../lib/api/media', () => ({
     heartbeat: heartbeatMock,
     stop: stopMock,
     flushWatch: flushWatchMock,
+    markers: markersMock,
   },
 }))
 vi.mock('../../lib/hooks/useMediaLibrary', () => ({
@@ -95,6 +98,8 @@ beforeEach(() => {
   heartbeatMock.mockReset()
   stopMock.mockReset()
   flushWatchMock.mockReset()
+  markersMock.mockReset()
+  markersMock.mockResolvedValue([])
   reportMock.mockReset()
   engineProps.current = null
 })
@@ -399,5 +404,129 @@ describe('MediaPlayer (mounted) — stop lifecycle', () => {
     // The session it just claimed is freed immediately (not left to the reaper).
     expect(stopMock).toHaveBeenCalledTimes(1)
     expect(stopMock).toHaveBeenCalledWith(grant.stopUrl)
+  })
+})
+
+describe('MediaPlayer (mounted) — retry resumes where playback stopped', () => {
+  it('"Play again" after a reaped session re-grants at the last position', async () => {
+    vi.useFakeTimers()
+    playbackMock.mockResolvedValue(hlsGrant())
+    heartbeatMock.mockResolvedValue(404)
+
+    render(<MediaPlayer kind="movie" id={9} title="300" onClose={() => {}} />)
+    await flush()
+    act(() => engineProps.current?.onPositionUpdate?.(300.6, null))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS)
+    })
+
+    heartbeatMock.mockResolvedValue(200)
+    fireEvent.click(screen.getByRole('button', { name: 'Play again' }))
+    await flush()
+
+    expect(playbackMock).toHaveBeenLastCalledWith('movie', 9, undefined, 300, false)
+  })
+
+  it('fetches the title\'s Skip Intro / Credits markers once', async () => {
+    playbackMock.mockResolvedValue(hlsGrant())
+    render(<MediaPlayer kind="episode" id={42} title="S01E07" onClose={() => {}} />)
+    await flush()
+    expect(markersMock).toHaveBeenCalledExactlyOnceWith('episode', 42)
+  })
+})
+
+describe('MediaPlayer (mounted) — binge flow', () => {
+  const ep = (id: number, episode: number): MediaEpisode => ({
+    id,
+    showId: 5,
+    season: 1,
+    episode,
+    title: `Episode ${episode}`,
+    airDate: null,
+    fileId: id,
+  })
+  const episodes = [ep(1, 1), ep(2, 2), ep(3, 3), ep(4, 4)]
+  // HLS grant of a 1500 s episode, keyed by episode so stops are attributable.
+  const grantFor = (id: number) =>
+    hlsGrant({ durationSecs: 1500, stopUrl: `https://api.example/stop/${id}`, heartbeatUrl: null })
+
+  function Harness({ onPlayEpisode }: { onPlayEpisode: (e: MediaEpisode) => void }) {
+    const [id, setId] = useState(1)
+    return (
+      <MediaPlayer
+        kind="episode"
+        id={id}
+        title={`Ep ${id}`}
+        episodes={episodes}
+        onPlayEpisode={(e) => {
+          onPlayEpisode(e)
+          setId(e.id)
+        }}
+        onClose={() => {}}
+      />
+    )
+  }
+
+  beforeEach(() => {
+    playbackMock.mockImplementation((_kind: string, id: number) => Promise.resolve(grantFor(id)))
+  })
+
+  it('arms Up Next in the last 30 s and swaps the next episode in place on Play now', async () => {
+    const onPlayEpisode = vi.fn()
+    render(<Harness onPlayEpisode={onPlayEpisode} />)
+    await flush()
+    const dialog = screen.getByRole('dialog')
+
+    act(() => engineProps.current?.onPositionUpdate?.(1400, null))
+    expect(screen.queryByRole('group', { name: 'Up next' })).not.toBeInTheDocument()
+    act(() => engineProps.current?.onPositionUpdate?.(1475, null))
+    expect(screen.getByRole('group', { name: 'Up next' })).toHaveTextContent('S01E02 · Episode 2')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play now' }))
+    await flush()
+
+    expect(onPlayEpisode).toHaveBeenCalledExactlyOnceWith(episodes[1])
+    // Same modal node (fullscreen survives), outgoing session stopped and
+    // flushed as completed, fresh grant for the new episode.
+    expect(screen.getByRole('dialog')).toBe(dialog)
+    expect(stopMock).toHaveBeenCalledWith('https://api.example/stop/1')
+    expect(reportMock).toHaveBeenCalledWith(1475, 1500, true, true)
+    expect(playbackMock).toHaveBeenLastCalledWith('episode', 2, undefined, undefined, false)
+    expect(screen.queryByRole('group', { name: 'Up next' })).not.toBeInTheDocument()
+  })
+
+  it('"Watch credits" dismisses the card for this episode', async () => {
+    render(<Harness onPlayEpisode={vi.fn()} />)
+    await flush()
+    act(() => engineProps.current?.onPositionUpdate?.(1475, null))
+    fireEvent.click(screen.getByRole('button', { name: 'Watch credits' }))
+    act(() => engineProps.current?.onPositionUpdate?.(1480, null))
+    expect(screen.queryByRole('group', { name: 'Up next' })).not.toBeInTheDocument()
+  })
+
+  it('auto-advances on countdown, then gates the third unattended advance', async () => {
+    vi.useFakeTimers()
+    const onPlayEpisode = vi.fn()
+    render(<Harness onPlayEpisode={onPlayEpisode} />)
+    await flush()
+
+    for (const expected of [episodes[1], episodes[2]]) {
+      act(() => engineProps.current?.onPositionUpdate?.(1475, null))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(12_000)
+      })
+      expect(onPlayEpisode).toHaveBeenLastCalledWith(expected)
+      await flush()
+    }
+
+    act(() => engineProps.current?.onPositionUpdate?.(1475, null))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000)
+    })
+    expect(onPlayEpisode).toHaveBeenCalledTimes(2)
+    expect(screen.getByRole('group', { name: 'Still watching?' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Keep watching' }))
+    expect(onPlayEpisode).toHaveBeenLastCalledWith(episodes[3])
   })
 })

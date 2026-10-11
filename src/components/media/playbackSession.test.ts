@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   absoluteProgress,
+  createFrozenPlayheadWatchdog,
+  episodeQueue,
   formatPlaybackTime,
+  FROZEN_PLAYHEAD_LIMIT_MS,
+  upNextDue,
   COMPLETE_TAIL_SECS,
   HEARTBEAT_INTERVAL_MS,
   hlsPinnedDurationSecs,
@@ -379,5 +383,72 @@ describe('formatPlaybackTime', () => {
   it('clamps negatives and fractions sanely', () => {
     expect(formatPlaybackTime(-5)).toBe('0:00')
     expect(formatPlaybackTime(59.9)).toBe('0:59')
+  })
+})
+
+describe('binge helpers', () => {
+  it('arms Up Next only in the last 30 s of a title longer than 45 s', () => {
+    expect(upNextDue(1370, 1400)).toBe(true)
+    expect(upNextDue(1369, 1400)).toBe(false)
+    expect(upNextDue(30, 40)).toBe(false)
+    expect(upNextDue(100, null)).toBe(false)
+  })
+
+  it('orders the queue by season/episode and finds the neighbours', () => {
+    const eps = [
+      { id: 3, season: 2, episode: 1 },
+      { id: 1, season: 1, episode: 1 },
+      { id: 2, season: 1, episode: 2 },
+    ]
+    const q = episodeQueue(eps, 2)
+    expect(q.episodes.map((e) => e.id)).toEqual([1, 2, 3])
+    expect(q.prev?.id).toBe(1)
+    expect(q.next?.id).toBe(3)
+    expect(episodeQueue(eps, 3).next).toBeNull()
+    expect(episodeQueue(eps, 1).prev).toBeNull()
+    expect(episodeQueue(eps, 99)).toMatchObject({ prev: null, next: null })
+  })
+})
+
+describe('createFrozenPlayheadWatchdog', () => {
+  const sample = (position: number, now: number, over: { paused?: boolean; starved?: boolean } = {}) => ({
+    position,
+    now,
+    paused: over.paused ?? false,
+    starved: over.starved ?? true,
+  })
+
+  it('flags a starved, frozen playhead after 15 s of playback having begun', () => {
+    const tick = createFrozenPlayheadWatchdog()
+    expect(tick(sample(10, 0))).toBe(false)
+    expect(tick(sample(11, 1000))).toBe(false)
+    expect(tick(sample(11, 1000 + FROZEN_PLAYHEAD_LIMIT_MS - 1))).toBe(false)
+    expect(tick(sample(11, 1000 + FROZEN_PLAYHEAD_LIMIT_MS))).toBe(true)
+  })
+
+  it('never fires before playback begins, while paused, or with a full buffer', () => {
+    const fresh = createFrozenPlayheadWatchdog()
+    expect(fresh(sample(0, 0))).toBe(false)
+    expect(fresh(sample(0, 60_000))).toBe(false)
+
+    const paused = createFrozenPlayheadWatchdog()
+    paused(sample(10, 0))
+    paused(sample(11, 1000))
+    expect(paused(sample(11, 60_000, { paused: true }))).toBe(false)
+    expect(paused(sample(11, 70_000))).toBe(false)
+
+    const buffered = createFrozenPlayheadWatchdog()
+    buffered(sample(10, 0))
+    buffered(sample(11, 1000))
+    expect(buffered(sample(11, 60_000, { starved: false }))).toBe(false)
+  })
+
+  it('a seek restarts the clock', () => {
+    const tick = createFrozenPlayheadWatchdog()
+    tick(sample(10, 0))
+    tick(sample(11, 1000))
+    expect(tick(sample(500, 14_000))).toBe(false)
+    expect(tick(sample(500, 20_000))).toBe(false)
+    expect(tick(sample(500, 29_000))).toBe(true)
   })
 })

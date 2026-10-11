@@ -6,6 +6,7 @@
  * the old raw-hex bordered-box bar (paid down the recorded hex debt here). */
 
 .media-controls {
+  position: relative;
   display: flex;
   gap: var(--s-3);
   align-items: center;
@@ -59,6 +60,13 @@
 .media-controls__button:focus-visible {
   outline: 2px solid var(--emerald);
   outline-offset: 2px;
+}
+
+.media-controls__button:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: transparent;
+  transform: none;
 }
 
 /* Subtitles toggled ON — emerald so the active state reads at a glance
@@ -250,4 +258,74 @@
   max-height: none;
   min-height: 0;
   object-fit: contain;
+}
+
+/* Skip Intro / Skip Credits: a floating CTA above the bar's right end while
+ * the playhead is inside a marker window. */
+.media-controls__skip {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--s-3));
+  padding: var(--s-2) var(--s-4);
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  background: color-mix(in oklch, var(--surface) 90%, transparent);
+  border: 1px solid var(--emerald);
+  border-radius: var(--r-pod);
+  box-shadow: var(--elev-card);
+}
+.media-controls__skip:hover {
+  color: var(--emerald-hover);
+  background: var(--emerald-ghost);
+}
+
+/* Episode queue + playback settings popovers (native [popover]: top layer, so
+ * they also show over a fullscreen player; the UA centres them). */
+.media-controls__popover {
+  width: min(22rem, calc(100vw - 2rem));
+  max-height: min(70vh, 34rem);
+  padding: var(--s-3);
+  overflow: auto;
+  color: var(--text);
+  background: color-mix(in oklch, var(--surface) 96%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--elev-card);
+}
+.media-controls__popover .media-episode-list {
+  padding: 0;
+}
+
+/* Info block at the top of the settings popover (title, duration, delivery,
+ * resolution). */
+.media-controls__info {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--s-1) var(--s-3);
+  margin: 0 0 var(--s-3);
+  padding-bottom: var(--s-3);
+  font-size: var(--t-sm);
+  border-bottom: 1px solid var(--border);
+}
+.media-controls__info dt {
+  color: var(--text-muted);
+}
+.media-controls__info dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Phone width: the scrubber takes its own full-width row above the buttons. */
+@media (max-width: 640px) {
+  .media-controls {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--s-2);
+    border-radius: var(--r-lg);
+  }
+  .media-controls__scrubber {
+    order: -1;
+    flex-basis: 100%;
+  }
 }

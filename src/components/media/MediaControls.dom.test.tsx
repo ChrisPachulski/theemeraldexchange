@@ -11,6 +11,8 @@ import '@testing-library/jest-dom/vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MediaControls } from './MediaControls'
+import type { MediaEpisode } from '../../lib/api/media'
+import { setPlaybackPrefs, showTrackMemory } from '../../lib/playbackPrefs'
 
 afterEach(cleanup)
 
@@ -141,7 +143,7 @@ describe('MediaControls', () => {
 // with mutable `mode`. NOT covered (the OWED browser proof): whether the .vtt
 // cues actually paint over hls.js/MSE — that needs the cross-origin .vtt to
 // load at the real edge.
-type FakeTrack = { kind: string; mode: string; label?: string }
+type FakeTrack = { kind: string; mode: string; label?: string; language?: string }
 
 function videoWithTracks(tracks: FakeTrack[]): HTMLVideoElement {
   const video = makeVideo()
@@ -272,5 +274,103 @@ describe('MediaControls keyboard shortcuts', () => {
     fireEvent.keyDown(screen.getByLabelText('Mute'), { key: ' ' })
     expect(video.play).not.toHaveBeenCalled()
     expect(video.muted).toBe(false)
+  })
+})
+
+// ── Player parity with the Apple app (skip, markers, episodes, prefs) ──
+describe('MediaControls parity controls', () => {
+  afterEach(() => localStorage.clear())
+
+  const ep = (id: number, episode: number): MediaEpisode => ({
+    id,
+    showId: 5,
+    season: 1,
+    episode,
+    title: `E${episode}`,
+    airDate: null,
+    fileId: id,
+  })
+
+  it('back 10 / forward 30 buttons seek in title time, clamped to the title', () => {
+    const video = makeVideo()
+    video.currentTime = 50
+    render(<MediaControls video={video} offsetSecs={0} totalDurationSecs={100} onSeekBelowOffset={() => undefined} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Forward 30 seconds' }))
+    expect(video.currentTime).toBe(80)
+    fireEvent.click(screen.getByRole('button', { name: 'Back 10 seconds' }))
+    expect(video.currentTime).toBe(70)
+    video.currentTime = 90
+    fireEvent.click(screen.getByRole('button', { name: 'Forward 30 seconds' }))
+    expect(video.currentTime).toBe(100)
+  })
+
+  it('offers Skip Intro inside the marker window and seeks to its end', () => {
+    const video = makeVideo()
+    video.currentTime = 5
+    render(
+      <MediaControls
+        video={video}
+        offsetSecs={0}
+        totalDurationSecs={1500}
+        onSeekBelowOffset={() => undefined}
+        markers={[{ type: 'intro', startSecs: 0, endSecs: 20 }, { type: 'credits', startSecs: 1400, endSecs: 1500 }]}
+      />,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Skip Intro' }))
+    expect(video.currentTime).toBe(20)
+    fireEvent(video, new Event('timeupdate'))
+    expect(screen.queryByRole('button', { name: /Skip/ })).toBeNull()
+    video.currentTime = 1450
+    fireEvent(video, new Event('timeupdate'))
+    expect(screen.getByRole('button', { name: 'Skip Credits' })).toBeInTheDocument()
+  })
+
+  it('previous/next episode buttons follow the queue ends', () => {
+    const onPick = vi.fn()
+    const episodes = [ep(1, 1), ep(2, 2)]
+    render(
+      <MediaControls
+        video={makeVideo()}
+        offsetSecs={0}
+        totalDurationSecs={100}
+        onSeekBelowOffset={() => undefined}
+        episodeNav={{ episodes, currentId: 1, prev: null, next: episodes[1], onPick }}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Previous episode' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: 'Next episode' }))
+    expect(onPick).toHaveBeenCalledExactlyOnceWith(episodes[1])
+  })
+
+  it('applies the persisted speed to the element and its default rate', () => {
+    setPlaybackPrefs({ speed: 1.5 })
+    const video = makeVideo()
+    render(<MediaControls video={video} offsetSecs={0} totalDurationSecs={100} onSeekBelowOffset={() => undefined} />)
+    expect(video.playbackRate).toBe(1.5)
+    expect(video.defaultPlaybackRate).toBe(1.5)
+  })
+
+  it('"Always" shows the preferred-language track, and a CC toggle-off is remembered for the show', () => {
+    setPlaybackPrefs({ subtitleMode: 'always', subtitleLanguage: 'es' })
+    const video = videoWithTracks([
+      { kind: 'subtitles', mode: 'disabled', language: 'eng' },
+      { kind: 'subtitles', mode: 'disabled', language: 'spa' },
+    ])
+    const tracks = (video as unknown as { textTracks: Record<number, FakeTrack> }).textTracks
+    const episodes = [ep(1, 1)]
+    render(
+      <MediaControls
+        video={video}
+        offsetSecs={0}
+        totalDurationSecs={100}
+        onSeekBelowOffset={() => undefined}
+        episodeNav={{ episodes, currentId: 1, prev: null, next: null, onPick: () => undefined }}
+      />,
+    )
+    expect(tracks[1].mode).toBe('showing')
+    expect(tracks[0].mode).toBe('disabled')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off subtitles' }))
+    expect(showTrackMemory(5)).toEqual({ subtitleOff: true })
   })
 })

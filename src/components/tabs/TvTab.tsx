@@ -22,9 +22,9 @@ import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
-import { resumePosition, useLocalShowIndex, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
+import { resumePosition, useLocalShowIndex, useMediaEpisodes, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
 import { MediaPlayer } from '../media/MediaPlayer'
-import { EpisodePicker } from '../media/EpisodePicker'
+import { EpisodePicker, episodeLabel } from '../media/EpisodePicker'
 import { TrendingRow } from '../search/TrendingRow'
 import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
@@ -157,7 +157,11 @@ export function TvTab() {
     id: number
     title: string
     startPositionSecs?: number
+    showId: number
+    showTitle: string
   } | null>(null)
+  // The playing show's episodes power the player's Up Next, prev/next and queue.
+  const playingEpisodes = useMediaEpisodes(playingEpisode?.showId ?? null)
 
   const cast = useCast({
     type: 'tv',
@@ -579,17 +583,28 @@ export function TvTab() {
           onPlay={(ep, label) => {
             const startPositionSecs = resumePosition(mediaWatch.data?.get(`episode:${ep.id}`))
             setPickShow(null)
-            setPlayingEpisode({ id: ep.id, title: label, startPositionSecs })
+            setPlayingEpisode({ id: ep.id, title: label, startPositionSecs, showId: pickShow.id, showTitle: pickShow.title })
           }}
         />
       )}
       {playingEpisode && (
+        // Not keyed by episode: the player swaps episodes in place.
         <MediaPlayer
-          key={playingEpisode.id}
           kind="episode"
           id={playingEpisode.id}
           title={playingEpisode.title}
           startPositionSecs={playingEpisode.startPositionSecs}
+          episodes={playingEpisodes.data?.items}
+          onPlayEpisode={(ep) =>
+            setPlayingEpisode((cur) =>
+              cur && {
+                ...cur,
+                id: ep.id,
+                title: episodeLabel(cur.showTitle, ep),
+                startPositionSecs: resumePosition(mediaWatch.data?.get(`episode:${ep.id}`)),
+              },
+            )
+          }
           onClose={() => setPlayingEpisode(null)}
         />
       )}

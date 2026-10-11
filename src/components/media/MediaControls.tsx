@@ -1,8 +1,20 @@
 /* eslint-disable react-refresh/only-export-components -- exports the pure
    seek-resolution helper alongside the component so the node vitest env can
    drive it directly; fast-refresh is irrelevant for a pure function. */
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react'
 import { formatPlaybackTime } from './playbackSession'
+import { EpisodeList } from './EpisodePicker'
+import { PlaybackSettingsFields } from './PlaybackSettings'
+import type { MediaEpisode, MediaMarker } from '../../lib/api/media'
+import {
+  SPEED_OPTIONS,
+  getPlaybackPrefs,
+  rememberShowSubtitle,
+  setPlaybackPrefs,
+  showTrackMemory,
+  startupSubtitleIndex,
+  usePlaybackPrefs,
+} from '../../lib/playbackPrefs'
 import './MediaControls.css'
 
 // Inline control icons — currentColor, matched to the app's SVG idiom
@@ -72,6 +84,66 @@ function SubtitlesIcon() {
   )
 }
 
+/** Circular skip arrow with the step in seconds (back 10 / forward 30). */
+function SkipIcon({ secs, forward = false }: { secs: number; forward?: boolean }) {
+  return (
+    <svg className="media-controls__icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"
+      stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      {forward ? (
+        <path d="M12 4.5a7.5 7.5 0 1 0 7.1 5.1M12 4.5 9.8 2.6M12 4.5 9.8 6.4" />
+      ) : (
+        <path d="M12 4.5a7.5 7.5 0 1 1-7.1 5.1M12 4.5l2.2-1.9M12 4.5l2.2 1.9" />
+      )}
+      <text x="12" y="15.4" textAnchor="middle" fontSize="7.5" fontWeight="700" fill="currentColor" stroke="none">
+        {secs}
+      </text>
+    </svg>
+  )
+}
+function PrevEpisodeIcon() {
+  return (
+    <svg className="media-controls__icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="5" y="5" width="2.2" height="14" rx="1" fill="currentColor" />
+      <path d="M19 6.2v11.6a1 1 0 0 1-1.55.83l-8.6-5.8a1 1 0 0 1 0-1.66l8.6-5.8A1 1 0 0 1 19 6.2Z" fill="currentColor" />
+    </svg>
+  )
+}
+function NextEpisodeIcon() {
+  return (
+    <svg className="media-controls__icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="16.8" y="5" width="2.2" height="14" rx="1" fill="currentColor" />
+      <path d="M5 6.2v11.6a1 1 0 0 0 1.55.83l8.6-5.8a1 1 0 0 0 0-1.66l-8.6-5.8A1 1 0 0 0 5 6.2Z" fill="currentColor" />
+    </svg>
+  )
+}
+function EpisodesIcon() {
+  return (
+    <svg className="media-controls__icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"
+      stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <path d="M9 7h11M9 12h11M9 17h11M4.5 7h.01M4.5 12h.01M4.5 17h.01" strokeWidth="1.8" />
+    </svg>
+  )
+}
+function SettingsIcon() {
+  return (
+    <svg className="media-controls__icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"
+      stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+      <path d="M4 7h9M17 7h3M4 17h3M11 17h9" />
+      <circle cx="15" cy="7" r="2" />
+      <circle cx="9" cy="17" r="2" />
+    </svg>
+  )
+}
+function PipIcon() {
+  return (
+    <svg className="media-controls__icon" viewBox="0 0 24 24" aria-hidden="true" fill="none"
+      stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round">
+      <rect x="3" y="5" width="18" height="14" rx="2.5" />
+      <rect x="12" y="11.5" width="7" height="5.5" rx="1" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
 // ── Why an app-drawn control bar ─────────────────────────────────────
 //
 // A resumed HLS session is served from ffmpeg -ss, so the MEDIA timeline the
@@ -102,6 +174,9 @@ const SEEK_REGRANT_EPSILON_SECS = 5
 // Keyboard steps: ArrowLeft/ArrowRight seek, ArrowUp/ArrowDown volume.
 const SEEK_STEP_SECS = 10
 const VOLUME_STEP = 0.1
+// On-screen skip buttons (Apple's tvOS chrome: back 10, forward 30).
+const SEEK_BACK_SECS = 10
+const SEEK_FORWARD_SECS = 30
 
 export function resolveSeekTarget(args: {
   targetSecs: number
@@ -195,6 +270,28 @@ export function applySubtitleSelection(video: VideoWithTextTracks, index: number
   }
 }
 
+/** The language of the audio track the element is playing, where the engine
+ *  exposes one (Safari's audioTracks); null when unknown. */
+function playingAudioLanguage(video: HTMLVideoElement): string | null {
+  const tracks = (video as HTMLVideoElement & {
+    audioTracks?: { length: number; [index: number]: { enabled: boolean; language: string } }
+  }).audioTracks
+  if (!tracks) return null
+  for (let i = 0; i < tracks.length; i += 1) {
+    if (tracks[i].enabled) return tracks[i].language || null
+  }
+  return null
+}
+
+/** A show's episodes around the playing one (from MediaPlayer). */
+export type EpisodeNav = {
+  episodes: MediaEpisode[]
+  currentId: number
+  prev: MediaEpisode | null
+  next: MediaEpisode | null
+  onPick: (ep: MediaEpisode) => void
+}
+
 type Props = {
   video: HTMLVideoElement
   /** Title time where the session's media 0 sits (the -ss offset). 0 for
@@ -210,6 +307,13 @@ type Props = {
   /** A scrub outside the session's produced range (below the -ss floor, or
    *  forward past the produced edge) — re-grant at this absolute target. */
   onSeekBelowOffset: (targetSecs: number) => void
+  /** For the system media session (lock screen, media keys) and the info panel. */
+  title?: string
+  delivery?: 'progressive' | 'hls'
+  /** Intro/credits windows (absolute title secs) that offer a Skip button. */
+  markers?: ReadonlyArray<MediaMarker>
+  /** Episode prev/next + queue; its show also keys the remembered subtitle pick. */
+  episodeNav?: EpisodeNav | null
 }
 
 export function MediaControls({
@@ -218,6 +322,10 @@ export function MediaControls({
   totalDurationSecs,
   seekableEndSecs,
   onSeekBelowOffset,
+  title = '',
+  delivery,
+  markers,
+  episodeNav,
 }: Props) {
   const [paused, setPaused] = useState(video.paused)
   const [muted, setMuted] = useState(video.muted)
@@ -226,6 +334,7 @@ export function MediaControls({
     Number.isFinite(video.duration) ? video.duration : null,
   )
   const [fullscreen, setFullscreen] = useState(false)
+  const [resolution, setResolution] = useState<string | null>(null)
   // Sidecar subtitle state, derived from the <video>'s native textTracks.
   // `available` gates the CC button (no track → no button); `on` reflects
   // whether a subtitle track is currently showing (a forced track ships on).
@@ -238,6 +347,10 @@ export function MediaControls({
   // While dragging, the scrubber shows the drag target, not the playhead.
   const [dragSecs, setDragSecs] = useState<number | null>(null)
   const dragRef = useRef<number | null>(null)
+  const settingsId = useId()
+  const queueId = useId()
+  const prefs = usePlaybackPrefs()
+  const showId = episodeNav?.episodes.find((e) => e.id === episodeNav.currentId)?.showId ?? null
   // Ref twin of the element prop: the handlers below drive the element
   // imperatively (seek/mute/play), which the immutability lint only permits
   // through a ref.
@@ -252,6 +365,8 @@ export function MediaControls({
     const onTimeUpdate = () => setPositionSecs(offsetSecs + video.currentTime)
     const onDurationChange = () =>
       setElementDurationSecs(Number.isFinite(video.duration) ? video.duration : null)
+    const onResize = () =>
+      setResolution(video.videoWidth > 0 ? `${video.videoWidth}×${video.videoHeight}` : null)
     // Click-to-toggle on the picture itself — the affordance the native bar
     // provided and users expect.
     const onClick = () => {
@@ -265,6 +380,7 @@ export function MediaControls({
     video.addEventListener('timeupdate', onTimeUpdate)
     video.addEventListener('seeked', onTimeUpdate)
     video.addEventListener('durationchange', onDurationChange)
+    video.addEventListener('resize', onResize)
     video.addEventListener('click', onClick)
     document.addEventListener('fullscreenchange', onFullscreenChange)
     // Sync once on bind: the element may already be mid-flight.
@@ -272,6 +388,7 @@ export function MediaControls({
     onVolumeChange()
     onTimeUpdate()
     onDurationChange()
+    onResize()
     return () => {
       video.removeEventListener('play', onPlayPause)
       video.removeEventListener('pause', onPlayPause)
@@ -279,34 +396,65 @@ export function MediaControls({
       video.removeEventListener('timeupdate', onTimeUpdate)
       video.removeEventListener('seeked', onTimeUpdate)
       video.removeEventListener('durationchange', onDurationChange)
+      video.removeEventListener('resize', onResize)
       video.removeEventListener('click', onClick)
       document.removeEventListener('fullscreenchange', onFullscreenChange)
     }
   }, [video, offsetSecs])
 
-  // Keep the CC button + its on/off state in sync with the native textTracks.
-  // The sidecar <track> loads asynchronously, so subtitles can appear after
-  // the bar mounts ('addtrack'); 'change' covers mode flips (ours or native).
-  // jsdom and older engines don't fire these reliably, so the toggle handler
-  // also sets state optimistically — this effect is the backstop, not the
-  // sole source of truth.
+  // Persisted speed. defaultPlaybackRate too: every engine (re)load resets
+  // playbackRate to it, so the choice survives re-grants and episode swaps.
+  useEffect(() => {
+    const el = videoElRef.current
+    el.defaultPlaybackRate = prefs.speed
+    el.playbackRate = prefs.speed
+  }, [video, prefs.speed])
+
+  // Subtitle selection. Until the viewer toggles CC, the startup decision
+  // (per-show memory > subtitle mode/language, see playbackPrefs) is re-applied
+  // whenever a track appears: the sidecar <track> remounts on every failed
+  // load while the .vtt is still being extracted, and a fresh track comes up
+  // in its default mode. After a toggle, that pick is what gets re-applied.
+  // The CC button + its on/off state stay in sync with the native textTracks;
+  // jsdom and older engines don't fire these events reliably, so the toggle
+  // handler also sets state optimistically — this effect is the backstop.
+  const subtitleChoiceRef = useRef<number | null>(null)
+  const subtitlePickedRef = useRef(false)
   useEffect(() => {
     const tracks = (video as VideoWithTextTracks).textTracks
     const sync = () => {
       setSubtitleAvailable(subtitleTrackIndexes(tracks).length > 0)
       setSubtitleOn(showingSubtitleIndex(tracks) !== -1)
     }
-    sync()
+    const apply = () => {
+      if (!subtitlePickedRef.current && tracks) {
+        const subs = subtitleTrackIndexes(tracks)
+        const choice = startupSubtitleIndex({
+          tracks: subs.map((i) => tracks[i]),
+          memory: showId != null ? showTrackMemory(showId) : null,
+          prefs: getPlaybackPrefs(),
+          playingAudioLanguage: playingAudioLanguage(video),
+        })
+        subtitleChoiceRef.current = choice == null || choice === -1 ? choice : subs[choice]
+      }
+      if (subtitleChoiceRef.current != null) applySubtitleSelection(video, subtitleChoiceRef.current)
+      sync()
+    }
+    apply()
     const list = tracks as unknown as EventTarget | undefined
-    list?.addEventListener?.('addtrack', sync)
+    list?.addEventListener?.('addtrack', apply)
     list?.addEventListener?.('removetrack', sync)
     list?.addEventListener?.('change', sync)
+    // The playing audio language (foreign-audio mode) is known only once
+    // metadata loads.
+    video.addEventListener('loadedmetadata', apply)
     return () => {
-      list?.removeEventListener?.('addtrack', sync)
+      list?.removeEventListener?.('addtrack', apply)
       list?.removeEventListener?.('removetrack', sync)
       list?.removeEventListener?.('change', sync)
+      video.removeEventListener('loadedmetadata', apply)
     }
-  }, [video])
+  }, [video, showId])
 
   const totalSecs =
     totalDurationSecs ?? (elementDurationSecs != null ? offsetSecs + elementDurationSecs : null)
@@ -318,6 +466,11 @@ export function MediaControls({
     } else {
       videoElRef.current.currentTime = resolved.sessionSecs
     }
+  }
+  // Relative skip (on-screen buttons, media keys), kept inside the title.
+  const skipBy = (deltaSecs: number) => {
+    const abs = offsetSecs + videoElRef.current.currentTime
+    commitSeek(Math.max(0, Math.min(abs + deltaSecs, totalSecs ?? Infinity)))
   }
 
   const togglePlay = () => {
@@ -334,6 +487,14 @@ export function MediaControls({
     const next = nextSubtitleToggleIndex(el.textTracks)
     if (next === null) return
     applySubtitleSelection(el, next)
+    subtitlePickedRef.current = true
+    subtitleChoiceRef.current = next
+    // Remember the pick for the show (Apple's per-show track memory): an
+    // explicit Off, or the language turned on.
+    if (showId != null) {
+      const language = next === -1 ? null : el.textTracks?.[next].language || null
+      if (next === -1 || language) rememberShowSubtitle(showId, language)
+    }
     // Optimistic: don't wait for the (engine-dependent) 'change' event.
     setSubtitleOn(next !== -1)
   }
@@ -348,6 +509,13 @@ export function MediaControls({
     const surface = el.closest('.iptv-player-modal') ?? el
     void surface.requestFullscreen().catch(() => undefined)
   }
+  const togglePictureInPicture = () => {
+    if (document.pictureInPictureElement) {
+      void document.exitPictureInPicture().catch(() => undefined)
+    } else {
+      void videoElRef.current.requestPictureInPicture().catch(() => undefined)
+    }
+  }
 
   const shownSecs = dragSecs ?? positionSecs
 
@@ -355,9 +523,9 @@ export function MediaControls({
   // The document listener subscribes once; the latest handlers and offset live
   // in a ref refreshed after every render. Keys typed into form fields, or
   // Space/Enter on a focused button (which already clicks it), are left alone.
-  const keysRef = useRef({ togglePlay, toggleMute, toggleFullscreen, commitSeek, offsetSecs })
+  const keysRef = useRef({ togglePlay, toggleMute, toggleFullscreen, commitSeek, skipBy, offsetSecs, episodeNav })
   useEffect(() => {
-    keysRef.current = { togglePlay, toggleMute, toggleFullscreen, commitSeek, offsetSecs }
+    keysRef.current = { togglePlay, toggleMute, toggleFullscreen, commitSeek, skipBy, offsetSecs, episodeNav }
   })
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -399,6 +567,65 @@ export function MediaControls({
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [])
+
+  // System media controls (lock screen, hardware media keys, headsets): the
+  // title as Now Playing, with play/pause, skip and seek routed through the
+  // same seek path as the bar. Without setPositionState the OS shows the
+  // element's own timeline, so a seekto time is session-relative.
+  useEffect(() => {
+    const session = typeof navigator !== 'undefined' ? navigator.mediaSession : undefined
+    if (!session) return undefined
+    session.metadata = new MediaMetadata({ title })
+    const handlers: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
+      ['play', () => void videoElRef.current.play().catch(() => undefined)],
+      ['pause', () => videoElRef.current.pause()],
+      ['seekbackward', (d) => keysRef.current.skipBy(-(d.seekOffset ?? SEEK_BACK_SECS))],
+      ['seekforward', (d) => keysRef.current.skipBy(d.seekOffset ?? SEEK_FORWARD_SECS)],
+      ['seekto', (d) => {
+        if (d.seekTime != null) keysRef.current.commitSeek(keysRef.current.offsetSecs + d.seekTime)
+      }],
+      ['previoustrack', () => {
+        const nav = keysRef.current.episodeNav
+        if (nav?.prev) nav.onPick(nav.prev)
+      }],
+      ['nexttrack', () => {
+        const nav = keysRef.current.episodeNav
+        if (nav?.next) nav.onPick(nav.next)
+      }],
+    ]
+    for (const [action, handler] of handlers) {
+      try {
+        session.setActionHandler(action, handler)
+      } catch {
+        /* action unsupported by this browser */
+      }
+    }
+    return () => {
+      session.metadata = null
+      for (const [action] of handlers) {
+        try {
+          session.setActionHandler(action, null)
+        } catch {
+          /* action unsupported by this browser */
+        }
+      }
+    }
+  }, [title])
+
+  // While a popover is open, Escape closes just the popover: useModalA11y's
+  // container listener would otherwise see the key first and close the player.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      const open = document.querySelector<HTMLElement>('.media-controls__popover:popover-open')
+      if (!open) return
+      e.stopPropagation()
+      open.hidePopover()
+    }
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => document.removeEventListener('keydown', onKeyDown, true)
+  }, [])
+
   // Drives the scrubber's emerald fill (left of the thumb) via a CSS variable —
   // a controlled <input type=range> can't paint its own progress in WebKit, so
   // the track gradient reads --progress.
@@ -406,9 +633,39 @@ export function MediaControls({
     totalSecs != null && totalSecs > 0
       ? Math.min(100, Math.max(0, (shownSecs / totalSecs) * 100))
       : 0
+  const activeMarker = markers?.find((m) => m.startSecs <= positionSecs && positionSecs < m.endSecs)
+  const pipSupported = typeof document !== 'undefined' && document.pictureInPictureEnabled === true
 
   return (
     <div className="media-controls" role="group" aria-label="Playback controls">
+      {activeMarker && (
+        <button
+          className="media-controls__skip"
+          type="button"
+          onClick={() => commitSeek(Math.min(activeMarker.endSecs, totalSecs ?? activeMarker.endSecs))}
+        >
+          {activeMarker.type === 'intro' ? 'Skip Intro' : 'Skip Credits'}
+        </button>
+      )}
+      {episodeNav && (
+        <button
+          className="media-controls__button"
+          type="button"
+          onClick={() => episodeNav.prev && episodeNav.onPick(episodeNav.prev)}
+          disabled={!episodeNav.prev}
+          aria-label="Previous episode"
+        >
+          <PrevEpisodeIcon />
+        </button>
+      )}
+      <button
+        className="media-controls__button"
+        type="button"
+        onClick={() => skipBy(-SEEK_BACK_SECS)}
+        aria-label={`Back ${SEEK_BACK_SECS} seconds`}
+      >
+        <SkipIcon secs={SEEK_BACK_SECS} />
+      </button>
       <button
         className="media-controls__button media-controls__button--primary"
         type="button"
@@ -417,6 +674,25 @@ export function MediaControls({
       >
         {paused ? <PlayIcon /> : <PauseIcon />}
       </button>
+      <button
+        className="media-controls__button"
+        type="button"
+        onClick={() => skipBy(SEEK_FORWARD_SECS)}
+        aria-label={`Forward ${SEEK_FORWARD_SECS} seconds`}
+      >
+        <SkipIcon secs={SEEK_FORWARD_SECS} forward />
+      </button>
+      {episodeNav && (
+        <button
+          className="media-controls__button"
+          type="button"
+          onClick={() => episodeNav.next && episodeNav.onPick(episodeNav.next)}
+          disabled={!episodeNav.next}
+          aria-label="Next episode"
+        >
+          <NextEpisodeIcon />
+        </button>
+      )}
       <span className="media-controls__time" aria-label="Playback position">
         {formatPlaybackTime(shownSecs)}
         <span className="media-controls__time-total">
@@ -478,6 +754,34 @@ export function MediaControls({
           <SubtitlesIcon />
         </button>
       )}
+      {episodeNav && (
+        <button
+          className="media-controls__button"
+          type="button"
+          popoverTarget={queueId}
+          aria-label="Episodes"
+        >
+          <EpisodesIcon />
+        </button>
+      )}
+      <button
+        className="media-controls__button"
+        type="button"
+        popoverTarget={settingsId}
+        aria-label="Playback settings"
+      >
+        <SettingsIcon />
+      </button>
+      {pipSupported && (
+        <button
+          className="media-controls__button"
+          type="button"
+          onClick={togglePictureInPicture}
+          aria-label="Picture in picture"
+        >
+          <PipIcon />
+        </button>
+      )}
       <button
         className="media-controls__button"
         type="button"
@@ -486,6 +790,66 @@ export function MediaControls({
       >
         {fullscreen ? <FullscreenExitIcon /> : <FullscreenEnterIcon />}
       </button>
+
+      {episodeNav && (
+        <div
+          id={queueId}
+          popover="auto"
+          className="media-controls__popover"
+          role="group"
+          aria-label="Episodes"
+        >
+          <EpisodeList
+            episodes={episodeNav.episodes}
+            currentId={episodeNav.currentId}
+            onPick={episodeNav.onPick}
+          />
+        </div>
+      )}
+      <div
+        id={settingsId}
+        popover="auto"
+        className="media-controls__popover"
+        role="group"
+        aria-label="Playback settings"
+      >
+        <dl className="media-controls__info">
+          {title && (
+            <>
+              <dt>Title</dt>
+              <dd>{title}</dd>
+            </>
+          )}
+          <dt>Duration</dt>
+          <dd>{totalSecs != null ? formatPlaybackTime(totalSecs) : 'Unknown'}</dd>
+          {delivery && (
+            <>
+              <dt>Delivery</dt>
+              <dd>{delivery === 'progressive' ? 'Direct play' : 'Transcoded (HLS)'}</dd>
+            </>
+          )}
+          {resolution && (
+            <>
+              <dt>Resolution</dt>
+              <dd>{resolution}</dd>
+            </>
+          )}
+        </dl>
+        <label className="playback-settings__row">
+          <span>Speed</span>
+          <select
+            value={String(prefs.speed)}
+            onChange={(e) => setPlaybackPrefs({ speed: Number(e.target.value) })}
+          >
+            {SPEED_OPTIONS.map((s) => (
+              <option key={s} value={String(s)}>
+                {s === 1 ? 'Normal' : `${s}×`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <PlaybackSettingsFields />
+      </div>
     </div>
   )
 }

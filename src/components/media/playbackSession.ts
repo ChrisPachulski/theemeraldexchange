@@ -185,3 +185,66 @@ export function formatPlaybackTime(secs: number): string {
   const ss = String(s).padStart(2, '0')
   return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`
 }
+
+// ── Binge helpers (Up Next, episode queue, Still watching?) ───────────
+// Apple's EmeraldPlayerView numbers: the Up Next card arms in the last 30 s of
+// an episode longer than 45 s and counts down 12 s; the third consecutive
+// unattended advance, or 90 min with no interaction, pauses on "Still watching?".
+export const UP_NEXT_LEAD_SECS = 30
+export const UP_NEXT_COUNTDOWN_SECS = 12
+export const STILL_WATCHING_AFTER = 3
+export const IDLE_GATE_MS = 90 * 60_000
+
+export function upNextDue(posSecs: number, durSecs: number | null): boolean {
+  return durSecs != null && durSecs > 45 && posSecs >= durSecs - UP_NEXT_LEAD_SECS
+}
+
+type QueueEpisode = { id: number; season: number; episode: number }
+
+/** A show's episodes in (season, episode) order with the neighbours of the
+ *  playing one (Apple's EpisodePlaybackQueue). */
+export function episodeQueue<E extends QueueEpisode>(
+  episodes: ReadonlyArray<E>,
+  currentId: number,
+): { episodes: E[]; prev: E | null; next: E | null } {
+  const sorted = [...episodes].sort(
+    (a, b) => a.season - b.season || a.episode - b.episode || a.id - b.id,
+  )
+  const i = sorted.findIndex((e) => e.id === currentId)
+  return {
+    episodes: sorted,
+    prev: i > 0 ? sorted[i - 1] : null,
+    next: i >= 0 && i + 1 < sorted.length ? sorted[i + 1] : null,
+  }
+}
+
+// ── Frozen-playhead watchdog ──────────────────────────────────────────
+// A wedged transcoder (stuck ffmpeg, NAS under load) leaves the playhead frozen
+// while every other signal looks healthy: hls.js waits politely for segments
+// that never come and the heartbeat still answers 200. Apple's VODStallWatchdog:
+// no real progress for 15 s while playing AND buffer-starved = stalled. Armed
+// only after playback has begun, so a slow first segment is left to the
+// engine's own startup errors.
+export const FROZEN_PLAYHEAD_LIMIT_MS = 15_000
+
+export function createFrozenPlayheadWatchdog(): (sample: {
+  position: number
+  paused: boolean
+  starved: boolean
+  now: number
+}) => boolean {
+  let lastPos: number | null = null
+  let lastAt = 0
+  let begun = false
+  return ({ position, paused, starved, now }) => {
+    // Any jump (play advance or a seek either way) or a deliberate pause is
+    // "not frozen" and restarts the clock.
+    if (paused || lastPos == null || Math.abs(position - lastPos) > 0.25) {
+      if (lastPos != null && !paused && position > lastPos) begun = true
+      lastPos = position
+      lastAt = now
+      return false
+    }
+    return begun && starved && now - lastAt >= FROZEN_PLAYHEAD_LIMIT_MS
+  }
+}

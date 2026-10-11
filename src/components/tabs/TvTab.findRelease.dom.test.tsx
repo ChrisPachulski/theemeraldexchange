@@ -85,6 +85,7 @@ vi.mock('../../lib/hooks/usePlexLinks', () => ({
 vi.mock('../../lib/hooks/useMediaLibrary', () => ({
   useLocalShowIndex: () => ({ data: new Map() }),
   useMediaWatch: () => ({ data: new Map() }),
+  useMediaEpisodes: () => ({ data: undefined }),
   resumePosition: () => undefined,
 }))
 vi.mock('../../lib/hooks/useSuggestionStrip', () => ({
