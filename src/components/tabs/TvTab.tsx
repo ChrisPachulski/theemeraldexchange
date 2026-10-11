@@ -31,6 +31,7 @@ import { useCast } from '../../lib/hooks/useCast'
 import { useConfirm } from '../confirm/useConfirm'
 import { seriesAvailability, sonarr, type Series, type SeriesSearchResult } from '../../lib/api/sonarr'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
+import type { RelatedItem } from '../../lib/api/tmdb'
 import { withViewTransition } from '../../lib/viewTransition'
 import { useIntent } from '../../lib/router'
 import {
@@ -227,10 +228,12 @@ export function TvTab() {
   }
   // Resolve a `tmdb:N` / `tvdb:N` term through Sonarr, then open the library
   // entry if we own it, else the Discover detail. Shared by the strip and the
-  // `#/tv/<term>` intent.
-  const openLookup = async (term: string) => {
+  // `#/tv/<term>` intent. The title fallback covers a `tmdb:` term Sonarr
+  // can't resolve (Apple's openRelated).
+  const openLookup = async (term: string, fallbackTitle?: string) => {
     try {
-      const results = await sonarr.lookup(term)
+      let results = await sonarr.lookup(term)
+      if (!results[0] && fallbackTitle) results = await sonarr.lookup(fallbackTitle)
       const hit = results[0]
       if (!hit) {
         setToast("Couldn't find that show on TVDB")
@@ -240,6 +243,11 @@ export function TvTab() {
     } catch (e) {
       setToast(e instanceof Error ? e.message : String(e))
     }
+  }
+  const openRelated = async (item: RelatedItem) => {
+    setTrendingPending(item.id)
+    await openLookup(`tmdb:${item.id}`, item.title)
+    setTrendingPending(null)
   }
   // Open-a-title intent from another surface (Home shelves, Downloads).
   useIntent('tv', !library.isPending, (ref) => {
@@ -605,6 +613,9 @@ export function TvTab() {
           />
         ) : undefined}
         autoShowAdvanced={viewing !== null && 'id' in viewing && transient?.id === viewing.id}
+        extras={viewing ? { kind: 'tv', id: viewing.tvdbId, tmdbId: viewing.tmdbId } : undefined}
+        onPickRelated={(item) => void openRelated(item)}
+        relatedPendingId={trendingPending}
       />
 
       {pickShow && (

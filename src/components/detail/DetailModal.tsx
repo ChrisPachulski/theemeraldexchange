@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { RatingPiece } from '../../lib/api/ratings'
 import { RatingChips } from '../search/RatingChips'
-import { castCharacter, TMDB_IMAGE_BASE, type CastMember } from '../../lib/api/tmdb'
+import { castCharacter, TMDB_IMAGE_BASE, type CastMember, type RelatedItem, type TmdbVideo } from '../../lib/api/tmdb'
 import { useDialogDismiss } from '../../lib/useDialogDismiss'
+import { ExtrasRows, TitleActions, TrailerDialog, type DetailExtrasRef } from './DetailExtras'
+import { PersonDialog } from './PersonDialog'
 import './DetailModal.css'
 
 // Plex-style item-detail modal.
@@ -129,6 +131,13 @@ type Props = {
    *  straight into the release browser. Only forces open on the rising edge;
    *  the user can still hide it afterward. */
   autoShowAdvanced?: boolean
+  /** The title's TMDB identity: turns on the Trailer / Watchlist / Like /
+   *  Dislike actions and the Trailers & extras and More like this rows. */
+  extras?: DetailExtrasRef
+  /** A More like this pick; the tab opens it like a strip pick. */
+  onPickRelated?: (item: RelatedItem) => void
+  /** The More like this card whose lookup is in flight. */
+  relatedPendingId?: number | null
 }
 
 export function DetailModal({
@@ -162,8 +171,15 @@ export function DetailModal({
   unavailableNote,
   advanced,
   autoShowAdvanced,
+  extras,
+  onPickRelated,
+  relatedPendingId,
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  // Dialogs over the detail: a trailer, or a cast member's page.
+  const [trailer, setTrailer] = useState<TmdbVideo | null>(null)
+  const [person, setPerson] = useState<CastMember | null>(null)
   const closeBtnRef = useRef<HTMLButtonElement>(null)
   // Advanced surface is collapsed by default so it never crowds the normal
   // detail view; the footer button reveals it. Reset to collapsed whenever
@@ -176,6 +192,10 @@ export function DetailModal({
   if (wasOpen !== open) {
     setWasOpen(open)
     if (!open && showAdvanced) setShowAdvanced(false)
+    if (!open) {
+      setTrailer(null)
+      setPerson(null)
+    }
   }
   // Force the panel open on autoShowAdvanced's rising edge (the Find-release
   // flow), tracking the prior value so we don't override a later manual hide.
@@ -197,6 +217,12 @@ export function DetailModal({
     // run by the time we focus.
     closeBtnRef.current?.focus()
   }, [open])
+
+  // A More like this pick or a filmography credit swaps the title in place:
+  // start the new one from the top.
+  useEffect(() => {
+    if (bodyRef.current) bodyRef.current.scrollTop = 0
+  }, [title])
 
   if (!rendered) return null
 
@@ -267,10 +293,11 @@ export function DetailModal({
                 ))}
               </ul>
             )}
+            {extras && <TitleActions extras={extras} title={title} poster={poster} onTrailer={setTrailer} />}
           </div>
         </header>
 
-        <div className="detail__body">
+        <div ref={bodyRef} className="detail__body">
           {overview && (
             <section className="detail__section">
               <h3 className="detail__section-title">Plot</h3>
@@ -407,16 +434,9 @@ export function DetailModal({
               <ul className="detail__cast">
                 {cast.slice(0, 12).map((member) => {
                   const role = castCharacter(member)
-                  const href = `https://www.themoviedb.org/person/${member.id}`
                   return (
                     <li key={member.id} className="detail__cast-card">
-                      <a
-                        href={href}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="detail__cast-link"
-                        aria-label={`${member.name} on TMDB`}
-                      >
+                      <button type="button" className="detail__cast-link" onClick={() => setPerson(member)}>
                         {member.profile_path ? (
                           <img
                             className="detail__cast-photo"
@@ -433,7 +453,7 @@ export function DetailModal({
                         )}
                         <p className="detail__cast-name">{member.name}</p>
                         {role && <p className="detail__cast-role">{role}</p>}
-                      </a>
+                      </button>
                     </li>
                   )
                 })}
@@ -442,6 +462,15 @@ export function DetailModal({
               <p className="detail__cast-empty">Cast information unavailable.</p>
             )}
           </details>
+
+          {extras && (
+            <ExtrasRows
+              extras={extras}
+              onPlayVideo={setTrailer}
+              onPickRelated={onPickRelated}
+              relatedPendingId={relatedPendingId}
+            />
+          )}
 
           {advanced && showAdvanced && (
             <section className="detail__section detail__advanced" aria-label="Advanced actions">
@@ -541,6 +570,8 @@ export function DetailModal({
           )}
         </footer>
       </article>
+      <TrailerDialog video={trailer} onClose={() => setTrailer(null)} />
+      <PersonDialog member={person} onClose={() => setPerson(null)} />
     </dialog>
   )
 }

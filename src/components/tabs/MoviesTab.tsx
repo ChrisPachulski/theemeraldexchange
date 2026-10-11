@@ -571,6 +571,9 @@ export function MoviesTab() {
           />
         ) : undefined}
         autoShowAdvanced={viewing !== null && 'id' in viewing && transient?.id === viewing.id}
+        extras={viewing ? { kind: 'movie', id: viewing.tmdbId, tmdbId: viewing.tmdbId } : undefined}
+        onPickRelated={(item) => void openTmdb(item.id)}
+        relatedPendingId={trendingPending}
       />
 
       {playingLocal && (
