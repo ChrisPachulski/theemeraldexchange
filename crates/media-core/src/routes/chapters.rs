@@ -22,10 +22,25 @@ fn cache() -> &'static ChapterCache {
 
 /// `path`'s chapters, probed once per (path, mtime). A failed probe yields an
 /// empty list WITHOUT caching it, so a transient failure is retried next time.
+/// Probes run one at a time: a burst of misses queues instead of fanning out
+/// an ffprobe each on the NAS, and the queued callers then hit the cache.
 async fn chapters_for(ffprobe_bin: &str, path: &str, mtime: &str) -> Vec<Chapter> {
+    // ponytail: one global permit; per-file in-flight tracking if probes ever queue visibly.
+    static PROBE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
     let key = (path.to_string(), mtime.to_string());
-    if let Some(hit) = cache().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
-        return hit.clone();
+    let cached = || {
+        cache()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+            .cloned()
+    };
+    if let Some(hit) = cached() {
+        return hit;
+    }
+    let _permit = PROBE.acquire().await.expect("semaphore never closed");
+    if let Some(hit) = cached() {
+        return hit;
     }
     match crate::probe::ffprobe_with_bin(ffprobe_bin, std::path::Path::new(path)).await {
         Ok(probe) => {
@@ -84,7 +99,7 @@ mod tests {
         let mut f = std::fs::File::create(&p).unwrap();
         writeln!(
             f,
-            "#!/bin/sh\necho x >> '{}'\ncat <<'EOF'\n{json}\nEOF",
+            "#!/bin/sh\necho x >> '{}'\nsleep 0.2\ncat <<'EOF'\n{json}\nEOF",
             calls.display()
         )
         .unwrap();
@@ -132,6 +147,30 @@ mod tests {
         // A replaced file (new mtime) is probed again.
         chapters_for(bin, path, "m2").await;
         assert_eq!(probes(), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[cfg(unix)]
+    async fn concurrent_misses_for_one_file_probe_it_once() {
+        // A burst of requests for an uncached title must not fan out one
+        // ffprobe each on the NAS: they queue and the rest hit the cache.
+        let dir = tempfile::tempdir().unwrap();
+        let stub = chapter_stub(dir.path());
+        let bin = stub.to_str().unwrap().to_string();
+        let path = dir.path().join("burst.mkv").to_str().unwrap().to_string();
+        let mut set = tokio::task::JoinSet::new();
+        for _ in 0..20 {
+            let (bin, path) = (bin.clone(), path.clone());
+            set.spawn(async move { chapters_for(&bin, &path, "m").await.len() });
+        }
+        while let Some(n) = set.join_next().await {
+            assert_eq!(n.unwrap(), 2);
+        }
+        let probes = std::fs::read_to_string(dir.path().join("calls"))
+            .unwrap()
+            .lines()
+            .count();
+        assert_eq!(probes, 1, "20 concurrent misses ran {probes} probes");
     }
 
     #[tokio::test]

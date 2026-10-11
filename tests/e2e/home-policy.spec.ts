@@ -39,3 +39,24 @@ test('a capped member sees only allowed titles on Home and cannot open a blocked
   await expect(page.getByText('That title isn’t available on this profile.')).toBeVisible()
   await expect(page.getByRole('dialog', { name: 'Adult Film' })).toHaveCount(0)
 })
+
+test('a blocked title opened by link before the policy loads closes once the cap arrives', async ({ page }) => {
+  await installBackgroundMocks(page)
+  await page.route('**/api/limits', (route) =>
+    route.fulfill(json({ maxMovieGb: 10, iptvEnabled: true, radarrEnabled: true, sonarrEnabled: false, mediaEnabled: false })),
+  )
+  // The library answers first; the cap lands after the link has been handled.
+  await page.route('**/api/policy', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    await route.fulfill(json({ maxContentRating: 'PG', allowedSections: { live: true, downloads: true, arr: true }, kid: true }))
+  })
+  await page.route('**/api/radarr/api/v3/movie', (route) =>
+    route.fulfill(json([movie(2, 'Adult Film', 'R', '2026-10-10T10:00:00Z')])),
+  )
+  await mockMe(page, REGULAR_USER)
+
+  const policy = page.waitForResponse('**/api/policy')
+  await page.goto('/#/movies/2')
+  await policy
+  await expect(page.getByRole('dialog', { name: 'Adult Film' })).toHaveCount(0)
+})

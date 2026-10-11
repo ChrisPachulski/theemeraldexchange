@@ -3,10 +3,12 @@ import type { WatchEntry } from '../../lib/api/media'
 import type { EpgNowRow } from '../../lib/api/iptv'
 import {
   airingNow,
+  certsByTitle,
   continueWatching,
   episodeLabel,
   resumeTitle,
   timeLeft,
+  titleAllowed,
   titleKey,
   watchlistIntent,
   watchlistPoster,
@@ -110,5 +112,23 @@ describe('watchlist rows', () => {
     expect(watchlistPoster('https://artworks.thetvdb.com/p.jpg')).toBe('https://artworks.thetvdb.com/p.jpg')
     expect(watchlistPoster('/p.jpg')).toBe('https://image.tmdb.org/t/p/w342/p.jpg')
     expect(watchlistPoster(undefined)).toBeNull()
+  })
+})
+
+describe('titleAllowed', () => {
+  const gCap = (c: string | null | undefined) => c === 'G'
+
+  it('a same-title remake cannot vouch for another: every rating must pass', () => {
+    const certs = certsByTitle([
+      { title: 'The Jungle Book', certification: 'PG' },
+      { title: 'The Jungle Book', certification: 'G' },
+    ])
+    expect(titleAllowed(certs, 'The Jungle Book', gCap)).toBe(false)
+  })
+
+  it('passes a lone allowed title and fails closed on no match', () => {
+    const certs = certsByTitle([{ title: 'Bambi', certification: 'G' }])
+    expect(titleAllowed(certs, 'bambi', gCap)).toBe(true)
+    expect(titleAllowed(certs, 'Unknown', gCap)).toBe(false)
   })
 })

@@ -254,6 +254,8 @@ describe('transcode proxy — server-to-server control paths are unreachable', (
     ['POST', '/warm'],
     ['GET', '/grant'],
     ['GET', '/warm'],
+    ['POST', '/%67rant'],
+    ['POST', '/%77arm'],
   ])('%s %s → 404 and never reaches the transcoder', async (method, subpath) => {
     // Armed so a forwarded request would visibly succeed (200) rather than
     // throw — the 404 below has to come from the block, not from a stub miss.

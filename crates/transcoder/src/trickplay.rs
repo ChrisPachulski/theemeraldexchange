@@ -475,7 +475,10 @@ pub(crate) fn audio_renditions_args(
             "-hls_flags".into(),
             "append_list".into(),
             "-hls_playlist_type".into(),
-            "vod".into(),
+            // ffmpeg writes a VOD playlist only at EOF; the web pass (offset set)
+            // is EVENT so hls.js can switch to a language minutes before its
+            // pass over a feature-length file ends. Native stays VOD (pinned).
+            if ts_offset_secs > 0 { "event" } else { "vod" }.into(),
             "-hls_segment_type".into(),
             "mpegts".into(),
             "-hls_segment_filename".into(),
@@ -917,6 +920,11 @@ mod tests {
         );
         // One HLS output per track, each carrying the shared offset.
         assert_eq!(j.matches("-output_ts_offset 30 -f hls").count(), 2, "{j}");
+        // EVENT, so each playlist exists from its first segment: a VOD playlist
+        // is written only at EOF, minutes into a feature-length pass, and the
+        // picker's languages would 404 until then.
+        assert_eq!(j.matches("-hls_playlist_type event").count(), 2, "{j}");
+        assert!(!j.contains("vod"), "{j}");
         assert!(
             j.contains("-map 0:a:0? -vn -sn -c:a copy -output_ts_offset 30"),
             "{j}"

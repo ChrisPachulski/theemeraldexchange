@@ -17,10 +17,12 @@ import type { WatchEntry } from '../../lib/api/media'
 import {
   TMDB_POSTER_BASE,
   airingNow,
+  certsByTitle,
   continueWatching,
   episodeLabel,
   resumeTitle,
   timeLeft,
+  titleAllowed,
   titleKey,
   watchlistIntent,
   watchlistPoster,
@@ -106,12 +108,6 @@ function posterIndex(items: Library[] | undefined): Map<string, string> {
   return map
 }
 
-// Library certification by normalized title: watch rows carry no rating, so a
-// capped profile matches them to the *arr entry (no match fails closed).
-function certIndex(items: Library[] | undefined): Map<string, string | null | undefined> {
-  return new Map((items ?? []).map((item) => [titleKey(item.title), item.certification]))
-}
-
 // In-progress movies and episodes; a click resumes playback straight away.
 function ContinueWatchingShelf({ movies, shows }: { movies?: Library[]; shows?: Library[] }) {
   const watch = useMediaWatch(true)
@@ -119,14 +115,14 @@ function ContinueWatchingShelf({ movies, shows }: { movies?: Library[]; shows?: 
   const [playing, setPlaying] = useState<WatchEntry | null>(null)
   const moviePosters = useMemo(() => posterIndex(movies), [movies])
   const showPosters = useMemo(() => posterIndex(shows), [shows])
-  const movieCerts = useMemo(() => certIndex(movies), [movies])
-  const showCerts = useMemo(() => certIndex(shows), [shows])
+  const movieCerts = useMemo(() => certsByTitle(movies ?? []), [movies])
+  const showCerts = useMemo(() => certsByTitle(shows ?? []), [shows])
   const rows = useMemo(
     () =>
       continueWatching(watch.data?.values() ?? []).filter(
         (r) =>
           !ratingGate.capped ||
-          ratingGate.allows((r.mediaKind === 'movie' ? movieCerts : showCerts).get(titleKey(resumeTitle(r)))),
+          titleAllowed(r.mediaKind === 'movie' ? movieCerts : showCerts, resumeTitle(r), ratingGate.allows),
       ),
     [watch.data, ratingGate, movieCerts, showCerts],
   )

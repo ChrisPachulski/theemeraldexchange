@@ -1095,8 +1095,9 @@ impl SessionManager {
     }
 
     /// Find a live session for the same coalesce identity as `opts`. Returns its
-    /// id and whether it sits at the SAME resume offset (`true` → a duplicate to
-    /// reuse; `false` → a stale session at a different offset, to supersede).
+    /// id and whether it is the SAME playback — same resume offset, plan and
+    /// bitrate cap (`true` → a duplicate to reuse; `false` → a stale session at
+    /// another offset, or one built for other options, to supersede).
     /// Only heartbeat-fresh sessions (within the idle window) qualify, so we
     /// never hand back one the sweeper is about to reap.
     async fn find_owner_title_session(&self, opts: &StartOpts) -> Option<(SessionId, bool)> {
@@ -1109,7 +1110,12 @@ impl SessionManager {
                 && s.owner.as_deref() == opts.owner.as_deref()
                 && s.input_path == opts.input_path
                 && now.saturating_sub(s.last_seen) <= IDLE_TIMEOUT.as_secs();
-            same_title.then(|| (id.clone(), s.start_secs == opts.start_secs))
+            same_title.then(|| {
+                let same_playback = s.start_secs == opts.start_secs
+                    && s.plan == opts.plan
+                    && s.client_max_kbps == opts.client_max_kbps;
+                (id.clone(), same_playback)
+            })
         })
     }
 
@@ -1156,7 +1162,7 @@ impl SessionManager {
         let _gate = gate.lock().await;
 
         match self.find_owner_title_session(&opts).await {
-            // Same title, same offset → duplicate/retry: reuse the live session.
+            // Same title, offset and options → duplicate/retry: reuse the live session.
             // The client gets the same manifest and we burn no second (scarce,
             // CPU-capped) slot — the fix for the "temporarily unavailable" 503 a
             // re-tap of a still-draining title produced.
@@ -1169,8 +1175,9 @@ impl SessionManager {
                 );
                 return Ok(existing);
             }
-            // Same title, DIFFERENT offset → the prior session is stale (the user
-            // re-opened at a new resume point; its abandoned client otherwise
+            // Same title, DIFFERENT offset or options → the prior session is stale
+            // (the user re-opened at a new resume point or changed Quality, or another
+            // client needs another plan; its abandoned client otherwise
             // lingers until the 30s idle reap). Stop it so its slot frees for the
             // fresh start instead of the new grant 503ing against the single CPU
             // slot the dead session still pins.
@@ -1815,6 +1822,15 @@ impl SessionManager {
         let Some(jpg) = self.asset_path(id, name).await else {
             return false;
         };
+        if tokio::fs::try_exists(&jpg).await.unwrap_or(false) {
+            return true;
+        }
+        // Conversions run one at a time: they sit outside the transcode caps,
+        // so a burst of misses must queue rather than start an ffmpeg each, and
+        // a waiter for the same frame then finds its JPEG already made.
+        // ponytail: one global permit; a small pool if scrubbing ever queues visibly.
+        static CONVERT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        let _permit = CONVERT.acquire().await.expect("semaphore never closed");
         if tokio::fs::try_exists(&jpg).await.unwrap_or(false) {
             return true;
         }
@@ -2891,6 +2907,78 @@ mod tests {
         wait_for(|| !process_alive(pid_a)).await;
         assert!(mgr.is_empty().await);
         assert_eq!(mgr.limiter().active(), (0, 0), "the single slot is freed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_thumbnail_misses_convert_once() {
+        // A burst of requests for one thumbnail must not start an ffmpeg each
+        // (the conversions bypass the transcode caps): they queue, the rest
+        // find the JPEG already made.
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = tmp.path().join("jpg_stub.sh");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\n\
+             for a in \"$@\"; do last=\"$a\"; done\n\
+             d=$(dirname \"$last\")\n\
+             mkdir -p \"$d\"\n\
+             case \"$last\" in *.partial)\n\
+               echo x >> \"$d/jpg_calls\"; sleep 0.2; printf JPEG > \"$last\"; exit 0;; esac\n\
+             printf '#EXTM3U\\n' > \"$last\"\n\
+             sleep 30\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mgr = Arc::new(manager_with_stub(&tmp, stub));
+        let id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let ts = mgr.asset_path(&id, "thumb_00001.ts").await.unwrap();
+        std::fs::write(&ts, b"ts").unwrap();
+
+        let mut set = tokio::task::JoinSet::new();
+        for _ in 0..20 {
+            let (mgr, id) = (mgr.clone(), id.clone());
+            set.spawn(async move { mgr.thumb_jpeg(&id, "thumb_00001.jpg").await });
+        }
+        while let Some(ok) = set.join_next().await {
+            assert!(ok.unwrap(), "every request gets the thumbnail");
+        }
+        let calls = std::fs::read_to_string(ts.with_file_name("jpg_calls"))
+            .unwrap()
+            .lines()
+            .count();
+        assert_eq!(calls, 1, "20 concurrent misses ran {calls} conversions");
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
+    async fn same_offset_grant_with_other_options_supersedes_instead_of_reusing() {
+        // A Quality change re-granted at the same second, or another client
+        // whose plan differs (alt-audio renditions vs not), must not be handed
+        // the live session built for the old options.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let a = mgr.start(opts("/lib/a.mkv")).await.unwrap();
+        let mut capped = opts("/lib/a.mkv");
+        capped.client_max_kbps = Some(4_000);
+        let b = mgr.start(capped.clone()).await.unwrap();
+        assert_ne!(
+            a, b,
+            "a new bitrate cap must not reuse the uncapped session"
+        );
+        assert_eq!(
+            mgr.len().await,
+            1,
+            "the old session is superseded, not kept"
+        );
+
+        let mut other_plan = capped;
+        if let TranscodePlan::Transcode { reason, .. } = &mut other_plan.plan {
+            *reason = "other".into();
+        }
+        let c = mgr.start(other_plan).await.unwrap();
+        assert_ne!(b, c, "a different plan must not reuse the session");
+        assert_eq!(mgr.len().await, 1);
+        mgr.stop(&c).await;
     }
 
     #[tokio::test]
