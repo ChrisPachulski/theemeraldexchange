@@ -251,6 +251,10 @@ app.get('/api/limits', async (c) => {
     // omit the key and the app falls back to revoke-and-erase. Public
     // boolean — the same fact is implied by the route's 401-vs-404.
     accountDeletionEnabled: true,
+    // True when /api/dvr is mounted (DVR_ENABLED, IPTV on; see below). Both
+    // clients show Record and Recordings only on this. Public boolean — the
+    // same fact is implied by the /api/dvr 404.
+    dvrEnabled: env.DVR_ENABLED && !env.IPTV_DISABLED,
   })
 })
 

@@ -12,3 +12,14 @@ describe('/api/limits accountDeletionEnabled', () => {
     expect(body.accountDeletionEnabled).toBe(true)
   })
 })
+
+// Both clients show DVR (Record, Recordings) only when /api/limits says so,
+// and /api/dvr is mounted only under DVR_ENABLED; the test env leaves it off.
+describe('/api/limits dvrEnabled', () => {
+  it('reports DVR off when /api/dvr is not mounted', async () => {
+    const { app } = await import('./app.js')
+    const body = (await (await app.request('/api/limits')).json()) as { dvrEnabled?: unknown }
+    expect(body.dvrEnabled).toBe(false)
+    expect((await app.request('/api/dvr/recordings')).status).toBe(404)
+  })
+})
