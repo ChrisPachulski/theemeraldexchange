@@ -251,6 +251,12 @@
   border-radius: var(--r-pod);
 }
 
+/* Tappable pill: opens the library filtered to the genre. */
+button.detail__genre:hover {
+  color: var(--emerald);
+  border-color: var(--emerald);
+}
+
 /* Body — scrollable region between hero and footer. */
 .detail__body {
   position: relative;

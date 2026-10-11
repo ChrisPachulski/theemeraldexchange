@@ -41,6 +41,7 @@ import {
   byYearDesc,
   byAddedDesc,
   byRatingDesc,
+  distinctGenres,
   seriesRating,
 } from '../../lib/librarySort'
 import { pickDefaultProfileId } from '../../lib/pickDefaultProfileId'
@@ -138,6 +139,7 @@ export function TvTab() {
   const [letter, setLetter] = useState<LibraryLetter>('all')
   const [sort, setSort] = useState<TvSort>('title-asc')
   const [status, setStatus] = useState<TvStatus>('all')
+  const [genre, setGenre] = useState('all')
   const debouncedQuery = useDebounced(query, 300)
   const search = useSeriesSearch(mode === 'discover' ? debouncedQuery : '')
   const library = useSonarrLibrary()
@@ -288,13 +290,24 @@ export function TvTab() {
   )
   // Members whose policy denies library management get no Add (it 403s).
   const sections = useSectionAccess()
+  const libraryGenres = useMemo(() => distinctGenres(visibleLibrary), [visibleLibrary])
+  // Show the library grid narrowed to one genre, clearing the other filters so
+  // they can't AND-strand it (Apple's genre route).
+  const showGenre = (g: string) =>
+    withViewTransition(() => {
+      setQuery('')
+      setLetter('all')
+      setStatus('all')
+      setGenre(g)
+      setMode('library')
+    })
 
   // Text + status filter, then sort. Article-stripped sort key is used
   // for title sorts (Plex behavior — "The Mandalorian" sorts under M).
   // Alphabet bucket runs against the same key so the bar matches the sort.
   const textFilteredLibrary = useMemo(
-    () => filterAndSortLibrary(visibleLibrary, { query, status, comparator: TV_COMPARATORS[sort] }),
-    [visibleLibrary, query, status, sort],
+    () => filterAndSortLibrary(visibleLibrary, { query, status, genre, comparator: TV_COMPARATORS[sort] }),
+    [visibleLibrary, query, status, genre, sort],
   )
 
   const availableLetters = useMemo(
@@ -451,6 +464,12 @@ export function TvTab() {
                   setStatus(next)
                   setLetter('all')
                 }}
+                genreOptions={libraryGenres}
+                genreValue={genre}
+                onGenreChange={(next) => {
+                  setGenre(next)
+                  setLetter('all')
+                }}
               />
               {textFilteredLibrary.length > 0 && (
                 <LibraryAlphabet
@@ -465,6 +484,7 @@ export function TvTab() {
           <LibraryResults
             query={query}
             letter={letter}
+            genre={genre}
             loading={library.isPending}
             error={library.error}
             items={filteredLibrary}
@@ -522,6 +542,14 @@ export function TvTab() {
           viewing.certification,
         ].filter((x): x is string => Boolean(x)) : []}
         genres={viewing?.genres}
+        onGenreClick={(g) => {
+          // Genres can come from a Discover result that no local title carries;
+          // an empty grid would strand the user, so say so instead.
+          const match = libraryGenres.find((x) => x.toLowerCase() === g.toLowerCase())
+          handleDetailClose()
+          if (match) showGenre(match)
+          else setToast(`No ${g} shows in your library`)
+        }}
         rating={viewing ? seriesRatingPieces(viewing, viewingRatings) : undefined}
         overview={viewing?.overview}
         meta={viewing ? buildSeriesMeta(viewing) : []}
@@ -704,13 +732,14 @@ function DiscoverResults({ query, loading, error, results, libraryByTvdb, onCard
 type LibraryProps = {
   query: string
   letter: LibraryLetter
+  genre: string
   loading: boolean
   error: unknown
   items: Series[]
   onCardClick: (s: Series) => void
 }
 
-function LibraryResults({ query, letter, loading, error, items, onCardClick }: LibraryProps) {
+function LibraryResults({ query, letter, genre, loading, error, items, onCardClick }: LibraryProps) {
   const ratings = useRatings(items.map((i) => i.imdbId))
   if (loading) return <LoadingPulse>Loading library</LoadingPulse>
   if (error) {
@@ -722,11 +751,13 @@ function LibraryResults({ query, letter, loading, error, items, onCardClick }: L
     )
   }
   if (items.length === 0) {
-    const emptyMsg = query.trim()
-      ? 'Nothing in your library matches.'
-      : letter !== 'all'
-        ? `Nothing under ${letter}.`
-        : 'Your library is empty. Add something from Discover.'
+    const emptyMsg = genre !== 'all'
+      ? `No ${genre} shows ${query.trim() ? 'match your search' : 'in your library'}.`
+      : query.trim()
+        ? 'Nothing in your library matches.'
+        : letter !== 'all'
+          ? `Nothing under ${letter}.`
+          : 'Your library is empty. Add something from Discover.'
     return (
       <div className="tv-tab__empty">
         <EmeraldMark width={56} variant="single" />

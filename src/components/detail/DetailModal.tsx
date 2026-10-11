@@ -68,6 +68,9 @@ type Props = {
   metaStrip: string[]
   /** Genres → rendered as inline pills. */
   genres?: string[]
+  /** Makes each genre pill a button: the tab closes the detail and filters
+   *  its library to that genre. */
+  onGenreClick?: (genre: string) => void
   /** Plot / summary text. */
   overview?: string
   /** Detail key/value rows for the metadata block. */
@@ -141,6 +144,7 @@ export function DetailModal({
   year,
   metaStrip,
   genres,
+  onGenreClick,
   overview,
   meta,
   rating,
@@ -262,9 +266,17 @@ export function DetailModal({
             {rating && rating.length > 0 && <RatingChips pieces={rating} size="lg" />}
             {genres && genres.length > 0 && (
               <ul className="detail__genres">
-                {genres.map((g) => (
-                  <li key={g} className="detail__genre">{g}</li>
-                ))}
+                {genres.map((g) =>
+                  onGenreClick ? (
+                    <li key={g}>
+                      <button type="button" className="detail__genre" onClick={() => onGenreClick(g)}>
+                        {g}
+                      </button>
+                    </li>
+                  ) : (
+                    <li key={g} className="detail__genre">{g}</li>
+                  ),
+                )}
               </ul>
             )}
           </div>
