@@ -152,6 +152,16 @@ describe('MediaPlayer (mounted) — grant flow', () => {
     expect(playbackMock).toHaveBeenCalledWith('episode', 42, undefined, undefined, false)
   })
 
+  it('autoResume skips the prompt and grants at the resume offset', async () => {
+    playbackMock.mockResolvedValue(hlsGrant())
+
+    render(<MediaPlayer kind="episode" id={42} title="S01E07" startPositionSecs={300.7} autoResume onClose={() => {}} />)
+    await flush()
+
+    expect(screen.queryByRole('group', { name: 'Resume playback' })).not.toBeInTheDocument()
+    expect(playbackMock).toHaveBeenCalledWith('episode', 42, undefined, 300, false)
+  })
+
   it('escalates once: onDeliveryStruggling re-grants with forceHls at the captured position', async () => {
     // Progressive grant first; the escalated re-grant returns HLS.
     playbackMock

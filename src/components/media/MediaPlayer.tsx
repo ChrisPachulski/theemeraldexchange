@@ -22,6 +22,9 @@ type Props = {
   /** Resume point from prior watch state. A positive value shows the
    *  resume-or-start-over prompt before any playback session starts. */
   startPositionSecs?: number
+  /** Skip that prompt and resume straight away (a Continue Watching card is
+   *  already the resume choice). */
+  autoResume?: boolean
   onClose: () => void
 }
 
@@ -168,7 +171,7 @@ export function MediaPlayerView({
  * mid-watch. The grant/heartbeat/stop lifecycle lives in startPlaybackSession
  * (./playbackSession.ts) where it is unit-tested.
  */
-export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Props) {
+export function MediaPlayer({ kind, id, title, startPositionSecs, autoResume, onClose }: Props) {
   const [grant, setGrant] = useState<PlaybackGrant | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sessionLost, setSessionLost] = useState(false)
@@ -180,9 +183,8 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   // session runs). Set by the prompt choice, then overwritten by stall
   // escalation or a below-floor back-seek (both re-grant at a new start).
   const hasResumePoint = (startPositionSecs ?? 0) > 0
-  const [effectiveStartSecs, setEffectiveStartSecs] = useState<number | null>(
-    hasResumePoint ? null : 0,
-  )
+  const initialStartSecs = !hasResumePoint ? 0 : autoResume ? Math.floor(startPositionSecs ?? 0) : null
+  const [effectiveStartSecs, setEffectiveStartSecs] = useState<number | null>(initialStartSecs)
   // Latest (position, duration) so unmount/close can flush an exact resume point.
   const latest = useRef<{ pos: number; dur: number | null }>({
     pos: startPositionSecs ?? 0,
@@ -198,7 +200,7 @@ export function MediaPlayer({ kind, id, title, startPositionSecs, onClose }: Pro
   // Ref twin of effectiveStartSecs for the stable callbacks below (they must
   // keep their identity across renders — IptvPlayer's engine effect lists
   // them — so they can't close over state).
-  const effectiveStartRef = useRef<number | null>(hasResumePoint ? null : 0)
+  const effectiveStartRef = useRef<number | null>(initialStartSecs)
 
   // Plain-div dialog: useModalA11y supplies Escape-to-close, the focus trap,
   // and focus restoration that aria-modal="true" promises (LiveTab pattern).
