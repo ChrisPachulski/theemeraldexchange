@@ -80,7 +80,8 @@ describe('tsconfig.app.json hardening', () => {
             .join('\n')
 
     expect(diags.length, message).toBe(0)
-    // A full in-process ts.Program typecheck of the whole SPA takes ~6s, which
-    // exceeds vitest's 5s default. Give it a generous ceiling (5x headroom).
-  }, 30_000)
+    // A full in-process ts.Program typecheck of the whole SPA takes ~12s on CI,
+    // and ~30s under `test:coverage` (v8 instruments the compiler too), so the
+    // old 30s ceiling started timing out as the SPA grew. 120s keeps headroom.
+  }, 120_000)
 })
