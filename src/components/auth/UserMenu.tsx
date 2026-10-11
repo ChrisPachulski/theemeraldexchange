@@ -35,6 +35,9 @@ export function UserMenu() {
   useEffect(() => {
     if (!open) return
     const onDocClick = (e: MouseEvent) => {
+      // A confirm dialog opened from a panel in here renders outside this
+      // subtree; clicking it must not close the menu and unmount that panel.
+      if ((e.target as Element).closest?.('dialog')) return
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
     const onEsc = (e: KeyboardEvent) => {

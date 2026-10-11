@@ -12,6 +12,7 @@ import {
   type MemberView,
 } from '../../lib/auth'
 import { ApiError } from '../../lib/api/errors'
+import { useConfirm } from '../confirm/useConfirm'
 import './InvitesPanel.css'
 
 // Owner-only allowlist management: issue single-use invite codes (shown
@@ -52,11 +53,13 @@ function errMessage(e: unknown, fallback: string): string {
 
 export function InvitesPanel() {
   const qc = useQueryClient()
+  const confirm = useConfirm()
   const [error, setError] = useState<string | null>(null)
   const [justCreated, setJustCreated] = useState<CreatedInvite | null>(null)
   const [copied, setCopied] = useState(false)
   const [label, setLabel] = useState('')
   const [expiresInDays, setExpiresInDays] = useState(14)
+  const [showHistory, setShowHistory] = useState(false)
 
   const invitesQ = useQuery({
     queryKey: INVITES_KEY,
@@ -98,8 +101,10 @@ export function InvitesPanel() {
     onError: (e) => setError(errMessage(e, 'Could not revoke that member. Try again.')),
   })
 
-  // Expired/revoked rows stay in the DB for audit but are noise here.
-  const invites: InviteView[] = (invitesQ.data ?? []).filter((i) => i.status === 'active')
+  // Used/expired/revoked rows stay in the DB for audit; hidden unless asked for.
+  const invites: InviteView[] = (invitesQ.data ?? []).filter(
+    (i) => showHistory || i.status === 'active',
+  )
   const members: MemberView[] = membersQ.data ?? []
   const activeMembers = members.filter((m) => !m.revoked_at)
   const summary =
@@ -199,9 +204,19 @@ export function InvitesPanel() {
       {/* Outstanding invites */}
       <section className="invites-panel__section" aria-label="Outstanding invites">
         <p className="invites-panel__section-title">Outstanding invites</p>
+        <label className="invites-panel__history-toggle">
+          <input
+            type="checkbox"
+            checked={showHistory}
+            onChange={(e) => setShowHistory(e.target.checked)}
+          />
+          Show used &amp; expired
+        </label>
         {invitesQ.isLoading && <p className="invites-panel__loading">Loading…</p>}
         {!invitesQ.isLoading && invites.length === 0 && (
-          <p className="invites-panel__empty">No outstanding invites.</p>
+          <p className="invites-panel__empty">
+            {showHistory ? 'No invites yet.' : 'No outstanding invites.'}
+          </p>
         )}
         {invites.length > 0 && (
           <ul className="invites-panel__list">
@@ -262,7 +277,17 @@ export function InvitesPanel() {
                   <button
                     type="button"
                     className="invites-panel__btn invites-panel__btn--danger"
-                    onClick={() => revokeMem.mutate(m.sub)}
+                    onClick={() =>
+                      confirm({
+                        title: 'Revoke member?',
+                        body: `${m.display_name || m.sub} will lose access on every sign-in method.`,
+                        confirmLabel: 'Revoke',
+                        cancelLabel: 'Keep',
+                        onConfirm: async () => {
+                          await revokeMem.mutateAsync(m.sub)
+                        },
+                      })
+                    }
                     disabled={revokeMem.isPending}
                   >
                     Revoke
