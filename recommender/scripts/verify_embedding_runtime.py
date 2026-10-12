@@ -26,7 +26,8 @@ from sentence_transformers import SentenceTransformer
 EXPECTED_TORCH = "2.13.0+cpu"
 EXPECTED_SETUPTOOLS = "83.0.0"
 EXPECTED_BASELINE_TORCH = "2.12.0+cpu"
-EXPECTED_SENTENCE_TRANSFORMERS = "5.5.1"
+EXPECTED_BASELINE_SENTENCE_TRANSFORMERS = "5.5.1"
+EXPECTED_SENTENCE_TRANSFORMERS = "5.6.0"
 EXPECTED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EXPECTED_MODEL_REVISION = "c9745ed1d9f207416be6d2e6f8de32d1f16199bf"
 EXPECTED_EMBEDDINGS_SHA256 = "c62435ea899eddc1149eff4c49e078e4781381fcabcce472054129e39f48630b"
@@ -52,7 +53,7 @@ def _load_fixture(path: Path) -> dict[str, Any]:
         "baseline and candidate Torch versions must differ",
     )
     _require(
-        fixture.get("baseline_sentence_transformers") == EXPECTED_SENTENCE_TRANSFORMERS,
+        fixture.get("baseline_sentence_transformers") == EXPECTED_BASELINE_SENTENCE_TRANSFORMERS,
         "baseline sentence-transformers version changed",
     )
     _require(fixture.get("model") == EXPECTED_MODEL, "baseline model name changed")
@@ -210,7 +211,7 @@ def main() -> None:
     )
     _require(
         sentence_transformers_version == EXPECTED_SENTENCE_TRANSFORMERS,
-        "installed sentence-transformers does not match the captured baseline",
+        f"sentence-transformers {sentence_transformers_version} != {EXPECTED_SENTENCE_TRANSFORMERS}",
     )
     _require(torch.version.cuda is None, "CUDA-enabled torch wheel found in CPU-only image")
     _require(getattr(torch.version, "hip", None) is None, "ROCm-enabled torch wheel found")
