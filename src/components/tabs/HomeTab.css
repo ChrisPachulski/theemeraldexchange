@@ -1,7 +1,7 @@
-/* Home — kraken atmosphere on the first viewport, three about panels
-   below the fold, fixed entry pills pinned at the bottom of the chrome
-   throughout. Scrollable content slides under the entries rather than
-   pushing them off-frame. */
+/* Home — full-bleed content shelves over the kraken, a short about section
+   at the end, and fixed entry pills on the bottom chrome line throughout.
+   The page darkens toward the bottom so rows stay legible over the video
+   while the kraken still shows behind the first shelf. */
 
 .home {
   flex: 1 1 auto;
@@ -9,6 +9,44 @@
   /* Bottom-row room kept free for ReplayButton (label + gap; icon-only
      below 1024px) so the entry pills never run under it. */
   --replay-room: 116px;
+  --home-gutter: max(calc(var(--pod-inset, 16px) + var(--s-3)), 3vw);
+  --shelf-card: clamp(108px, 8.5vw, 168px);
+  /* Content ends above the fixed entry row. */
+  padding-bottom: calc(var(--pod-inset, 16px) + 56px + var(--s-7));
+  background: linear-gradient(
+    to bottom,
+    transparent 0,
+    color-mix(in oklch, var(--bg) 70%, transparent) 320px,
+    color-mix(in oklch, var(--bg) 90%, transparent) 100vh
+  );
+}
+
+/* Scrolled content fades out under the top chrome and the entry row instead
+   of meeting them at a hard edge (same idea as the catalog tabs' search dock). */
+.home::before,
+.home::after {
+  content: '';
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc(var(--pod-inset, 16px) + 56px + var(--s-6));
+  z-index: calc(var(--z-nav, 200) - 1);
+  pointer-events: none;
+  background: linear-gradient(to top, color-mix(in oklch, var(--bg) 92%, transparent) 40%, transparent);
+}
+
+.home::before {
+  top: 0;
+  bottom: auto;
+  height: calc(var(--pod-inset, 16px) + var(--pod-h, 56px) + var(--s-5));
+  background: linear-gradient(
+    to bottom,
+    color-mix(in oklch, var(--bg) 94%, transparent) 0,
+    color-mix(in oklch, var(--bg) 80%, transparent) 50%,
+    color-mix(in oklch, var(--bg) 30%, transparent) 80%,
+    transparent
+  );
 }
 
 @media (max-width: 1023px) {
@@ -17,90 +55,99 @@
   }
 }
 
-/* Scroll cue sits at the bottom of the first viewport — anchored to
-   the top of home__about with a viewport-height offset so it scrolls
-   away naturally once the user has moved past the first panel.
-   Wrapped in a dark emerald-bordered pill so it pops against the
-   busy ocean texture behind it; the kraken can otherwise drown the
-   pure emerald text. */
-.home__scroll-hint {
-  position: absolute;
-  top: calc(100vh - var(--pod-inset, 16px) - 88px - var(--s-4));
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: var(--z-nav, 200);
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  gap: var(--s-2);
-  padding: 6px var(--s-3);
-  pointer-events: none;
-  color: var(--emerald);
-  background: color-mix(in oklch, var(--surface) 88%, transparent);
-  backdrop-filter: blur(10px) saturate(140%);
-  -webkit-backdrop-filter: blur(10px) saturate(140%);
-  border: 1px solid var(--emerald);
-  border-radius: var(--r-pod, 999px);
-  text-shadow:
-    0 0 8px oklch(0.62 0.180 158 / 0.9),
-    0 0 16px oklch(0.62 0.180 158 / 0.45);
-  box-shadow:
-    0 0 18px -8px oklch(0.62 0.180 158 / 0.55),
-    0 8px 20px -14px var(--ink);
-  animation: home-scroll-cue 2.6s var(--ease) infinite;
-}
-
-.home__scroll-hint svg {
-  color: var(--emerald);
-  width: 14px;
-  height: 14px;
-  filter: drop-shadow(0 0 4px oklch(0.62 0.180 158 / 0.7));
-}
-
-.home__scroll-label {
-  font-family: var(--font-display);
-  font-weight: var(--w-display);
-  font-size: var(--t-sm);
-  letter-spacing: var(--tr-eyebrow);
-  text-transform: uppercase;
-}
-
-@keyframes home-scroll-cue {
-  0%, 100% { transform: translate(-50%, 0); opacity: 0.5; }
-  50%      { transform: translate(-50%, 6px); opacity: 0.95; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .home__scroll-hint { animation: none; opacity: 0.7; }
-}
-
-/* Content shelves (continue watching, recently added, live, picks) lead the
-   page on a frosted band below the fixed HomeNav; the about panels follow.
-   Rows reuse the suggestion strip's card styles (TrendingRow.css). */
+/* Content shelves (continue watching, watchlist, recently added, live,
+   picks) lead the page below the fixed HomeNav. Rows reuse the suggestion
+   strip's card styles (TrendingRow.css) and run off the right edge so the
+   cut card says "scroll". */
 .home__shelves {
   display: grid;
-  gap: var(--s-2);
+  gap: var(--s-5);
   min-width: 0;
-  margin:
-    calc(var(--pod-inset, 16px) + var(--pod-h, 56px) + var(--s-4))
-    var(--s-5)
-    0;
-  padding: var(--s-5) 0 0;
-  background: color-mix(in oklch, var(--surface) 88%, transparent);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
+  padding-top: calc(var(--pod-inset, 16px) + var(--pod-h, 56px) + var(--s-5));
 }
 
 .home__shelves:empty {
   display: none;
 }
 
+.home__shelves .trending {
+  margin: 0 0 0 var(--home-gutter);
+  min-width: 0;
+}
+
+.home__shelves .trending__header {
+  padding-right: var(--home-gutter);
+}
+
+.home__shelves .trending__label {
+  color: var(--text-muted);
+}
+
+.home__shelves .trending__row {
+  gap: var(--s-4);
+  padding-right: var(--home-gutter);
+  scrollbar-width: none;
+}
+
+.home__shelves .trending__row::-webkit-scrollbar {
+  display: none;
+}
+
+.home__shelves .trending__card-wrap {
+  width: var(--shelf-card);
+  contain-intrinsic-size: var(--shelf-card) calc(var(--shelf-card) * 1.5 + 56px);
+}
+
+.home__shelves .trending__poster {
+  width: 100%;
+}
+
 /* Cards in one row stretch to the tallest caption; keep poster, progress and
    caption packed at the top so progress bars line up. */
 .home__shelves .trending__card {
   align-content: start;
+}
+
+/* Quiet "go there" pill at the end of a shelf header. */
+.home-shelf__more {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  font-family: var(--font-display);
+  font-weight: var(--w-ui);
+  font-size: var(--t-xs);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pod, 999px);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.home-shelf__more > span {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+  color: var(--text-subtle);
+  transition:
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
+.home-shelf__more:hover,
+.home-shelf__more:focus-visible {
+  color: var(--emerald);
+  border-color: var(--emerald);
+}
+
+.home-shelf__more:hover > span {
+  color: var(--emerald);
+  transform: translateX(2px);
 }
 
 /* Watched fraction under a resume poster, and how far a live programme has run. */
@@ -120,42 +167,34 @@
 
 .home-live-tile {
   flex: 0 0 auto;
-  width: 220px;
-  min-height: 112px;
+  width: 240px;
+  min-height: 120px;
   display: grid;
   align-content: end;
   gap: var(--s-1);
   padding: var(--s-3);
   text-align: left;
   color: var(--text);
-  background: var(--surface-2);
+  background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--r-md);
+  border-radius: var(--r-lg);
+  box-shadow: var(--elev-card);
   cursor: pointer;
-  transition: border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
 }
 
 .home-live-tile:hover,
 .home-live-tile:focus-visible {
   border-color: var(--emerald);
-  transform: translateY(-2px);
-}
-
-.home-live-tile--guide {
-  align-content: center;
-  justify-items: center;
-  font-family: var(--font-display);
-  font-weight: var(--w-display);
-  font-size: var(--t-sm);
-  letter-spacing: var(--tr-eyebrow);
-  text-transform: uppercase;
-  background: linear-gradient(135deg, color-mix(in oklch, var(--emerald) 28%, var(--surface-2)), var(--surface-2));
+  background: var(--surface-2);
 }
 
 .home-live-tile__title {
   font-family: var(--font-display);
   font-size: var(--t-sm);
-  font-weight: var(--w-ui);
+  font-weight: var(--w-title);
   line-height: 1.25;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -173,98 +212,43 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--s-2);
+  min-height: 32px;
 }
 
 .home-live-tile__logo {
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   object-fit: contain;
 }
 
 .home-live-tile__channel {
   font-size: var(--t-xs);
   font-weight: var(--w-ui);
-  color: var(--text);
+  color: var(--text-subtle);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-@media (max-width: 720px) {
-  .home__shelves {
-    margin-inline: var(--s-3);
-  }
-}
-
-/* Stack of full-viewport panels — no hero block above, so the first
-   panel sits in the initial viewport without requiring a scroll. The
-   kraken keeps playing behind; panels are solid surfaces so text stays
-   legible. */
+/* About the Exchange: two plain ice-block panels side by side at the end of
+   the page (stacked on narrow screens). */
 .home__about {
-  position: relative;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  align-items: start;
+  gap: var(--s-5);
+  max-width: 1200px;
+  margin: var(--s-8) var(--home-gutter) 0;
 }
 
-/* Anchored top-right so the kraken stays the show — the panel sits in
-   the corner, video runs to its left and below it. Top padding clears
-   the HomeNav row (brand + Watch + UserMenu) so the card never collides
-   with chrome. */
 .home__panel {
-  min-height: 92vh;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  padding:
-    calc(var(--pod-inset, 16px) + var(--pod-h, 56px) + var(--s-5))
-    var(--s-5)
-    var(--s-7);
-}
-
-.home__panel-inner {
-  width: 100%;
-  max-width: 360px;
-  padding: var(--s-6) var(--s-6);
-  background: color-mix(in oklch, var(--surface) 92%, transparent);
-  backdrop-filter: blur(14px) saturate(140%);
-  -webkit-backdrop-filter: blur(14px) saturate(140%);
-  border: 1px solid var(--emerald);
+  padding: var(--s-6);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: var(--r-xl);
-  /* Emerald glow draws the eye to the readme panels — same hue the
-     bottom entry buttons use on hover, applied permanently here so
-     the readme reads as the primary call-to-explain on the home
-     splash. Layered: drop shadow for depth, then a wide soft emerald
-     halo, then a tighter emerald rim. */
   box-shadow:
     inset 0 1px 0 var(--frost-stronger),
-    0 32px 60px -28px var(--ink),
-    0 0 48px -10px oklch(0.62 0.180 158 / 0.55),
-    0 0 0 1px oklch(0.62 0.180 158 / 0.35);
-  text-align: left;
-  animation: home-panel-pulse 4s ease-in-out infinite;
-}
-
-@keyframes home-panel-pulse {
-  0%, 100% {
-    box-shadow:
-      inset 0 1px 0 var(--frost-stronger),
-      0 32px 60px -28px var(--ink),
-      0 0 48px -10px oklch(0.62 0.180 158 / 0.55),
-      0 0 0 1px oklch(0.62 0.180 158 / 0.35);
-  }
-  50% {
-    box-shadow:
-      inset 0 1px 0 var(--frost-stronger),
-      0 32px 60px -28px var(--ink),
-      0 0 64px -8px oklch(0.62 0.180 158 / 0.7),
-      0 0 0 1px oklch(0.62 0.180 158 / 0.5);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .home__panel-inner {
-    animation: none;
-  }
+    0 30px 60px -28px var(--ink);
 }
 
 .home__panel-eyebrow {
@@ -275,7 +259,7 @@
   letter-spacing: var(--tr-eyebrow);
   text-transform: uppercase;
   color: var(--emerald);
-  margin-bottom: var(--s-4);
+  margin-bottom: var(--s-3);
 }
 
 .home__panel-title {
@@ -290,21 +274,19 @@
 
 .home__panel-body {
   font-family: var(--font-body);
-  font-size: var(--t-sm);
+  font-size: var(--t-base);
   line-height: 1.6;
   color: var(--text-muted);
   margin: 0;
 }
 
-/* Numbered-step variant of the panel body — used by the "How it works"
-   panel where ordered actions read clearer than a single paragraph. */
+/* Numbered-step variant of the panel body, for "How it works". */
 .home__panel-steps {
   list-style: none;
   margin: 0;
   padding: 0;
   display: grid;
   gap: var(--s-3);
-  counter-reset: home-step;
 }
 
 .home__panel-step {
@@ -322,28 +304,20 @@
   font-family: var(--font-display);
   font-size: var(--t-xs);
   font-weight: var(--w-display);
-  letter-spacing: var(--tr-eyebrow);
   color: var(--emerald);
-  border: 1px solid var(--emerald);
+  border: 1px solid var(--hairline-emerald);
   border-radius: 999px;
   width: 22px;
   height: 22px;
   display: inline-grid;
   place-items: center;
-  background: color-mix(in oklch, var(--emerald) 12%, var(--surface));
+  background: var(--emerald-ghost);
   font-feature-settings: 'tnum' 1;
 }
 
-/* Bottom safe-zone so the last panel never hides under the fixed entry
-   pills at the end of the scroll. */
-.home__about-floor {
-  height: calc(var(--pod-inset, 16px) + var(--pod-h, 56px) + var(--s-7));
-}
-
 /* Entry buttons share the bottom chrome line with ReplayButton — same
-   bottom inset, centered horizontally. Fixed so the kraken layer behind
-   stays unobstructed and so the about panels slide under them rather
-   than pushing them off-frame. */
+   bottom inset, centered horizontally. Fixed so they stay reachable while
+   the shelves scroll under them. */
 .home__entries {
   position: fixed;
   bottom: var(--pod-inset, 16px);
@@ -402,67 +376,64 @@
   color: var(--emerald);
 }
 
+/* Phones: one row of pills that scrolls sideways when it doesn't fit,
+   centred when it does (the tablet nav row does the same). */
 @media (max-width: 720px) {
   .home {
-    padding: 0;
+    --shelf-card: 108px;
+    padding-bottom: calc(var(--pod-inset, 8px) + 44px + var(--s-6));
+  }
+
+  .home::after {
+    height: calc(var(--pod-inset, 8px) + 44px + var(--s-5));
+  }
+
+  .home__about {
+    margin-top: var(--s-7);
   }
 
   .home__panel {
-    min-height: auto;
-    justify-content: flex-end;
-    padding:
-      calc(var(--pod-inset, 16px) + var(--pod-h, 48px) + var(--s-4))
-      var(--s-4)
-      var(--s-6);
-  }
-
-  .home__panel-inner {
-    max-width: none;
-    padding: var(--s-5) var(--s-5);
+    padding: var(--s-5);
   }
 
   .home__panel-title {
     font-size: var(--t-md);
-  }
-
-  .home__entries {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 96px), 1fr));
-    left: var(--s-4);
-    right: calc(var(--pod-inset, 8px) + var(--replay-room));
-    width: auto;
-  }
-
-  .home__entry {
-    min-width: 0;
-    padding: var(--s-3) var(--s-2);
-    font-size: var(--t-xs);
-    letter-spacing: 0.08em;
-  }
-}
-
-/* iPad portrait — give the about panels more presence than the phone
-   corner card without crowding the kraken. Restore the body to t-md so
-   the partner-in-the-kitchen scene from DESIGN.md reads at arm's length. */
-@media (min-width: 721px) {
-  .home__panel-inner {
-    max-width: 440px;
-    padding: var(--s-7) var(--s-7);
-  }
-
-  .home__panel-title {
-    font-size: var(--t-xl);
   }
 
   .home__panel-body {
-    font-size: var(--t-md);
-    line-height: 1.65;
+    font-size: var(--t-sm);
+  }
+
+  .home__entries {
+    left: var(--pod-inset, 8px);
+    right: calc(var(--pod-inset, 8px) + var(--replay-room));
+    justify-content: flex-start;
+    gap: var(--s-2);
+    overflow-x: auto;
+    padding: 4px 0;
+    scrollbar-width: none;
+  }
+
+  .home__entries::-webkit-scrollbar {
+    display: none;
+  }
+
+  .home__entry {
+    flex: 0 0 auto;
+    padding: var(--s-3) var(--s-4);
+    font-size: var(--t-xs);
+  }
+
+  .home__entry:first-child {
+    margin-left: auto;
+  }
+
+  .home__entry:last-child {
+    margin-right: auto;
   }
 }
 
-/* iPad portrait specifically — the bottom entry pills are min-width 180
-   on desktop. With four pills (admin user) that's 756px of row in a
-   768px viewport. Drop to 140 so the row keeps breathing space. */
+/* iPad portrait: four-plus pills at 180px crowd the row; drop to 140. */
 @media (min-width: 721px) and (max-width: 1023px) {
   .home__entries {
     gap: var(--s-2);
@@ -481,12 +452,5 @@
   .home__entries:has(> :nth-child(6)) .home__entry {
     flex-basis: auto;
     padding-inline: var(--s-4);
-  }
-}
-
-/* iPad landscape and up — even more presence for the about panel. */
-@media (min-width: 1280px) {
-  .home__panel-inner {
-    max-width: 480px;
   }
 }

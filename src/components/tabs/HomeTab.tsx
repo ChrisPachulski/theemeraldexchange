@@ -63,21 +63,6 @@ const PANELS: Panel[] = [
   },
 ]
 
-function ChevronDown() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-      <path
-        d="M6 9l6 6 6-6"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-      />
-    </svg>
-  )
-}
-
 export function HomeTab() {
   const { transitionTo } = useNavTransition()
   const { isAdmin, user } = useAuth()
@@ -98,32 +83,25 @@ export function HomeTab() {
       <Suspense fallback={null}>
         <HomeShelves />
       </Suspense>
-      <div className="home__about" aria-label="About the Exchange">
-        <div className="home__scroll-hint" aria-hidden="true">
-          <span className="home__scroll-label">Read on</span>
-          <ChevronDown />
-        </div>
+      <section className="home__about" aria-label="About the Exchange">
         {PANELS.map((p) => (
           <article key={p.eyebrow} className="home__panel">
-            <div className="home__panel-inner">
-              <span className="home__panel-eyebrow">{p.eyebrow}</span>
-              <h2 className="home__panel-title">{p.title}</h2>
-              {p.body && <p className="home__panel-body">{p.body}</p>}
-              {p.steps && (
-                <ol className="home__panel-steps">
-                  {p.steps.map((s, i) => (
-                    <li key={i} className="home__panel-step">
-                      <span className="home__panel-step-num">{i + 1}</span>
-                      <span className="home__panel-step-body">{s}</span>
-                    </li>
-                  ))}
-                </ol>
-              )}
-            </div>
+            <span className="home__panel-eyebrow">{p.eyebrow}</span>
+            <h2 className="home__panel-title">{p.title}</h2>
+            {p.body && <p className="home__panel-body">{p.body}</p>}
+            {p.steps && (
+              <ol className="home__panel-steps">
+                {p.steps.map((s, i) => (
+                  <li key={i} className="home__panel-step">
+                    <span className="home__panel-step-num">{i + 1}</span>
+                    <span className="home__panel-step-body">{s}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
           </article>
         ))}
-        <div className="home__about-floor" aria-hidden="true" />
-      </div>
+      </section>
 
       <div className="home__entries" role="navigation" aria-label="Sections">
         {entries.map((e) => (

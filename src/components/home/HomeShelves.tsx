@@ -212,35 +212,35 @@ function LiveNowShelf() {
     <section className="trending" aria-label="On now">
       <div className="trending__header">
         <h3 className="trending__label">On now</h3>
-      </div>
-      <div className="trending__row">
-        <button
-          type="button"
-          className="home-live-tile home-live-tile--guide"
-          onClick={() => transitionTo('live')}
-        >
-          Channel guide
+        <button type="button" className="home-shelf__more" onClick={() => transitionTo('live')}>
+          Channel guide <span aria-hidden="true">{'->'}</span>
         </button>
-        {airing.map((a) => (
-          <button
-            key={a.streamId}
-            type="button"
-            className="home-live-tile"
-            onClick={() => openIntent('live', a.streamId)}
-          >
-            <span className="home-live-tile__head">
-              {a.channelIcon && <img className="home-live-tile__logo" src={a.channelIcon} alt="" loading="lazy" />}
-              <strong className="iptv-prog-results__live">LIVE</strong>
-            </span>
-            <span className="home-live-tile__title">{a.programme.title?.trim() || a.channelName || 'Live TV'}</span>
-            {a.channelName && <span className="home-live-tile__channel">{a.channelName}</span>}
-            <span className="home-live-tile__caption">On now · {timeLeft(a.stopMs, nowMs)} left</span>
-            <span className="home-shelf__progress" aria-hidden="true">
-              <span style={{ width: `${Math.round(((nowMs - a.startMs) / (a.stopMs - a.startMs)) * 100)}%` }} />
-            </span>
-          </button>
-        ))}
       </div>
+      {airing.length === 0 ? (
+        <p className="trending__empty-hint">Favourite a channel in Live and what it is airing shows up here.</p>
+      ) : (
+        <div className="trending__row">
+          {airing.map((a) => (
+            <button
+              key={a.streamId}
+              type="button"
+              className="home-live-tile"
+              onClick={() => openIntent('live', a.streamId)}
+            >
+              <span className="home-live-tile__head">
+                {a.channelIcon && <img className="home-live-tile__logo" src={a.channelIcon} alt="" loading="lazy" />}
+                <strong className="iptv-prog-results__live">LIVE</strong>
+              </span>
+              <span className="home-live-tile__title">{a.programme.title?.trim() || a.channelName || 'Live TV'}</span>
+              {a.channelName && <span className="home-live-tile__channel">{a.channelName}</span>}
+              <span className="home-live-tile__caption">On now · {timeLeft(a.stopMs, nowMs)} left</span>
+              <span className="home-shelf__progress" aria-hidden="true">
+                <span style={{ width: `${Math.round(((nowMs - a.startMs) / (a.stopMs - a.startMs)) * 100)}%` }} />
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
     </section>
   )
 }

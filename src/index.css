@@ -13,8 +13,6 @@
 }
 :root[data-reduce-motion] .constellation__sky,
 :root[data-reduce-motion] .downloads-tab__progress-shuttle,
-:root[data-reduce-motion] .home__scroll-hint,
-:root[data-reduce-motion] .home__panel-inner,
 :root[data-reduce-motion] .loading-pulse,
 :root[data-reduce-motion] .loading-pulse__glyph,
 :root[data-reduce-motion] .trending__refresh--busy svg,
@@ -28,7 +26,6 @@
   animation: none;
 }
 :root[data-reduce-motion] .downloads-tab__progress-shuttle { width: 100%; opacity: 0.5; }
-:root[data-reduce-motion] .home__scroll-hint,
 :root[data-reduce-motion] .walkthrough__hero-scroll { opacity: 0.7; }
 :root[data-reduce-motion] .trending__card--skeleton { opacity: 0.55; }
 :root[data-reduce-motion] .loading-pulse__glyph,
