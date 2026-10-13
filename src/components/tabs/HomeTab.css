@@ -9,8 +9,6 @@
   /* Bottom-row room kept free for ReplayButton (label + gap; icon-only
      below 1024px) so the entry pills never run under it. */
   --replay-room: 116px;
-  --home-gutter: max(calc(var(--pod-inset, 16px) + var(--s-3)), 3vw);
-  --shelf-card: clamp(108px, 8.5vw, 168px);
   /* Content ends above the fixed entry row. */
   padding-bottom: calc(var(--pod-inset, 16px) + 56px + var(--s-7));
   background: linear-gradient(
@@ -60,7 +58,13 @@
    strip's card styles (TrendingRow.css) and run off the right edge so the
    cut card says "scroll". */
 .home__shelves {
+  /* Declared here, not on .home: the catalog tabs' Browse mode reuses these
+     shelves outside Home (LibraryBrowse). */
+  --home-gutter: max(calc(var(--pod-inset, 16px) + var(--s-3)), 3vw);
+  --shelf-card: clamp(108px, 8.5vw, 168px);
   display: grid;
+  /* Pack rows at the top when a tab stretches the column taller. */
+  align-content: start;
   gap: var(--s-5);
   min-width: 0;
   padding-top: calc(var(--pod-inset, 16px) + var(--pod-h, 56px) + var(--s-5));
@@ -73,6 +77,7 @@
 .home__shelves .trending {
   margin: 0 0 0 var(--home-gutter);
   min-width: 0;
+  align-content: start;
 }
 
 .home__shelves .trending__header {
@@ -379,8 +384,11 @@
 /* Phones: one row of pills that scrolls sideways when it doesn't fit,
    centred when it does (the tablet nav row does the same). */
 @media (max-width: 720px) {
-  .home {
+  .home__shelves {
     --shelf-card: 108px;
+  }
+
+  .home {
     padding-bottom: calc(var(--pod-inset, 8px) + 44px + var(--s-6));
   }
 

@@ -233,11 +233,22 @@ test('Browse mode shelves the library and its genre chips open the filtered grid
 
 test('Browse mode on TV resumes a show from its Continue watching card', async ({ page }) => {
   await setup(page, { watch: [watchRow('episode', 102, 300, 1500)] })
+  // A real 500px-wide poster: an unsized shelf card would stretch to it.
+  const poster = 'https://image.tmdb.org/t/p/original/test-show.jpg'
+  await page.route('**/api/sonarr/api/v3/series', (r) =>
+    r.fulfill(json([{ ...SHOW, images: [{ coverType: 'poster', remoteUrl: poster }] }, EMPTY_SHOW])),
+  )
+  await page.route(poster, (r) =>
+    r.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="500" height="750"/>' }),
+  )
   await page.goto('/#/tv')
   await page.getByRole('tab', { name: 'Browse' }).click()
   const resume = page.getByRole('region', { name: 'Continue watching' })
   await expect(resume.locator('.trending__title')).toHaveText(['Test Show'])
   await expect(resume).toContainText('S1 · E2')
+  // Shelf sizing comes from Home's shelves stylesheet; posters stay poster-sized
+  // here too, not stretched to the row.
+  expect((await resume.locator('.trending__card-wrap').first().boundingBox())?.width).toBeLessThanOrEqual(168)
   // Other Show has nothing on disk, so only Test Show is shelved.
   await expect(page.getByRole('region', { name: 'Recently added' }).locator('.trending__title')).toHaveText(['Test Show'])
   await resume.getByRole('button', { name: 'Test Show' }).click()
