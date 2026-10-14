@@ -354,6 +354,7 @@ export function TvTab() {
         airDate: ep.airDate ?? ep.airDateUtc,
         hasFile: ep.hasFile,
         overview: ep.overview,
+        still: ep.images?.find((i) => i.coverType === 'screenshot')?.remoteUrl,
       })
       map.set(ep.seasonNumber, list)
     }

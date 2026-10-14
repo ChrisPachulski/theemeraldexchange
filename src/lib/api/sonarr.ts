@@ -88,6 +88,8 @@ export type Episode = {
   overview?: string
   hasFile: boolean
   monitored: boolean
+  /** Present with includeImages: TVDB's screenshot (coverType 'screenshot'). */
+  images?: Array<{ coverType: string; remoteUrl?: string }>
 }
 
 // Slim subset of Sonarr's queue record — just what the dashboard
@@ -128,7 +130,7 @@ export const sonarr = {
       `/series/${seriesId}/seasons/${seasonNumber}/monitor`,
       {},
     ),
-  episodes: (seriesId: number) => get<Episode[]>('/episode', { seriesId }),
+  episodes: (seriesId: number) => get<Episode[]>('/episode', { seriesId, includeImages: 'true' }),
   // Fetched with a large pageSize so a full HotD-style season cluster
   // (10+ records) is captured in one round-trip. We only need
   // downloadId + seriesId + seasonNumber, but Sonarr always returns

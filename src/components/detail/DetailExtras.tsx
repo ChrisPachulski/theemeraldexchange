@@ -15,6 +15,24 @@ import { useDialogDismiss } from '../../lib/useDialogDismiss'
  *  keys on (a show's TVDB id can't be rated; Sonarr may not know its TMDB id). */
 export type DetailExtrasRef = TmdbRef & { tmdbId?: number | null }
 
+// Line icons for the captioned hero actions (24-unit viewBox, stroke drawn).
+const ICONS = {
+  trailer: 'M4 5h16v14H4z M10 9l5 3-5 3z',
+  watchlist: 'M6 3h12v18l-6-4-6 4z',
+  like: 'M7 11v9H4v-9z M7 11l4-8a2 2 0 0 1 3 2l-1 4h6a2 2 0 0 1 2 2l-2 7a2 2 0 0 1-2 2H7',
+  dislike: 'M17 13V4h3v9z M17 13l-4 8a2 2 0 0 1-3-2l1-4H5a2 2 0 0 1-2-2l2-7a2 2 0 0 1 2-2h10',
+}
+
+function ActionIcon({ name }: { name: keyof typeof ICONS }) {
+  return (
+    <span className="detail__action-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" strokeLinecap="round">
+        <path d={ICONS[name]} />
+      </svg>
+    </span>
+  )
+}
+
 export function TitleActions({
   extras,
   title,
@@ -44,7 +62,8 @@ export function TitleActions({
   return (
     <div className="detail__hero-actions">
       {trailer && (
-        <button type="button" className="detail__btn detail__btn--secondary" onClick={() => onTrailer(trailer)}>
+        <button type="button" className="detail__action" onClick={() => onTrailer(trailer)}>
+          <ActionIcon name="trailer" />
           Trailer
         </button>
       )}
@@ -52,11 +71,12 @@ export function TitleActions({
       {!watchlist.error && (
         <button
           type="button"
-          className="detail__btn detail__btn--secondary"
+          className="detail__action"
           aria-pressed={onList}
           disabled={toggle.isPending}
           onClick={() => toggle.mutate({ kind: extras.kind, id: extras.id, title, posterPath: poster, on: !onList })}
         >
+          <ActionIcon name="watchlist" />
           {onList ? 'On watchlist' : 'Watchlist'}
         </button>
       )}
@@ -64,22 +84,24 @@ export function TitleActions({
         <>
           <button
             type="button"
-            className="detail__btn detail__btn--secondary"
+            className="detail__action"
             aria-pressed={liked}
             disabled={!!feedback.error}
             title={feedback.error ? 'Feedback unavailable' : undefined}
             onClick={() => rate('like', liked)}
           >
+            <ActionIcon name="like" />
             {liked ? 'Liked' : 'Like'}
           </button>
           <button
             type="button"
-            className="detail__btn detail__btn--secondary"
+            className="detail__action"
             aria-pressed={disliked}
             disabled={!!feedback.error}
             title={feedback.error ? 'Feedback unavailable' : undefined}
             onClick={() => rate('dislike', disliked)}
           >
+            <ActionIcon name="dislike" />
             {disliked ? 'Disliked' : 'Dislike'}
           </button>
         </>

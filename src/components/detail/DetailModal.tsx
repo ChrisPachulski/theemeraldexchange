@@ -7,15 +7,9 @@ import { ExtrasRows, TitleActions, TrailerDialog, type DetailExtrasRef } from '.
 import { PersonDialog } from './PersonDialog'
 import './DetailModal.css'
 
-// Plex-style item-detail modal.
-//
-// Takes over most of the viewport and shows everything Sonarr / Radarr
-// expose for the item: poster, title, year, runtime, network/studio,
-// status, genres, ratings, plot, season counts (TV), release dates
-// (movies). Action footer offers Add / Remove depending on library state.
-//
-// Cast data is intentionally omitted — Sonarr and Radarr don't expose it
-// in their v3 APIs. Adding cast would require a TMDB integration.
+// Plex-style title page in a sheet: a backdrop hero with the plot and the
+// play / add actions, then seasons and episodes (TV), cast (TMDB), extras,
+// the Sonarr / Radarr details, and the admin's manage actions last.
 
 export type DetailMeta = {
   label: string
@@ -46,6 +40,8 @@ export type SeasonEpisode = {
   watched?: boolean
   /** Local playback in progress (0..1): a resume bar under the row. */
   progress?: number | null
+  /** Episode still (Sonarr's screenshot), 16:9. */
+  still?: string
 }
 
 export type SeasonRow = {
@@ -196,6 +192,7 @@ export function DetailModal({
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
+  const advancedRef = useRef<HTMLElement>(null)
   // Dialogs over the detail: a trailer, or a cast member's page.
   const [trailer, setTrailer] = useState<TmdbVideo | null>(null)
   const [person, setPerson] = useState<CastMember | null>(null)
@@ -243,10 +240,19 @@ export function DetailModal({
     if (bodyRef.current) bodyRef.current.scrollTop = 0
   }, [title])
 
+  // The Advanced panel opens at the foot of the page: bring it into view.
+  useEffect(() => {
+    if (showAdvanced) advancedRef.current?.scrollIntoView?.({ block: 'start', behavior: 'smooth' })
+  }, [showAdvanced])
+
   if (!rendered) return null
 
   const titleId = 'detail-title'
   const overviewId = 'detail-overview'
+  const shownSeasons = (seasons ?? [])
+    .filter((s) => s.seasonNumber > 0)
+    .sort((a, b) => a.seasonNumber - b.seasonNumber)
+  const manage = advanced || (inLibrary && onUpgrade) || (inLibrary && canRemove && onRemove)
 
   return (
     <dialog
@@ -257,15 +263,7 @@ export function DetailModal({
       onClose={onClose}
       onCancel={(e) => { e.preventDefault(); onClose() }}
     >
-      <article className="detail__panel">
-        {backdrop && (
-          <div
-            className="detail__backdrop"
-            style={{ backgroundImage: `url(${backdrop})` }}
-            aria-hidden="true"
-          />
-        )}
-
+      <article className="detail__panel detail__panel--page">
         <button
           ref={closeBtnRef}
           type="button"
@@ -276,353 +274,380 @@ export function DetailModal({
           {'×'}
         </button>
 
-        <header className="detail__hero">
-          {poster ? (
-            <img className="detail__poster" src={poster} alt="" loading="eager" />
-          ) : (
-            <div className="detail__poster detail__poster--fallback" aria-hidden="true">
-              {title.charAt(0)}
-            </div>
-          )}
-
-          <div className="detail__head">
-            <p className="detail__eyebrow">
-              {kind}
-              {inLibrary && <span className="detail__badge">In library</span>}
-            </p>
-            <h2 id={titleId} className="detail__title">
-              {title}
-              {year && <span className="detail__year"> {year}</span>}
-            </h2>
-            {metaStrip.length > 0 && (
-              <p className="detail__meta-strip">
-                {metaStrip.map((piece, i) => (
-                  <span key={i} className="detail__meta-piece">
-                    {i > 0 && <span className="detail__meta-sep" aria-hidden="true">·</span>}
-                    <span>{piece}</span>
-                  </span>
-                ))}
-              </p>
-            )}
-            {rating && rating.length > 0 && <RatingChips pieces={rating} size="lg" />}
-            {genres && genres.length > 0 && (
-              <ul className="detail__genres">
-                {genres.map((g) =>
-                  onGenreClick ? (
-                    <li key={g}>
-                      <button type="button" className="detail__genre" onClick={() => onGenreClick(g)}>
-                        {g}
-                      </button>
-                    </li>
-                  ) : (
-                    <li key={g} className="detail__genre">{g}</li>
-                  ),
-                )}
-              </ul>
-            )}
-            {extras && <TitleActions extras={extras} title={title} poster={poster} onTrailer={setTrailer} />}
-          </div>
-        </header>
-
-        <div ref={bodyRef} className="detail__body">
-          {overview && (
-            <section className="detail__section">
-              <h3 className="detail__section-title">Plot</h3>
-              <p id={overviewId} className="detail__overview">{overview}</p>
-            </section>
-          )}
-
-          {meta.length > 0 && (
-            <section className="detail__section">
-              <h3 className="detail__section-title">Details</h3>
-              <dl className="detail__meta-list">
-                {meta.map((row) => (
-                  <div key={row.label} className="detail__meta-row">
-                    <dt className="detail__meta-key">{row.label}</dt>
-                    <dd className="detail__meta-val">{row.value}</dd>
-                  </div>
-                ))}
-              </dl>
-            </section>
-          )}
-
-          {inLibrary && seasons && seasons.length > 0 && (
-            <details className="detail__section detail__seasons-disclosure" open={defaultSeason != null}>
-              <summary className="detail__cast-summary">
-                <span className="detail__section-title detail__cast-summary-title">Seasons</span>
-                <span className="detail__cast-count">
-                  {seasons.filter((s) => s.seasonNumber > 0).length}
-                </span>
-                <span className="detail__cast-chevron" aria-hidden="true">›</span>
-              </summary>
-              <ul className="detail__seasons">
-                {seasons
-                  .filter((s) => s.seasonNumber > 0)
-                  .sort((a, b) => a.seasonNumber - b.seasonNumber)
-                  .map((s) => {
-                    const aired = s.episodeCount > 0
-                    const complete =
-                      s.episodeCount > 0 && s.episodeFileCount >= s.episodeCount
-                    // Two cases warrant an action button:
-                    //   1) Season not yet monitored but has aired episodes
-                    //      → 'Add this season' (opt in + grab)
-                    //   2) Season already monitored but missing episodes
-                    //      that have aired → 'Get missing' (re-trigger the
-                    //      cap-aware search for that season). Same backend
-                    //      route handles both — the monitor flip is a
-                    //      no-op when already monitored.
-                    const canTrigger =
-                      aired && !complete && onAddSeason
-                    const triggerLabel = s.monitored ? 'Get missing' : 'Add'
-                    const isAdding = addingSeason === s.seasonNumber
-                    // Apple's season card: downloaded of total, then what is
-                    // left to watch when the show plays locally.
-                    const total = Math.max(s.totalEpisodeCount || s.episodeCount, s.episodeFileCount)
-                    const unwatched = s.watchedCount == null ? null : Math.max(0, total - s.watchedCount)
-                    const status = !aired
-                      ? 'Upcoming'
-                      : `${s.episodeFileCount} of ${total} downloaded${
-                          unwatched == null ? '' : unwatched ? ` · ${unwatched} unwatched` : ' · All watched'
-                        }`
-                    return (
-                      <li key={s.seasonNumber} className="detail__season-item">
-                        <details className="detail__season-details" open={s.seasonNumber === defaultSeason}>
-                          <summary className="detail__season-row">
-                            <span className="detail__season-num">Season {s.seasonNumber}</span>
-                            <span className="detail__season-air">{fmtAirDate(s.airDate)}</span>
-                            <span className="detail__season-status">{status}</span>
-                            {canTrigger && (
-                              <button
-                                type="button"
-                                className="detail__season-add"
-                                onClick={(e) => {
-                                  e.preventDefault()
-                                  onAddSeason(s.seasonNumber)
-                                }}
-                                disabled={isAdding}
-                                aria-busy={isAdding}
-                              >
-                                {isAdding ? 'Searching…' : triggerLabel}
-                              </button>
-                            )}
-                            <span className="detail__season-chevron" aria-hidden="true">›</span>
-                          </summary>
-                          {s.episodes && s.episodes.length > 0 && (
-                            <ol className="detail__episodes">
-                              {s.episodes
-                                .slice()
-                                .sort((a, b) => a.episodeNumber - b.episodeNumber)
-                                .map((ep) => {
-                                  const future = ep.airDate
-                                    ? new Date(ep.airDate).getTime() > Date.now()
-                                    : false
-                                  const className = `detail__episode${future ? ' detail__episode--future' : ''}${ep.hasFile ? ' detail__episode--ready' : ''}`
-                                  const row = (
-                                    <>
-                                      <span className="detail__episode-num">
-                                        {String(ep.episodeNumber).padStart(2, '0')}
-                                      </span>
-                                      <span className="detail__episode-title">
-                                        {ep.title}
-                                        {ep.watched && <span className="detail__episode-tag">Watched</span>}
-                                      </span>
-                                      <span className="detail__episode-air">
-                                        {fmtAirDate(ep.airDate) ?? '—'}
-                                      </span>
-                                      {ep.overview && <span className="detail__episode-overview">{ep.overview}</span>}
-                                      {ep.progress != null && (
-                                        <span className="detail__episode-progress" aria-hidden="true">
-                                          <span style={{ width: `${Math.round(ep.progress * 100)}%` }} />
-                                        </span>
-                                      )}
-                                    </>
-                                  )
-                                  return ep.onPlay ? (
-                                    <li key={ep.episodeNumber}>
-                                      <button
-                                        type="button"
-                                        className={`${className} detail__episode--play`}
-                                        onClick={ep.onPlay}
-                                      >
-                                        {row}
-                                      </button>
-                                    </li>
-                                  ) : (
-                                    <li key={ep.episodeNumber} className={className}>
-                                      {row}
-                                    </li>
-                                  )
-                                })}
-                            </ol>
-                          )}
-                        </details>
-                      </li>
-                    )
-                  })}
-              </ul>
-            </details>
-          )}
-
-          <details className="detail__section detail__cast-disclosure">
-            <summary className="detail__cast-summary">
-              <span className="detail__section-title detail__cast-summary-title">Cast</span>
-              {!castLoading && cast && cast.length > 0 && (
-                <span className="detail__cast-count">{Math.min(cast.length, 12)}</span>
-              )}
-              <span className="detail__cast-chevron" aria-hidden="true">›</span>
-            </summary>
-            {castLoading ? (
-              <ul className="detail__cast" aria-busy="true">
-                {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
-                  <li key={i} className="detail__cast-card detail__cast-card--skeleton">
-                    <div className="detail__cast-photo" />
-                    <div className="detail__cast-name detail__cast-name--skeleton" />
-                    <div className="detail__cast-role detail__cast-role--skeleton" />
-                  </li>
-                ))}
-              </ul>
-            ) : cast && cast.length > 0 ? (
-              <ul className="detail__cast">
-                {cast.slice(0, 12).map((member) => {
-                  const role = castCharacter(member)
-                  return (
-                    <li key={member.id} className="detail__cast-card">
-                      <button type="button" className="detail__cast-link" onClick={() => setPerson(member)}>
-                        {member.profile_path ? (
-                          <img
-                            className="detail__cast-photo"
-                            src={`${TMDB_IMAGE_BASE}${member.profile_path}`}
-                            alt=""
-                            loading="lazy"
-                            decoding="async"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <div className="detail__cast-photo detail__cast-photo--fallback" aria-hidden="true">
-                            {member.name.charAt(0)}
-                          </div>
-                        )}
-                        <p className="detail__cast-name">{member.name}</p>
-                        {role && <p className="detail__cast-role">{role}</p>}
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
-            ) : (
-              <p className="detail__cast-empty">Cast information unavailable.</p>
-            )}
-          </details>
-
-          {extras && (
-            <ExtrasRows
-              extras={extras}
-              onPlayVideo={setTrailer}
-              onPickRelated={onPickRelated}
-              relatedPendingId={relatedPendingId}
+        {/* One scroller for hero and body, like Plex's title page: the hero
+            scrolls away instead of pinning a short window between it and a
+            footer. */}
+        <div ref={bodyRef} className="detail__scroll">
+          {backdrop && (
+            <div
+              className="detail__backdrop"
+              style={{ backgroundImage: `url(${backdrop})` }}
+              aria-hidden="true"
             />
           )}
 
-          {advanced && showAdvanced && (
-            <section className="detail__section detail__advanced" aria-label="Advanced actions">
-              <h3 className="detail__section-title">Advanced</h3>
-              {advanced}
-            </section>
-          )}
-        </div>
+          <header className="detail__hero">
+            {poster ? (
+              <img className="detail__poster" src={poster} alt="" loading="eager" />
+            ) : (
+              <div className="detail__poster detail__poster--fallback" aria-hidden="true">
+                {title.charAt(0)}
+              </div>
+            )}
 
-        <footer className="detail__actions">
-          <button
-            type="button"
-            className="detail__btn detail__btn--secondary"
-            onClick={onClose}
-          >
-            Close
-          </button>
-          {advanced && (
-            <button
-              type="button"
-              className="detail__btn detail__btn--secondary"
-              onClick={() => setShowAdvanced((v) => !v)}
-              aria-expanded={showAdvanced}
-            >
-              {showAdvanced ? 'Hide advanced' : 'Advanced'}
-            </button>
-          )}
-          {!inLibrary && onFindRelease && (
-            <button
-              type="button"
-              className="detail__btn detail__btn--primary"
-              onClick={onFindRelease}
-              title="Add this title and browse releases to grab one by hand"
-            >
-              Find release
-            </button>
-          )}
-          {!inLibrary && onAdd && (
-            <button
-              type="button"
-              className={`detail__btn ${onFindRelease ? 'detail__btn--secondary' : 'detail__btn--primary'}`}
-              onClick={onAdd}
-            >
-              Add to library
-            </button>
-          )}
-          {inLibrary && unavailableNote && (
-            <span className="detail__btn detail__btn--note" role="status">
-              {unavailableNote}
-            </span>
-          )}
-          {onPlayDirect && (
-            <button
-              type="button"
-              className="detail__btn detail__btn--primary"
-              onClick={onPlayDirect}
-            >
-              {playDirectLabel ?? 'Play Direct here'}
-            </button>
-          )}
-          {/* Recorded PRODUCT.md exception (re-review fix3, orchestrator
-              decision): a TRANSITIONAL per-title affordance beyond the
-              Watch-entry exception, kept while Plex remains the household's
-              playback surface. It stays available to every member (playback
-              is not an operator action). Expected to retire when in-app
-              playback fully covers the library. */}
-          {inLibrary && playUrl && (
-            <a
-              className={`detail__btn ${onPlayDirect ? 'detail__btn--secondary' : 'detail__btn--primary'}`}
-              href={playUrl}
-              target="_blank"
-              rel="noopener"
-            >
-              Play in Plex -&gt;
-            </a>
-          )}
-          {inLibrary && onUpgrade && (
-            <button
-              type="button"
-              className="detail__btn detail__btn--primary"
-              onClick={onUpgrade}
-              disabled={upgrading}
-              aria-busy={upgrading}
-              title="Search the indexer for a higher-quality release under the size cap and replace if found"
-            >
-              {upgrading ? 'Searching…' : 'Try for a better version'}
-            </button>
-          )}
-          {inLibrary && canRemove && onRemove && (
-            <button
-              type="button"
-              className="detail__btn detail__btn--danger"
-              onClick={onRemove}
-            >
-              Remove from library
-            </button>
-          )}
-        </footer>
+            <div className="detail__head">
+              <p className="detail__eyebrow">
+                {kind}
+                {inLibrary && <span className="detail__badge">In library</span>}
+              </p>
+              <h2 id={titleId} className="detail__title">{title}</h2>
+              {(year || metaStrip.length > 0) && (
+                <p className="detail__meta-strip">
+                  {[...(year ? [String(year)] : []), ...metaStrip].map((piece, i) => (
+                    <span key={i} className="detail__meta-piece">
+                      {i > 0 && <span className="detail__meta-sep" aria-hidden="true">·</span>}
+                      <span>{piece}</span>
+                    </span>
+                  ))}
+                </p>
+              )}
+              {rating && rating.length > 0 && <RatingChips pieces={rating} size="lg" />}
+              {genres && genres.length > 0 && (
+                <ul className="detail__genres">
+                  {genres.map((g) =>
+                    onGenreClick ? (
+                      <li key={g}>
+                        <button type="button" className="detail__genre" onClick={() => onGenreClick(g)}>
+                          {g}
+                        </button>
+                      </li>
+                    ) : (
+                      <li key={g} className="detail__genre">{g}</li>
+                    ),
+                  )}
+                </ul>
+              )}
+
+              <div className="detail__play-row">
+                {!inLibrary && onFindRelease && (
+                  <button
+                    type="button"
+                    className="detail__btn detail__btn--primary"
+                    onClick={onFindRelease}
+                    title="Add this title and browse releases to grab one by hand"
+                  >
+                    Find release
+                  </button>
+                )}
+                {!inLibrary && onAdd && (
+                  <button
+                    type="button"
+                    className={`detail__btn ${onFindRelease ? 'detail__btn--secondary' : 'detail__btn--primary'}`}
+                    onClick={onAdd}
+                  >
+                    Add to library
+                  </button>
+                )}
+                {inLibrary && unavailableNote && (
+                  <span className="detail__btn detail__btn--note" role="status">
+                    {unavailableNote}
+                  </span>
+                )}
+                {onPlayDirect && (
+                  <button
+                    type="button"
+                    className="detail__btn detail__btn--primary detail__btn--play"
+                    onClick={onPlayDirect}
+                  >
+                    {playDirectLabel ?? 'Play Direct here'}
+                  </button>
+                )}
+                {/* Recorded PRODUCT.md exception (re-review fix3, orchestrator
+                    decision): a TRANSITIONAL per-title affordance beyond the
+                    Watch-entry exception, kept while Plex remains the household's
+                    playback surface. It stays available to every member (playback
+                    is not an operator action). Expected to retire when in-app
+                    playback fully covers the library. */}
+                {inLibrary && playUrl && (
+                  <a
+                    className={`detail__btn ${onPlayDirect ? 'detail__btn--secondary' : 'detail__btn--primary'}`}
+                    href={playUrl}
+                    target="_blank"
+                    rel="noopener"
+                  >
+                    Play in Plex -&gt;
+                  </a>
+                )}
+              </div>
+
+              {extras && <TitleActions extras={extras} title={title} poster={poster} onTrailer={setTrailer} />}
+
+              {overview && <p id={overviewId} className="detail__overview">{overview}</p>}
+            </div>
+          </header>
+
+          <div className="detail__body">
+            {inLibrary && shownSeasons.length > 0 && (
+              <SeasonBrowser
+                key={title}
+                seasons={shownSeasons}
+                defaultSeason={defaultSeason}
+                onAddSeason={onAddSeason}
+                addingSeason={addingSeason}
+              />
+            )}
+
+            {(castLoading || (cast && cast.length > 0)) && (
+              <section className="detail__section">
+                <h3 className="detail__section-title">Cast</h3>
+                {castLoading ? (
+                  <ul className="detail__cast detail__cast--people" aria-busy="true">
+                    {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+                      <li key={i} className="detail__cast-card detail__cast-card--skeleton">
+                        <div className="detail__cast-photo" />
+                        <div className="detail__cast-name detail__cast-name--skeleton" />
+                        <div className="detail__cast-role detail__cast-role--skeleton" />
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <ul className="detail__cast detail__cast--people">
+                    {cast!.slice(0, 20).map((member) => {
+                      const role = castCharacter(member)
+                      return (
+                        <li key={member.id} className="detail__cast-card">
+                          <button type="button" className="detail__cast-link" onClick={() => setPerson(member)}>
+                            {member.profile_path ? (
+                              <img
+                                className="detail__cast-photo"
+                                src={`${TMDB_IMAGE_BASE}${member.profile_path}`}
+                                alt=""
+                                loading="lazy"
+                                decoding="async"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <div className="detail__cast-photo detail__cast-photo--fallback" aria-hidden="true">
+                                {member.name.charAt(0)}
+                              </div>
+                            )}
+                            <p className="detail__cast-name">{member.name}</p>
+                            {role && <p className="detail__cast-role">{role}</p>}
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </section>
+            )}
+
+            {extras && (
+              <ExtrasRows
+                extras={extras}
+                onPlayVideo={setTrailer}
+                onPickRelated={onPickRelated}
+                relatedPendingId={relatedPendingId}
+              />
+            )}
+
+            {meta.length > 0 && (
+              <section className="detail__section">
+                <h3 className="detail__section-title">Details</h3>
+                <dl className="detail__meta-list">
+                  {meta.map((row) => (
+                    <div key={row.label} className="detail__meta-row">
+                      <dt className="detail__meta-key">{row.label}</dt>
+                      <dd className="detail__meta-val">{row.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
+            )}
+
+            {manage && (
+              <section className="detail__manage" aria-label="Manage">
+                {advanced && (
+                  <button
+                    type="button"
+                    className="detail__btn detail__btn--secondary"
+                    onClick={() => setShowAdvanced((v) => !v)}
+                    aria-expanded={showAdvanced}
+                  >
+                    {showAdvanced ? 'Hide advanced' : 'Advanced'}
+                  </button>
+                )}
+                {inLibrary && onUpgrade && (
+                  <button
+                    type="button"
+                    className="detail__btn detail__btn--secondary"
+                    onClick={onUpgrade}
+                    disabled={upgrading}
+                    aria-busy={upgrading}
+                    title="Search the indexer for a higher-quality release under the size cap and replace if found"
+                  >
+                    {upgrading ? 'Searching…' : 'Try for a better version'}
+                  </button>
+                )}
+                {inLibrary && canRemove && onRemove && (
+                  <button
+                    type="button"
+                    className="detail__btn detail__btn--quiet-danger"
+                    onClick={onRemove}
+                  >
+                    Remove from library
+                  </button>
+                )}
+              </section>
+            )}
+
+            {advanced && showAdvanced && (
+              <section ref={advancedRef} className="detail__section detail__advanced" aria-label="Advanced actions">
+                <h3 className="detail__section-title">Advanced</h3>
+                {advanced}
+              </section>
+            )}
+          </div>
+        </div>
       </article>
       <TrailerDialog video={trailer} onClose={() => setTrailer(null)} />
       <PersonDialog member={person} onClose={() => setPerson(null)} />
     </dialog>
+  )
+}
+
+// Seasons as a tab row over the picked season's episodes (Plex's season page,
+// inline). Opens on the resume target's season, else the first with files.
+function SeasonBrowser({
+  seasons,
+  defaultSeason,
+  onAddSeason,
+  addingSeason,
+}: {
+  seasons: SeasonRow[]
+  defaultSeason?: number | null
+  onAddSeason?: (seasonNumber: number) => void
+  addingSeason?: number | null
+}) {
+  const [picked, setPicked] = useState<number | null>(null)
+  const [now] = useState(Date.now)
+  const current =
+    seasons.find((s) => s.seasonNumber === (picked ?? defaultSeason)) ??
+    seasons.find((s) => s.episodeFileCount > 0) ??
+    seasons[0]
+  const total = (s: SeasonRow) => Math.max(s.totalEpisodeCount || s.episodeCount, s.episodeFileCount)
+  const unwatched = (s: SeasonRow) => (s.watchedCount == null ? null : Math.max(0, total(s) - s.watchedCount))
+
+  const aired = current.episodeCount > 0
+  const complete = aired && current.episodeFileCount >= current.episodeCount
+  // Not monitored with aired episodes → 'Add' (opt in + grab); monitored but
+  // missing aired episodes → 'Get missing' (re-run the cap-aware search).
+  // Same backend route: the monitor flip is a no-op when already monitored.
+  const canTrigger = aired && !complete && onAddSeason
+  const isAdding = addingSeason === current.seasonNumber
+  const left = unwatched(current)
+  // Apple's season card: downloaded of total, then what is left to watch
+  // when the show plays locally.
+  const status = !aired
+    ? 'Upcoming'
+    : `${current.episodeFileCount} of ${total(current)} downloaded${
+        left == null ? '' : left ? ` · ${left} unwatched` : ' · All watched'
+      }`
+  const airDate = fmtAirDate(current.airDate)
+
+  return (
+    <section className="detail__section" aria-labelledby="detail-seasons">
+      <h3 id="detail-seasons" className="detail__section-title">
+        {seasons.length} {seasons.length === 1 ? 'Season' : 'Seasons'}
+      </h3>
+      <div className="detail__season-tabs" role="tablist" aria-label="Seasons">
+        {seasons.map((s) => {
+          const n = unwatched(s)
+          return (
+            <button
+              key={s.seasonNumber}
+              type="button"
+              role="tab"
+              aria-selected={s === current}
+              className="detail__season-tab"
+              onClick={() => setPicked(s.seasonNumber)}
+            >
+              <span className="detail__season-num">Season {s.seasonNumber}</span>
+              <span className="detail__season-air">
+                {s.episodeCount > 0 ? `${total(s)} episodes` : 'Upcoming'}
+              </span>
+              {n != null && n > 0 && n < total(s) && (
+                <span className="detail__season-left" aria-label={`${n} unwatched`}>{n}</span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+
+      <div role="tabpanel" className="detail__season-panel" aria-label={`Season ${current.seasonNumber}`}>
+        <p className="detail__season-status">
+          {airDate && <span>{airDate}</span>}
+          <span>{status}</span>
+          {canTrigger && (
+            <button
+              type="button"
+              className="detail__season-add"
+              onClick={() => onAddSeason(current.seasonNumber)}
+              disabled={isAdding}
+              aria-busy={isAdding}
+            >
+              {isAdding ? 'Searching…' : current.monitored ? 'Get missing' : 'Add'}
+            </button>
+          )}
+        </p>
+        {current.episodes && current.episodes.length > 0 && (
+          <ol className="detail__episodes">
+            {current.episodes
+              .slice()
+              .sort((a, b) => a.episodeNumber - b.episodeNumber)
+              .map((ep) => {
+                const future = ep.airDate ? new Date(ep.airDate).getTime() > now : false
+                const className = `detail__episode${future ? ' detail__episode--future' : ''}${ep.hasFile ? ' detail__episode--ready' : ''}`
+                const row = (
+                  <>
+                    <span className="detail__episode-thumb">
+                      {ep.still ? (
+                        <img src={ep.still} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
+                      ) : (
+                        <span className="detail__episode-thumb-num" aria-hidden="true">{ep.episodeNumber}</span>
+                      )}
+                      {ep.progress != null && (
+                        <span className="detail__episode-progress" aria-hidden="true">
+                          <span style={{ width: `${Math.round(ep.progress * 100)}%` }} />
+                        </span>
+                      )}
+                    </span>
+                    <span className="detail__episode-text">
+                      <span className="detail__episode-line">
+                        <span className="detail__episode-num">E{ep.episodeNumber}</span>
+                        <span className="detail__episode-air">{fmtAirDate(ep.airDate) ?? '—'}</span>
+                        {ep.watched && <span className="detail__episode-tag">Watched</span>}
+                      </span>
+                      <span className="detail__episode-title">{ep.title}</span>
+                      {ep.overview && <span className="detail__episode-overview">{ep.overview}</span>}
+                    </span>
+                  </>
+                )
+                return ep.onPlay ? (
+                  <li key={ep.episodeNumber}>
+                    <button type="button" className={`${className} detail__episode--play`} onClick={ep.onPlay}>
+                      {row}
+                    </button>
+                  </li>
+                ) : (
+                  <li key={ep.episodeNumber} className={className}>
+                    {row}
+                  </li>
+                )
+              })}
+          </ol>
+        )}
+      </div>
+    </section>
   )
 }

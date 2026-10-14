@@ -166,7 +166,6 @@ test('a show detail resumes in one tap and plays from its season browser', async
   await expect(detail.getByText('4 of 5', { exact: true })).toBeVisible()
   // Opens on the resume target's season, with downloaded and unwatched counts.
   await expect(detail.getByText('3 of 3 downloaded · 2 unwatched')).toBeVisible()
-  await expect(detail.getByText('1 of 2 downloaded · 2 unwatched')).toBeVisible()
   const pilot = detail.getByRole('button', { name: /Pilot/ })
   await expect(pilot).toBeVisible()
   await expect(pilot).toContainText('Watched')
@@ -183,6 +182,7 @@ test('a show detail resumes in one tap and plays from its season browser', async
 
   await page.getByRole('button', { name: 'Test Show' }).click()
   await detail.getByText('Season 2', { exact: true }).click()
+  await expect(detail.getByText('1 of 2 downloaded · 2 unwatched')).toBeVisible()
   // Not downloaded locally: an info row, not a play button.
   await expect(detail.getByText('Later', { exact: true })).toBeVisible()
   await expect(detail.getByRole('button', { name: /Later/ })).toHaveCount(0)

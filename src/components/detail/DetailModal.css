@@ -257,29 +257,68 @@ button.detail__genre:hover {
   border-color: var(--emerald);
 }
 
-/* Trailer / Watchlist / Like / Dislike under the title (Apple's hero
-   actions). Compact pills that wrap instead of the footer's full-width
-   phone layout. */
+/* Trailer / Watchlist / Like / Dislike under the title: Plex's captioned
+   icon buttons, quieter than the play row above them. */
 .detail__hero-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--s-2);
-  margin-top: var(--s-2);
+  gap: var(--s-4);
+  margin-top: var(--s-1);
 }
 
-.detail__hero-actions .detail__btn {
-  flex: 0 0 auto;
-  padding: var(--s-2) var(--s-4);
+.detail__action {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  min-width: 56px;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-display);
+  font-size: 0.625rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  transition: color var(--dur-fast) var(--ease);
 }
 
-.detail__hero-actions .detail__btn[aria-pressed='true'] {
-  border-color: var(--emerald);
+.detail__action-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--surface-2) 70%, transparent);
+  color: var(--text);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.detail__action:hover { color: var(--text); }
+.detail__action:hover .detail__action-icon { border-color: var(--text-subtle); }
+
+.detail__action[aria-pressed='true'],
+.detail__action[aria-pressed='true'] .detail__action-icon {
   color: var(--emerald);
+  border-color: var(--emerald);
 }
 
-.detail__hero-actions .detail__btn:disabled {
+.detail__action:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+.detail__action:focus-visible {
+  outline: none;
+}
+
+.detail__action:focus-visible .detail__action-icon {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
 }
 
 /* Body — scrollable region between hero and footer. */
@@ -302,66 +341,20 @@ button.detail__genre:hover {
   border-radius: 3px;
 }
 
-.detail__section-title {
+/* Shelf headings in the Title role (Plex's "8 Seasons", "Cast"). */
+.detail__section-title,
+.detail__body .trending__label {
   font-family: var(--font-display);
-  font-size: 0.625rem;
-  font-weight: var(--w-ui);
-  letter-spacing: var(--tr-eyebrow);
-  text-transform: uppercase;
-  color: var(--text-subtle);
-  margin: 0 0 var(--s-2);
+  font-size: var(--t-md);
+  font-weight: var(--w-title);
+  letter-spacing: var(--tr-tight);
+  text-transform: none;
+  line-height: 1.2;
+  color: var(--text);
+  margin: 0 0 var(--s-3);
 }
 
-/* Cast collapsible — uses native <details> so it's keyboard-accessible
-   without an aria dance. List sits outside the summary so it animates
-   into view on toggle. */
-.detail__cast-disclosure {
-  border-top: 1px solid var(--border);
-  padding-top: var(--s-4);
-}
-
-.detail__cast-summary {
-  display: flex;
-  align-items: center;
-  gap: var(--s-2);
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-  padding: var(--s-1) 0;
-  transition: color var(--dur-fast) var(--ease);
-}
-.detail__cast-summary::-webkit-details-marker { display: none; }
-
-.detail__cast-summary-title {
-  margin: 0;
-  flex-shrink: 0;
-}
-
-.detail__cast-count {
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  color: var(--text-subtle);
-  font-feature-settings: 'tnum' 1;
-}
-
-.detail__cast-chevron {
-  margin-left: auto;
-  font-size: var(--t-lg);
-  color: var(--text-subtle);
-  line-height: 1;
-  transition: transform var(--dur-fast) var(--ease);
-}
-.detail__cast-disclosure[open] .detail__cast-chevron {
-  transform: rotate(90deg);
-}
-
-.detail__cast-summary:hover .detail__cast-chevron,
-.detail__cast-summary:hover .detail__cast-count {
-  color: var(--emerald);
-}
-
-.detail__cast-disclosure[open] .detail__cast,
-.detail__cast-disclosure[open] .detail__cast-empty {
+.detail__cast-empty {
   margin-top: var(--s-3);
 }
 
@@ -407,206 +400,6 @@ button.detail__genre:hover {
   color: var(--text);
   margin: 0;
   font-feature-settings: 'tnum' 1;
-}
-
-/* Per-season rows — surfaces unmonitored seasons so admins can opt in
-   to newly-aired seasons of an existing series without round-tripping
-   to Sonarr's UI. */
-.detail__seasons {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: var(--s-2);
-}
-
-.detail__season-item {
-  display: block;
-}
-
-.detail__season-details summary {
-  list-style: none;
-  cursor: pointer;
-}
-.detail__season-details summary::-webkit-details-marker {
-  display: none;
-}
-
-.detail__season-row {
-  display: grid;
-  grid-template-columns: auto auto 1fr auto auto;
-  align-items: center;
-  gap: var(--s-3);
-  padding: var(--s-2) var(--s-3);
-  background: color-mix(in oklch, var(--surface) 70%, transparent);
-  border: 1px solid var(--border);
-  border-radius: var(--r-card, 10px);
-  transition: border-color var(--dur-fast) var(--ease);
-}
-
-.detail__season-details[open] > summary > .detail__season-row,
-.detail__season-row:hover {
-  border-color: color-mix(in oklch, var(--emerald) 60%, var(--border));
-}
-
-.detail__season-air {
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  color: var(--text-subtle);
-  font-feature-settings: 'tnum' 1;
-}
-
-.detail__season-chevron {
-  font-family: var(--font-mono);
-  font-size: var(--t-sm);
-  color: var(--text-subtle);
-  transition: transform var(--dur-fast) var(--ease);
-}
-
-.detail__season-details[open] > summary .detail__season-chevron {
-  transform: rotate(90deg);
-}
-
-.detail__episodes {
-  list-style: none;
-  margin: var(--s-2) 0 var(--s-2) var(--s-4);
-  padding: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.detail__episode {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: var(--s-3);
-  align-items: baseline;
-  padding: 4px var(--s-3);
-  border-left: 2px solid var(--border);
-  font-size: var(--t-sm);
-}
-
-.detail__episode--future {
-  color: var(--text-subtle);
-  border-left-color: color-mix(in oklch, var(--text-subtle) 50%, transparent);
-  font-style: italic;
-}
-
-.detail__episode--ready {
-  border-left-color: var(--emerald);
-}
-
-.detail__episode-num {
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  color: var(--emerald);
-  font-feature-settings: 'tnum' 1;
-}
-
-.detail__episode-title {
-  color: var(--text);
-}
-
-.detail__episode--future .detail__episode-title {
-  color: var(--text-subtle);
-}
-
-.detail__episode-air {
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  color: var(--text-subtle);
-  white-space: nowrap;
-  font-feature-settings: 'tnum' 1;
-}
-
-/* A locally downloaded episode: the whole row plays it. */
-.detail__episode--play {
-  width: 100%;
-  text-align: left;
-  border-radius: 0 var(--r-sm) var(--r-sm) 0;
-  transition: background var(--dur-fast) var(--ease);
-}
-
-.detail__episode--play:hover,
-.detail__episode--play:focus-visible {
-  background: color-mix(in oklch, var(--emerald) 12%, transparent);
-}
-
-.detail__episode-tag {
-  margin-left: var(--s-2);
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  letter-spacing: var(--tr-hud);
-  text-transform: uppercase;
-  color: var(--emerald);
-}
-
-.detail__episode-overview {
-  grid-column: 2 / -1;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  font-size: var(--t-xs);
-  line-height: 1.5;
-  color: var(--text-muted);
-}
-
-/* Resume bar while the episode is part-watched. */
-.detail__episode-progress {
-  grid-column: 2 / -1;
-  height: 3px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  overflow: hidden;
-}
-
-.detail__episode-progress > span {
-  display: block;
-  height: 100%;
-  background: var(--emerald);
-}
-
-.detail__season-num {
-  font-family: var(--font-display);
-  font-weight: var(--w-display);
-  font-size: var(--t-sm);
-  color: var(--text);
-  letter-spacing: var(--tr-display);
-}
-
-.detail__season-status {
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  color: var(--text-muted);
-  font-feature-settings: 'tnum' 1;
-}
-
-.detail__season-add {
-  font-family: var(--font-display);
-  font-size: var(--t-xs);
-  font-weight: var(--w-ui);
-  letter-spacing: var(--tr-eyebrow);
-  text-transform: uppercase;
-  color: var(--ink);
-  background: var(--emerald);
-  border: 1px solid var(--emerald);
-  border-radius: 999px;
-  padding: 4px var(--s-3);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease),
-    transform var(--dur-fast) var(--ease);
-}
-
-.detail__season-add:hover {
-  background: color-mix(in oklch, var(--emerald) 82%, white);
-  transform: translateY(-1px);
-}
-
-.detail__season-add:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-  transform: none;
 }
 
 /* Cast grid — small avatar + name + character. Horizontal layout that
@@ -738,20 +531,6 @@ button.detail__genre:hover {
   }
 }
 
-/* Footer actions */
-.detail__actions {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: var(--s-2);
-  padding: var(--s-4) var(--s-6);
-  border-top: 1px solid var(--border);
-  background: color-mix(in oklch, var(--surface) 60%, transparent);
-}
-
 .detail__btn {
   font-family: var(--font-display);
   font-size: var(--t-xs);
@@ -782,21 +561,25 @@ button.detail__genre:hover {
 
 .detail__btn--primary {
   color: var(--text);
-  background: var(--emerald-bg);
+  background: var(--emerald);
   border-color: var(--emerald);
 }
 
 .detail__btn--primary:hover {
-  background: color-mix(in oklch, var(--emerald) 30%, var(--surface));
+  background: var(--emerald-dim);
+  border-color: var(--emerald-dim);
 }
 
-.detail__btn--danger {
-  color: var(--text);
-  background: var(--danger);
+/* Remove from library: destructive, but the confirm modal carries the coral
+   fill (DESIGN: Destructive), so here it is a quiet outline. */
+.detail__btn--quiet-danger {
+  color: var(--danger);
+  background: transparent;
+  border-color: color-mix(in oklch, var(--danger) 45%, transparent);
 }
 
-.detail__btn--danger:hover {
-  background: var(--danger-dim);
+.detail__btn--quiet-danger:hover {
+  background: color-mix(in oklch, var(--danger) 14%, transparent);
 }
 
 .detail__btn:focus-visible {
@@ -828,6 +611,403 @@ a.detail__btn {
   /* Match the button's vertical centering — buttons have user-agent
      line-height: normal which the anchor doesn't inherit by default. */
   line-height: 1;
+}
+
+/* ── Title page (DetailModal) ─────────────────────────────────────────────
+   PersonDialog and the trailer share .detail__panel; everything below is
+   scoped to the title page so they keep their compact layout. */
+.detail__panel--page {
+  width: min(1280px, calc(100vw - var(--s-6)));
+  height: calc(100vh - var(--s-6));
+  max-height: none;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.detail__scroll {
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+/* Art fills the top of the page and fades left (under the text) and down. */
+.detail__panel--page .detail__backdrop {
+  height: min(64vh, 600px);
+  opacity: 0.6;
+  background-position: right 20%;
+  mask-image:
+    linear-gradient(to bottom, black 45%, transparent),
+    linear-gradient(to right, transparent -40%, black 65%);
+  mask-composite: intersect;
+  -webkit-mask-image:
+    linear-gradient(to bottom, black 45%, transparent),
+    linear-gradient(to right, transparent -40%, black 65%);
+  -webkit-mask-composite: source-in;
+}
+
+.detail__panel--page .detail__hero {
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: var(--s-6);
+  padding: var(--s-8) var(--s-7) var(--s-6);
+}
+
+.detail__panel--page .detail__poster {
+  width: 220px;
+  aspect-ratio: 2 / 3;
+  box-shadow: 0 24px 48px -20px var(--ink);
+}
+
+.detail__panel--page .detail__head {
+  gap: var(--s-3);
+  max-width: 760px;
+}
+
+.detail__panel--page .detail__title {
+  font-size: var(--t-xl);
+}
+
+.detail__panel--page .detail__overview {
+  margin-top: var(--s-1);
+}
+
+.detail__play-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3);
+  margin-top: var(--s-2);
+}
+
+.detail__play-row:empty { display: none; }
+
+/* Play: the one big call to action, with a play glyph. */
+.detail__btn--play {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-6) var(--s-3) var(--s-5);
+  font-size: var(--t-sm);
+}
+
+.detail__btn--play::before {
+  content: '';
+  border-style: solid;
+  border-width: 6px 0 6px 10px;
+  border-color: transparent transparent transparent currentColor;
+}
+
+.detail__panel--page .detail__body {
+  overflow: visible;
+  /* The sideways rows (cast, extras) must scroll, not widen the page. */
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0 var(--s-7) var(--s-7);
+  gap: var(--s-7);
+}
+
+/* Seasons: a tab row over the picked season's episodes. */
+.detail__season-tabs {
+  display: flex;
+  gap: var(--s-2);
+  overflow-x: auto;
+  padding: var(--s-2) var(--s-2) var(--s-1) 0;
+  scrollbar-width: none;
+}
+
+.detail__season-tab {
+  position: relative;
+  flex: none;
+  display: grid;
+  gap: 2px;
+  min-width: 136px;
+  padding: var(--s-3) var(--s-4);
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in oklch, var(--surface-2) 60%, transparent);
+  color: inherit;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.detail__season-tab:hover { border-color: var(--text-subtle); }
+
+.detail__season-tab[aria-selected='true'] {
+  border-color: var(--emerald);
+  background: var(--emerald-ghost);
+}
+
+.detail__season-tab:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 2px;
+}
+
+.detail__season-num {
+  font-family: var(--font-display);
+  font-weight: var(--w-display);
+  font-size: var(--t-sm);
+  color: var(--text);
+  letter-spacing: var(--tr-tight);
+}
+
+.detail__season-air {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Unwatched count on a part-watched season (Plex's corner badge). */
+.detail__season-left {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pod);
+  background: var(--emerald);
+  color: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: var(--w-title);
+  font-feature-settings: 'tnum' 1;
+}
+
+.detail__season-panel {
+  margin-top: var(--s-4);
+}
+
+.detail__season-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-1) var(--s-4);
+  margin: 0 0 var(--s-3);
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-muted);
+  font-feature-settings: 'tnum' 1;
+}
+
+.detail__season-add {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  background: var(--emerald);
+  border: 1px solid var(--emerald);
+  border-radius: var(--r-pod);
+  padding: 4px var(--s-3);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.detail__season-add:hover { background: var(--emerald-dim); }
+
+.detail__season-add:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Episodes: still on the left, number, date, title and synopsis beside it. */
+.detail__episodes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--s-1);
+}
+
+.detail__episode {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  gap: var(--s-4);
+  align-items: start;
+  width: 100%;
+  padding: var(--s-2);
+  border: 0;
+  border-radius: var(--r-md);
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.detail__episode--future { opacity: 0.6; }
+
+.detail__episode--play {
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.detail__episode--play:hover,
+.detail__episode--play:focus-visible {
+  background: color-mix(in oklch, var(--surface-2) 70%, transparent);
+}
+
+.detail__episode--play:focus-visible {
+  outline: 2px solid var(--emerald);
+  outline-offset: 0;
+}
+
+.detail__episode-thumb {
+  position: relative;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.detail__episode-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.detail__episode-thumb-num {
+  font-family: var(--font-display);
+  font-size: var(--t-lg);
+  font-weight: var(--w-display);
+  color: var(--text-subtle);
+}
+
+/* Play glyph over the still of a playable episode, on hover and focus. */
+.detail__episode--play .detail__episode-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-35%, -50%);
+  border-style: solid;
+  border-width: 12px 0 12px 20px;
+  border-color: transparent transparent transparent var(--text);
+  filter: drop-shadow(0 2px 6px var(--ink));
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+
+.detail__episode--play:hover .detail__episode-thumb::after,
+.detail__episode--play:focus-visible .detail__episode-thumb::after {
+  opacity: 1;
+}
+
+/* Resume bar along the bottom of the still. */
+.detail__episode-progress {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 4px;
+  background: color-mix(in oklch, var(--bg) 70%, transparent);
+}
+
+.detail__episode-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--emerald);
+}
+
+.detail__episode-text {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+.detail__episode-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s-2);
+}
+
+.detail__episode-num {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--emerald);
+  font-feature-settings: 'tnum' 1;
+}
+
+.detail__episode-air {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  color: var(--text-subtle);
+  font-feature-settings: 'tnum' 1;
+}
+
+.detail__episode-tag {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  letter-spacing: var(--tr-hud);
+  text-transform: uppercase;
+  color: var(--emerald);
+}
+
+.detail__episode-title {
+  font-family: var(--font-display);
+  font-size: var(--t-base);
+  font-weight: var(--w-title);
+  letter-spacing: var(--tr-tight);
+  color: var(--text);
+}
+
+.detail__episode-overview {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* Cast: a sideways row of round headshots (PersonDialog keeps the grid). */
+.detail__cast--people {
+  grid-template-columns: none;
+  grid-auto-flow: column;
+  grid-auto-columns: 128px;
+  gap: var(--s-4);
+  overflow-x: auto;
+  padding-bottom: var(--s-1);
+  scrollbar-width: thin;
+}
+
+.detail__cast--people .detail__cast-link {
+  justify-items: center;
+  text-align: center;
+  gap: 6px;
+}
+
+.detail__cast--people .detail__cast-photo {
+  width: 112px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+}
+
+.detail__cast--people .detail__cast-name--skeleton,
+.detail__cast--people .detail__cast-role--skeleton {
+  justify-self: center;
+}
+
+/* Admin actions at the foot of the page, away from Play. */
+.detail__manage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  padding-top: var(--s-5);
+  border-top: 1px solid var(--border);
+}
+
+.detail__manage .detail__btn--quiet-danger {
+  margin-left: auto;
 }
 
 /* Trailers & extras: 16:9 YouTube thumbnails in a sideways row. */
@@ -965,11 +1145,6 @@ a.detail__btn {
     gap: var(--s-4);
   }
 
-  .detail__actions {
-    justify-content: stretch;
-    padding: var(--s-3) var(--s-4);
-  }
-
   .detail__btn {
     flex: 1 1 11rem;
     white-space: normal;
@@ -989,4 +1164,55 @@ a.detail__btn {
   .detail__btn {
     flex-basis: 100%;
   }
+}
+
+@media (max-width: 720px) {
+  .detail__panel--page {
+    width: 100vw;
+    height: 100vh;
+  }
+
+  .detail__panel--page .detail__backdrop {
+    height: 300px;
+    mask-image: linear-gradient(to bottom, black 40%, transparent);
+    -webkit-mask-image: linear-gradient(to bottom, black 40%, transparent);
+  }
+
+  .detail__panel--page .detail__hero {
+    grid-template-columns: 1fr;
+    gap: var(--s-4);
+    padding: var(--s-8) var(--s-4) var(--s-4);
+  }
+
+  .detail__panel--page .detail__poster {
+    width: 132px;
+  }
+
+  .detail__panel--page .detail__title {
+    font-size: var(--t-2xl);
+  }
+
+  .detail__btn--play {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+
+  .detail__panel--page .detail__body {
+    padding: 0 var(--s-4) var(--s-7);
+    gap: var(--s-6);
+  }
+
+  .detail__episode {
+    grid-template-columns: 136px minmax(0, 1fr);
+    gap: var(--s-3);
+    padding: var(--s-1);
+  }
+
+  .detail__episode-title { font-size: var(--t-sm); }
+
+  .detail__manage .detail__btn {
+    flex: 1 1 100%;
+  }
+
+  .detail__manage .detail__btn--quiet-danger { margin-left: 0; }
 }
