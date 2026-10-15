@@ -75,11 +75,14 @@ function resolveAgainstExternal(db: IptvDb, defs: XmltvChannelDef[]): { wanted: 
  * `fed` holds ids an earlier feed delivered this sync (the provider first, then
  * earlier sources). Their schedules stay as delivered: this source stores no
  * rows for them, which would otherwise replace them, and adds the ids it stores.
+ * `west` holds the West ids deriveWestFeedEpg covers. Their channels are already
+ * resolved, so name matching never asks for them, but a real West schedule from
+ * this source beats the East copy and is stored.
  */
 export async function ingestExternalEpg(
   db: IptvDb,
   url: string,
-  opts: { horizonMs?: number; fed?: Set<string> } = {},
+  opts: { horizonMs?: number; fed?: Set<string>; west?: Set<string> } = {},
 ): Promise<ExternalEpgResult> {
   const now = Date.now()
   const horizonIso = new Date(now + (opts.horizonMs ?? 7 * 24 * 3600_000)).toISOString()
@@ -103,6 +106,7 @@ export async function ingestExternalEpg(
     const defs: XmltvChannelDef[] = []
     let candidates: ReturnType<typeof resolveAgainstExternal> | null = null
     const fed = opts.fed ?? new Set<string>()
+    const west = opts.west ?? new Set<string>()
     const stage = stageEpg(db)
     let channelsMatched = 0
     let programmesStored = 0
@@ -113,7 +117,7 @@ export async function ingestExternalEpg(
         // First programme ⇒ the channel section is fully parsed (standard XMLTV
         // ordering). Resolve now, once, and learn which external ids to keep.
         candidates ??= resolveAgainstExternal(db, defs)
-        if (!candidates.wanted.has(row.channel_id) || fed.has(row.channel_id)) return
+        if ((!candidates.wanted.has(row.channel_id) && !west.has(row.channel_id)) || fed.has(row.channel_id)) return
         if (row.stop_utc < cutoffIso || row.stop_utc > horizonIso) return
         if (stage.add(row)) programmesStored += 1
       },
@@ -143,10 +147,10 @@ export async function ingestExternalEpg(
 }
 
 /** Ingest every configured external EPG source in sequence. */
-export async function ingestAllExternalEpg(db: IptvDb, fed = new Set<string>()): Promise<ExternalEpgResult[]> {
+export async function ingestAllExternalEpg(db: IptvDb, fed = new Set<string>(), west = new Set<string>()): Promise<ExternalEpgResult[]> {
   const out: ExternalEpgResult[] = []
   for (const url of externalEpgUrls()) {
-    out.push(await ingestExternalEpg(db, url, { fed }))
+    out.push(await ingestExternalEpg(db, url, { fed, west }))
   }
   return out
 }

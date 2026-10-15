@@ -202,6 +202,13 @@ describe('deriveWestFeedEpg', () => {
     ])
   })
 
+  it('leaves a West feed with its own listings alone', () => {
+    const { db, programme, titles } = westDb()
+    programme('showtimewest.us', '2026-10-15T03:30:00.000Z', '2026-10-15T05:00:00.000Z', 'Real West Listing')
+    expect(deriveWestFeedEpg(db, new Set())).toEqual({ channels: 0, programmes: 0, ids: ['showtimewest.us'] })
+    expect(titles('showtimewest.us')).toEqual([{ start_utc: '2026-10-15T03:30:00.000Z', title: 'Real West Listing' }])
+  })
+
   it('leaves a West feed the provider delivered alone', () => {
     const { db, programme, titles } = westDb()
     programme('showtimewest.us', '2026-10-15T03:30:00.000Z', '2026-10-15T05:00:00.000Z', 'Real West Listing')
@@ -299,12 +306,50 @@ describe('sync EPG ingest', () => {
     const xml = '<tv><channel id="aljazeera.arabic.net"><display-name>Al Jazeera Arabic</display-name></channel>' +
       '<programme channel="aljazeera.arabic.net" start="20261015030000 +0000" stop="20261015040000 +0000"><title>External</title></programme></tv>'
     vi.stubGlobal('fetch', vi.fn(async () => new Response(xml)))
-    vi.mocked(ingestAllExternalEpg).mockImplementationOnce(async (target, fed) => [
-      await external.ingestExternalEpg(target, 'https://epg.example/feed.xml', { fed }),
+    vi.mocked(ingestAllExternalEpg).mockImplementationOnce(async (target, fed, west) => [
+      await external.ingestExternalEpg(target, 'https://epg.example/feed.xml', { fed, west }),
     ])
     await sync([[1, 'US: Al Jazeera Arabic', null]], [row('aljazeera.arabic.net', '03:00', '03:30', 'Provider')])
     expect(schedule('aljazeera.arabic.net')).toEqual([{ at: '03:00', title: 'Provider' }])
     expect(listed(1)).toBe('aljazeera.arabic.net')
+  })
+
+  it('drops a stored programme still airing when the rescheduled lineup starts later', async () => {
+    const x: Array<[number, string, string | null]> = [[1, 'US: X', 'x.us']]
+    await sync(x, [row('x.us', '03:00', '05:00', 'Old movie')])
+    await sync(x, [row('x.us', '03:30', '05:30', 'Rescheduled movie')])
+    expect(schedule('x.us')).toEqual([{ at: '03:30', title: 'Rescheduled movie' }])
+  })
+
+  it('stores a real film called Unknown', async () => {
+    const starz: Array<[number, string, string | null]> = [[1, 'US: Starz Encore Suspense', 'starzencoresuspense.us']]
+    await sync(starz, [{ ...row('starzencoresuspense.us', '03:00', '04:26', 'Unknown'),
+      description: 'When five men awake in a locked warehouse, none of them can remember his identity.' }])
+    expect(schedule('starzencoresuspense.us')).toEqual([{ at: '03:00', title: 'Unknown' }])
+  })
+
+  it('a real West schedule beats the East copy, this sync and the next', async () => {
+    const external = await vi.importActual<typeof import('./iptvEpgExternal.js')>('./iptvEpgExternal.js')
+    const xml = (body: string) => new Response('<tv><channel id="showtimewest.us"><display-name>Showtime West</display-name></channel>' + body + '</tv>')
+    const results: Array<Awaited<ReturnType<typeof external.ingestExternalEpg>>> = []
+    const viaExternal = (body: string) => {
+      vi.stubGlobal('fetch', vi.fn(async () => xml(body)))
+      vi.mocked(ingestAllExternalEpg).mockImplementationOnce(async (target, fed, west) => {
+        results.push(await external.ingestExternalEpg(target, 'https://epg.example/feed.xml', { fed, west }))
+        return results.slice(-1)
+      })
+    }
+    const catalog: Array<[number, string, string | null]> = [[5866, 'US Showtime West (S)', 'showtimewest.us'], [200163566, 'US: Showtime', 'showtime.us']]
+    const east = [row('showtime.us', '00:00', '02:15', 'V for Vendetta'), row('showtime.us', '02:15', '04:15', 'Patriot Games')]
+    viaExternal('<programme channel="showtimewest.us" start="20261015030000 +0000" stop="20261015050000 +0000"><title>Real West</title></programme>')
+    await sync(catalog, east)
+    expect(results[0]).toMatchObject({ ok: true, programmesStored: 1 })
+    expect(schedule('showtimewest.us')).toEqual([{ at: '03:00', title: 'Real West' }])
+    // Next sync the source has nothing for it; the stored listing still wins.
+    viaExternal('')
+    await sync(catalog, east)
+    expect(schedule('showtimewest.us')).toEqual([{ at: '03:00', title: 'Real West' }])
+    expect(listed(5866)).toBe('showtimewest.us')
   })
 
   it('lists Showtime West on showtimewest.us with West times (5866, 400124927; 2026-10-14)', async () => {

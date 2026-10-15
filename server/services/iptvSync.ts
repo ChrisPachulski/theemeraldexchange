@@ -130,17 +130,23 @@ const WEST_DELAY_MS = 3 * 3600_000
  * checks could never compare a stream against West: 2026-10-14 "US: Showtime"
  * carried Showtime West, and the viewer stayed on V for Vendetta while the
  * guide said Patriot Games. Candidates are provider tvg ids as well as listed
- * ids, and each run replaces its earlier copies from the first copy on, so a
- * moved East programme does not leave a stale West copy behind. Runs after
- * provider ingest, before resolution.
+ * ids. Copies are stored as derived and each run replaces its earlier ones, so
+ * a moved East programme does not leave a stale West copy behind; a West id
+ * with a real listing running in the copies' window (an external source's, or
+ * a feed's from an earlier sync) is left alone. `ids` are the West ids that
+ * have a schedule either way. Runs after provider ingest, before resolution.
  */
 export function deriveWestFeedEpg(db: IptvDb, fed: Set<string>): { channels: number; programmes: number; ids: string[] } {
   const rows = db.raw.prepare(`SELECT epg_channel_id AS id FROM channels UNION SELECT ${listedEpgSql()} FROM channels`)
     .all() as Array<{ id: string | null }>
   const rowsOf = db.raw.prepare('SELECT start_utc, stop_utc, title, description FROM epg_programs WHERE channel_id = ?')
-  const clear = db.raw.prepare('DELETE FROM epg_programs WHERE channel_id = ? AND start_utc >= ?')
+  const hasOwn = db.raw.prepare('SELECT 1 FROM epg_programs WHERE channel_id = ? AND derived = 0 AND stop_utc > ? LIMIT 1')
+  const clear = db.raw.prepare('DELETE FROM epg_programs WHERE channel_id = ? AND derived = 1 AND stop_utc > ?')
+  const insert = db.raw.prepare(`INSERT INTO epg_programs (channel_id, start_utc, stop_utc, title, description, derived)
+    VALUES (@channel_id, @start_utc, @stop_utc, @title, @description, 1)`)
   const later = (iso: string): string => new Date(Date.parse(iso) + WEST_DELAY_MS).toISOString()
   const ids: string[] = []
+  let channels = 0
   let programmes = 0
   db.raw.transaction(() => {
     for (const { id } of rows) {
@@ -152,14 +158,17 @@ export function deriveWestFeedEpg(db: IptvDb, fed: Set<string>): { channels: num
         .find((r) => r.length > 0)
       if (!east) continue
       const copies = east.map((r) => ({ ...r, channel_id: id!, start_utc: later(r.start_utc), stop_utc: later(r.stop_utc) }))
-      // Copies outlive their East source by three hours at the stale cutoff, so
-      // only copies inside the East window are replaced.
-      clear.run(id, copies.reduce((min, r) => (r.start_utc < min ? r.start_utc : min), copies[0].start_utc))
-      for (const r of copies) programmes += db.stmts.upsertEpg.run(r).changes
+      const firstCopy = copies.reduce((min, r) => (r.start_utc < min ? r.start_utc : min), copies[0].start_utc)
       ids.push(id!)
+      // Copies outlive their East source by three hours at the stale cutoff, so
+      // only rows running in the East window count, and only those are replaced.
+      if (hasOwn.get(id, firstCopy)) continue
+      clear.run(id, firstCopy)
+      for (const r of copies) programmes += insert.run(r).changes
+      channels += 1
     }
   })()
-  return { channels: ids.length, programmes, ids }
+  return { channels, programmes, ids }
 }
 
 export async function syncOnce(db: IptvDb): Promise<SyncResult> {
@@ -291,10 +300,11 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
     // Supplement with third-party EPG (iptv-org via epgshare01) for channels the
     // provider's own XMLTV omits — lifts coverage from ~14k toward ~22k. Stores
     // programmes only for channels our catalog matches, and never for an id the
-    // provider just delivered (the provider wins). Best-effort: a failed
-    // external fetch never fails the provider sync.
+    // provider just delivered (the provider wins). A real West schedule replaces
+    // the derived copy. Best-effort: a failed external fetch never fails the
+    // provider sync.
     try {
-      for (const r of await ingestAllExternalEpg(db, new Set(providerIds))) {
+      for (const r of await ingestAllExternalEpg(db, new Set(providerIds), new Set(west.ids))) {
         log.info('external epg', { result: r })
       }
     } catch (err) {

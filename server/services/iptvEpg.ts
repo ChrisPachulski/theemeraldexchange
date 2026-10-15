@@ -306,11 +306,12 @@ export async function fetchAndStreamEpg(
 // not stored, so an id that only has filler has no EPG and resolution can look
 // elsewhere.
 // ponytail: exact titles seen in the 2026-10-15 snapshot (case and punctuation
-// folded); a new filler wording shows until it is added here.
+// folded); a new filler wording shows until it is added here. Not "Unknown":
+// every such row in the snapshot was the 2011 or 2006 film.
 const PLACEHOLDER_TITLES = new Set([
   'no match today', 'sign off', 'signing off', 'to be announced', 'movie to be announced', 'tba', 'tbd',
   'channel off air', 'off air', 'no data', 'no event today', 'channel no longer available',
-  'programming will resume shortly', 'end of transmission', 'unknown',
+  'programming will resume shortly', 'end of transmission',
 ])
 
 export function isPlaceholderTitle(title: string | null): boolean {
@@ -362,7 +363,9 @@ export function stageEpg(db: IptvDb): {
     commit() {
       flush(batch)
       batch = []
-      const clear = db.raw.prepare('DELETE FROM epg_programs WHERE channel_id = ? AND start_utc >= ?')
+      // Rows that end after the first delivered start, so a stored programme
+      // airing then does not overlap the delivered one that replaces it.
+      const clear = db.raw.prepare('DELETE FROM epg_programs WHERE channel_id = ? AND stop_utc > ?')
       db.raw.transaction(() => {
         for (const [id, start] of firstStart) clear.run(id, start)
         db.raw.exec(`INSERT INTO epg_programs (channel_id, start_utc, stop_utc, title, description)
