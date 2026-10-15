@@ -4,6 +4,7 @@ import { setImmediate as yieldEventLoop } from 'node:timers/promises'
 import { env } from '../env.js'
 import { gunzipNodeStream, webStreamToNodeReadable } from './streamBridge.js'
 import { guardedFetchTrustedOrigin } from './ssrfGuard.js'
+import type { IptvDb } from './iptvDb.js'
 
 const EPG_FETCH_TIMEOUT_MS = 5 * 60_000
 const EPG_WALL_TIMEOUT_MS = 30 * 60_000
@@ -294,5 +295,81 @@ export async function fetchAndStreamEpg(
   } finally {
     clearTimeout(wallTimer)
     if (idleTimer) clearTimeout(idleTimer)
+  }
+}
+
+// 2026-10-15: feeds fill slots they have no listing for with filler titles.
+// fox.us carried nothing but "No Match Today" and "SIGN OFF", so 11 Fox locals
+// resolved to it and their guide rows said "No Match Today" all day; others:
+// smithsonianchannel.us "Channel No Longer Available", hbohits.ph "No Data",
+// outdoorchannel.us a 4h "Channel Off Air" over its real schedule. Filler is
+// not stored, so an id that only has filler has no EPG and resolution can look
+// elsewhere.
+// ponytail: exact titles seen in the 2026-10-15 snapshot (case and punctuation
+// folded); a new filler wording shows until it is added here.
+const PLACEHOLDER_TITLES = new Set([
+  'no match today', 'sign off', 'signing off', 'to be announced', 'movie to be announced', 'tba', 'tbd',
+  'channel off air', 'off air', 'no data', 'no event today', 'channel no longer available',
+  'programming will resume shortly', 'end of transmission', 'unknown',
+])
+
+export function isPlaceholderTitle(title: string | null): boolean {
+  return title != null && PLACEHOLDER_TITLES.has(title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim())
+}
+
+/**
+ * Collect one feed's programmes, then make them each delivered channel id's
+ * schedule from its first delivered start on. 2026-10-15: the sync upserted by
+ * (channel, start), so a programme whose start moved between syncs stayed next
+ * to its replacement, and 47 guide rows showed stacked or interleaved
+ * schedules (cinemaxclassics.us, a hallmark.us layer 7h off, disneyjrwest.us).
+ * Rows wait in a temp table and land in one transaction after the feed parsed
+ * cleanly, so a failed fetch changes nothing, and an id the feed did not
+ * deliver keeps its rows. An id that delivered only filler is cleared.
+ */
+export function stageEpg(db: IptvDb): {
+  add: (row: EpgProgrammeRow) => boolean
+  commit: () => { ids: Set<string>; replaced: number; placeholders: number }
+} {
+  db.raw.exec(`DROP TABLE IF EXISTS temp.epg_stage;
+    CREATE TEMP TABLE epg_stage (channel_id TEXT NOT NULL, start_utc TEXT NOT NULL, stop_utc TEXT NOT NULL,
+      title TEXT, description TEXT, PRIMARY KEY (channel_id, start_utc))`)
+  const insert = db.raw.prepare(`INSERT OR REPLACE INTO temp.epg_stage (channel_id, start_utc, stop_utc, title, description)
+    VALUES (@channel_id, @start_utc, @stop_utc, @title, @description)`)
+  const flush = db.raw.transaction((rows: EpgProgrammeRow[]) => {
+    for (const r of rows) insert.run(r)
+  })
+  const firstStart = new Map<string, string>()
+  const ids = new Set<string>()
+  let placeholders = 0
+  let batch: EpgProgrammeRow[] = []
+  return {
+    add(row) {
+      const first = firstStart.get(row.channel_id)
+      if (first === undefined || row.start_utc < first) firstStart.set(row.channel_id, row.start_utc)
+      if (isPlaceholderTitle(row.title)) {
+        placeholders += 1
+        return false
+      }
+      ids.add(row.channel_id)
+      batch.push(row)
+      if (batch.length >= 1_000) {
+        flush(batch)
+        batch = []
+      }
+      return true
+    },
+    commit() {
+      flush(batch)
+      batch = []
+      const clear = db.raw.prepare('DELETE FROM epg_programs WHERE channel_id = ? AND start_utc >= ?')
+      db.raw.transaction(() => {
+        for (const [id, start] of firstStart) clear.run(id, start)
+        db.raw.exec(`INSERT INTO epg_programs (channel_id, start_utc, stop_utc, title, description)
+          SELECT channel_id, start_utc, stop_utc, title, description FROM temp.epg_stage;
+          DROP TABLE temp.epg_stage`)
+      })()
+      return { ids, replaced: firstStart.size, placeholders }
+    },
   }
 }
