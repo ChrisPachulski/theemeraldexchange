@@ -17,7 +17,7 @@
 import { streamXmltv, normalizeEpgChannelId, stageEpg, type XmltvChannelDef } from './iptvEpg.js'
 import { webStreamToNodeReadable } from './streamBridge.js'
 import { guardedFetchTrustedOrigin } from './ssrfGuard.js'
-import { buildEpgNameIndex, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
+import { buildEpgNameIndex, callsignIds, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
 import type { IptvDb } from './iptvDb.js'
 
 // Aggregated iptv-org EPG (epgshare01). Comma-separated override via env.
@@ -43,12 +43,17 @@ export interface ExternalEpgResult {
   error?: string
 }
 
+type Unresolved = { stream_id: number; name: string; epg_channel_id: string | null }
+
 /**
  * Resolve every still-unresolved catalog channel against the external feed's
  * channel aliases, returning tentative mappings and the external ids we want programmes for. Only touches
  * channels the provider feed left unresolved, so the provider always wins.
  */
-function resolveAgainstExternal(db: IptvDb, defs: XmltvChannelDef[]): { wanted: Set<string>; matches: Array<{ streamId: number; id: string }> } {
+function resolveAgainstExternal(db: IptvDb, defs: XmltvChannelDef[]): {
+  wanted: Set<string>
+  matches: Array<{ streamId: number; id: string; station?: Unresolved }>
+} {
   const feedWithEpg = new Set<string>()
   for (const d of defs) {
     const id = normalizeEpgChannelId(d.id)
@@ -57,15 +62,19 @@ function resolveAgainstExternal(db: IptvDb, defs: XmltvChannelDef[]): { wanted: 
   const index = buildEpgNameIndex(defs as FeedChannelDef[], feedWithEpg)
   const unresolved = db.raw
     .prepare(`SELECT stream_id, name, epg_channel_id FROM channels WHERE COALESCE(NULLIF(TRIM(epg_resolved_id), ''), '') = ''`)
-    .all() as Array<{ stream_id: number; name: string; epg_channel_id: string | null }>
+    .all() as Unresolved[]
 
   const wanted = new Set<string>()
-  const matches: Array<{ streamId: number; id: string }> = []
+  const matches: Array<{ streamId: number; id: string; station?: Unresolved }> = []
   for (const ch of unresolved) {
     const id = resolveEpgId(ch, index)
     if (id) {
       wanted.add(id)
-      matches.push({ streamId: ch.stream_id, id })
+      // Which of a station's ids (wesh-dt, wesh-ld) has programmes is not
+      // known until they stream in, so keep them all and pick after.
+      const ids = callsignIds(ch, index)
+      for (const alt of ids) wanted.add(alt)
+      matches.push({ streamId: ch.stream_id, id, station: ids.length > 1 ? ch : undefined })
     }
   }
   return { wanted, matches }
@@ -130,11 +139,22 @@ export async function ingestExternalEpg(
     const staged = stage.commit()
     // Commit only mappings backed by retained programmes, this source's or an
     // earlier feed's. Empty, expired and failed sources leave channels
-    // available for the next feed.
+    // available for the next feed. A station with several ids is resolved again
+    // against the ids that kept programmes, now that their schedules are known.
+    const maxStop = db.raw.prepare('SELECT MAX(stop_utc) AS stop FROM epg_programs WHERE channel_id = ?')
+    const lastStop = new Map<string, string>()
+    for (const def of defs) {
+      const id = normalizeEpgChannelId(def.id)
+      if (!id || lastStop.has(id) || !(staged.ids.has(id) || fed.has(id))) continue
+      const stop = (maxStop.get(id) as { stop: string | null } | undefined)?.stop
+      if (stop) lastStop.set(id, stop)
+    }
     const setResolved = db.raw.prepare("UPDATE channels SET epg_resolved_id = ? WHERE stream_id = ? AND COALESCE(NULLIF(TRIM(epg_resolved_id), ''), '') = ''")
+    const stored = Object.assign(buildEpgNameIndex(defs as FeedChannelDef[], new Set(lastStop.keys())), { lastStop })
     db.raw.transaction(() => {
       for (const match of candidates?.matches ?? []) {
-        if (staged.ids.has(match.id) || fed.has(match.id)) channelsMatched += setResolved.run(match.id, match.streamId).changes
+        const id = (match.station && resolveEpgId(match.station, stored)) || match.id
+        if (lastStop.has(id) || staged.ids.has(id) || fed.has(id)) channelsMatched += setResolved.run(id, match.streamId).changes
       }
     })()
     for (const id of staged.ids) fed.add(id)

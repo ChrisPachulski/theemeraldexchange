@@ -4,7 +4,7 @@ import {
 } from './xtream.js'
 import { fetchAndStreamEpg, stageEpg, type EpgProgrammeRow } from './iptvEpg.js'
 import { listedEpgSql } from './iptvFeedChecks.js'
-import { buildEpgNameIndex, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
+import { buildEpgNameIndex, catalogTvgIndex, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
 import { ingestAllExternalEpg } from './iptvEpgExternal.js'
 import type { IptvDb } from './iptvDb.js'
 import { createLogger } from './logger.js'
@@ -97,9 +97,12 @@ function assertSyncSawCatalog(args: {
 
 /**
  * Recompute channels.epg_resolved_id from the freshly-ingested programmes and
- * the feed's channel alias defs. Two-pass per channel: exact tvg-id, then
- * unambiguous normalized-name match against the feed's <display-name> aliases.
- * Runs in a single transaction after EPG ingest.
+ * the feed's channel alias defs (resolveEpgId: callsign, exact tvg-id, a
+ * same-named stream's tvg-id, then unambiguous name/alias match). The catalog
+ * itself knows "US HBO Hits (A)" is hbo2.us, so a stream named the same with
+ * a dead tvg-id takes that before any alias. A refused provider tag is stored
+ * as '' so the guide does not fall back to it. Runs in a single transaction
+ * after EPG ingest.
  */
 export function resolveEpgChannels(db: IptvDb, channelDefs: FeedChannelDef[], feedWithEpg: Set<string>): { resolved: number } {
   const index = buildEpgNameIndex(channelDefs, feedWithEpg)
@@ -107,6 +110,11 @@ export function resolveEpgChannels(db: IptvDb, channelDefs: FeedChannelDef[], fe
   const channels = db.raw
     .prepare(`SELECT stream_id, name, epg_channel_id FROM channels`)
     .all() as Array<{ stream_id: number; name: string; epg_channel_id: string | null }>
+
+  index.catalogTvg = catalogTvgIndex(channels, feedWithEpg)
+  index.lastStop = new Map((db.raw
+    .prepare('SELECT channel_id, MAX(stop_utc) AS stop FROM epg_programs GROUP BY channel_id')
+    .all() as Array<{ channel_id: string; stop: string }>).map((r) => [r.channel_id, r.stop]))
 
   const update = db.raw.prepare(`UPDATE channels SET epg_resolved_id = ? WHERE stream_id = ?`)
   let resolved = 0

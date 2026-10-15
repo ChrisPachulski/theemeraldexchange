@@ -53,8 +53,10 @@ vi.mock('./iptvEpgExternal.js', () => ({
   ingestAllExternalEpg: vi.fn(async () => []),
 }))
 
-import { deriveWestFeedEpg, syncOnce } from './iptvSync.js'
+import { deriveWestFeedEpg, resolveEpgChannels, syncOnce } from './iptvSync.js'
 import { fetchAndStreamEpg } from './iptvEpg.js'
+import { listedEpgSql } from './iptvFeedChecks.js'
+import { epgNow } from './iptvEpgQuery.js'
 import { fetchLiveStreams } from './xtream.js'
 import { ingestAllExternalEpg } from './iptvEpgExternal.js'
 
@@ -248,7 +250,7 @@ describe('sync EPG ingest', () => {
   const schedule = (id: string) => db.raw
     .prepare('SELECT substr(start_utc, 12, 5) AS at, title FROM epg_programs WHERE channel_id = ? ORDER BY start_utc').all(id)
   const listed = (streamId: number) => (db.raw
-    .prepare('SELECT COALESCE(epg_resolved_id, epg_channel_id) AS id FROM channels WHERE stream_id = ?').get(streamId) as { id: string | null }).id
+    .prepare(`SELECT ${listedEpgSql()} AS id FROM channels WHERE stream_id = ?`).get(streamId) as { id: string | null }).id
 
   it('replaces a rescheduled lineup instead of interleaving it (cinemaxclassics.us, 2026-10-15)', async () => {
     const cinemax: Array<[number, string, string | null]> = [[200163548, 'US: Cinemax Classics', 'cinemaxclassics.us']]
@@ -296,8 +298,8 @@ describe('sync EPG ingest', () => {
       row('outdoorchannel.us', '03:00', '03:30', 'Guns & Ammo TV'),
     ])
     expect(schedule('fox.us')).toEqual([])
-    expect(listed(200168129)).toBe('fox.us')
-    expect(db.raw.prepare('SELECT epg_resolved_id FROM channels WHERE stream_id = 200168129').get()).toEqual({ epg_resolved_id: null })
+    // A callsign station never falls back to the bare network id: no listing at all.
+    expect(listed(200168129)).toBeNull()
     expect(schedule('outdoorchannel.us')).toEqual([{ at: '03:00', title: 'Guns & Ammo TV' }])
   })
 
@@ -374,5 +376,67 @@ describe('sync EPG ingest', () => {
       { at: '03:00', title: 'V for Vendetta' },
       { at: '05:15', title: 'Patriot Games' },
     ])
+  })
+})
+
+describe('resolveEpgChannels', () => {
+  function catalogDb(channels: Array<[number, string, string | null]>) {
+    const db = openIptvDb(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-')), 'iptv.db'))
+    for (const [stream_id, name, epg_channel_id] of channels) {
+      db.stmts.upsertChannel.run({
+        stream_id, num: stream_id, name, stream_icon: null, epg_channel_id, category_id: 1,
+        is_adult: 0, tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: '2026-10-15T00:00:00Z',
+      })
+    }
+    const resolved = (stream_id: number) =>
+      (db.raw.prepare('SELECT epg_resolved_id FROM channels WHERE stream_id = ?').get(stream_id) as { epg_resolved_id: string | null }).epg_resolved_id
+    return { db, resolved }
+  }
+
+  it('prefers the callsign id whose schedule runs latest (2026-10-15)', () => {
+    // nbckare11minneapolis.us names the city but holds one programme that ended
+    // the day before; nbckare.us carries KARE's guide.
+    const { db, resolved } = catalogDb([[200168354, 'US: NBC 11 Minneapolis (KARE)', 'dubai.ae']])
+    const programme = (channel_id: string, start_utc: string, stop_utc: string) =>
+      db.stmts.upsertEpg.run({ channel_id, start_utc, stop_utc, title: 'KARE 11 News at 10', description: null })
+    programme('nbckare11minneapolis.us', '2026-10-14T01:00:00.000Z', '2026-10-14T02:00:00.000Z')
+    programme('nbckare.us', '2026-10-16T11:00:00.000Z', '2026-10-16T12:00:00.000Z')
+    resolveEpgChannels(db, [{ id: 'nbckare.us', names: [] }, { id: 'nbckare11minneapolis.us', names: [] }, { id: 'dubai.ae', names: [] }],
+      new Set(['nbckare.us', 'nbckare11minneapolis.us', 'dubai.ae']))
+    expect(resolved(200168354)).toBe('nbckare.us')
+  })
+
+  it('takes a refused provider tag off the guide (2026-10-15 WSBK, KCPQ on Al Jazeera Arabic)', () => {
+    const { db, resolved } = catalogDb([
+      [200168495, 'US: MY 38 Boston (WSBK)', 'aljazeera.arabic.net'],
+      [200168388, 'US: FOX 13 Seattle (KCPQ)', 'aljazeera.arabic.net'],
+      [200168199, 'US: ABC 3 Mobile (WEAR)', 'dubai.ae'],
+      [7, 'US: Al Jazeera Arabic', 'aljazeera.arabic.net'],
+    ])
+    db.stmts.upsertEpg.run({
+      channel_id: 'aljazeera.arabic.net', start_utc: '2026-10-15T01:00:00.000Z', stop_utc: '2026-10-15T02:00:00.000Z',
+      title: 'Al Jazeera News', description: null,
+    })
+    resolveEpgChannels(db, [{ id: 'aljazeera.arabic.net', names: ['Al Jazeera Arabic'] }], new Set(['aljazeera.arabic.net']))
+    const listed = (stream_id: number) =>
+      (db.raw.prepare(`SELECT ${listedEpgSql()} AS id FROM channels WHERE stream_id = ?`).get(stream_id) as { id: string | null }).id
+    for (const id of [200168495, 200168388, 200168199]) {
+      expect(resolved(id)).toBe('')
+      expect(listed(id)).toBeNull()
+    }
+    expect(listed(7)).toBe('aljazeera.arabic.net')
+    const now = epgNow(db, [200168495, 7], new Date('2026-10-15T01:30:00.000Z'))
+    expect(now.map((r) => r.current?.title ?? null)).toEqual([null, 'Al Jazeera News'])
+  })
+
+  it('gives a stream with a dead tvg-id the one its same-named US twins carry', () => {
+    const { db, resolved } = catalogDb([
+      [36206, 'US CMT (A)', 'cmt.us'], [67730, 'US CMT (East) (H)', 'cmt.us'], [30800, 'US CMT (S)', 'cmt.east.us'],
+      [1, 'UK: CMT', 'cmt.uk'],
+    ])
+    resolveEpgChannels(db, [{ id: 'cmt.us', names: [] }, { id: 'cmt.uk', names: [] }, { id: 'cmt.hd.us2', names: ['CMT'] }],
+      new Set(['cmt.us', 'cmt.uk', 'cmt.hd.us2']))
+    expect(resolved(30800)).toBe('cmt.us')
+    expect(resolved(1)).toBe('cmt.uk')
   })
 })
