@@ -53,8 +53,10 @@ vi.mock('./iptvEpgExternal.js', () => ({
   ingestAllExternalEpg: vi.fn(async () => []),
 }))
 
-import { deriveWestFeedEpg, syncOnce } from './iptvSync.js'
+import { deriveWestFeedEpg, resolveEpgChannels, syncOnce } from './iptvSync.js'
 import { fetchAndStreamEpg } from './iptvEpg.js'
+import { listedEpgSql } from './iptvFeedChecks.js'
+import { epgNow } from './iptvEpgQuery.js'
 import { fetchLiveStreams } from './xtream.js'
 import { ingestAllExternalEpg } from './iptvEpgExternal.js'
 
@@ -168,7 +170,7 @@ describe('deriveWestFeedEpg', () => {
 
   it('lists a West feed with no guide as the East schedule three hours later (the 2026-10-14 incident)', () => {
     const { db, titles } = westDb()
-    expect(deriveWestFeedEpg(db)).toEqual({ channels: 1, programmes: 2 })
+    expect(deriveWestFeedEpg(db, new Set())).toMatchObject({ channels: 1, programmes: 2 })
     expect(titles('showtimewest.us')).toEqual([
       { start_utc: '2026-10-15T03:00:00.000Z', title: 'V for Vendetta' },
       { start_utc: '2026-10-15T05:15:00.000Z', title: 'Patriot Games' },
@@ -178,23 +180,263 @@ describe('deriveWestFeedEpg', () => {
       channel_id: 'showtime.us', start_utc: '2026-10-15T02:15:00.000Z', stop_utc: '2026-10-15T04:15:00.000Z',
       title: 'Sleeping Dogs', description: null,
     })
-    expect(deriveWestFeedEpg(db).channels).toBe(1)
+    expect(deriveWestFeedEpg(db, new Set()).channels).toBe(1)
     expect(titles('showtimewest.us')).toHaveLength(2)
     expect(titles('showtimewest.us')[1]).toMatchObject({ title: 'Sleeping Dogs' })
   })
 
   it('keeps going after the East source ages out ahead of its copy', () => {
     const { db, titles } = westDb()
-    deriveWestFeedEpg(db)
+    deriveWestFeedEpg(db, new Set())
     db.raw.prepare("DELETE FROM epg_programs WHERE channel_id = 'showtime.us' AND title = 'V for Vendetta'").run()
-    expect(deriveWestFeedEpg(db).channels).toBe(1)
+    expect(deriveWestFeedEpg(db, new Set()).channels).toBe(1)
     expect(titles('showtimewest.us')).toHaveLength(2)
+  })
+
+  it('replaces its earlier copy when an East programme moves', () => {
+    const { db, titles } = westDb()
+    deriveWestFeedEpg(db, new Set())
+    db.raw.prepare("UPDATE epg_programs SET start_utc = '2026-10-15T02:30:00.000Z' WHERE channel_id = 'showtime.us' AND title = 'Patriot Games'").run()
+    deriveWestFeedEpg(db, new Set())
+    expect(titles('showtimewest.us')).toEqual([
+      { start_utc: '2026-10-15T03:00:00.000Z', title: 'V for Vendetta' },
+      { start_utc: '2026-10-15T05:30:00.000Z', title: 'Patriot Games' },
+    ])
   })
 
   it('leaves a West feed with its own listings alone', () => {
     const { db, programme, titles } = westDb()
     programme('showtimewest.us', '2026-10-15T03:30:00.000Z', '2026-10-15T05:00:00.000Z', 'Real West Listing')
-    expect(deriveWestFeedEpg(db)).toEqual({ channels: 0, programmes: 0 })
+    expect(deriveWestFeedEpg(db, new Set())).toEqual({ channels: 0, programmes: 0, ids: ['showtimewest.us'] })
     expect(titles('showtimewest.us')).toEqual([{ start_utc: '2026-10-15T03:30:00.000Z', title: 'Real West Listing' }])
+  })
+
+  it('leaves a West feed the provider delivered alone', () => {
+    const { db, programme, titles } = westDb()
+    programme('showtimewest.us', '2026-10-15T03:30:00.000Z', '2026-10-15T05:00:00.000Z', 'Real West Listing')
+    expect(deriveWestFeedEpg(db, new Set(['showtimewest.us']))).toEqual({ channels: 0, programmes: 0, ids: [] })
+    expect(titles('showtimewest.us')).toEqual([{ start_utc: '2026-10-15T03:30:00.000Z', title: 'Real West Listing' }])
+  })
+})
+
+describe('sync EPG ingest', () => {
+  type Def = { id: string; names: string[] }
+  let db: ReturnType<typeof openIptvDb>
+  beforeEach(() => {
+    vi.useFakeTimers({ now: new Date('2026-10-15T03:20:00.000Z'), toFake: ['Date'] })
+    db = openIptvDb(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ingest-')), 'iptv.db'))
+  })
+  afterEach(() => {
+    db.close()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  const channel = (stream_id: number, name: string, epg_channel_id: string | null, fetched_at = 'x') => ({
+    stream_id, num: stream_id, name, stream_icon: null, epg_channel_id, category_id: 1,
+    is_adult: 0, tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at,
+  })
+  const row = (channel_id: string, start: string, stop: string, title: string): EpgProgrammeRow =>
+    ({ channel_id, start_utc: `2026-10-15T${start}:00.000Z`, stop_utc: `2026-10-15T${stop}:00.000Z`, title, description: null })
+  // One sync against a provider catalog and XMLTV feed.
+  const sync = async (channels: Array<[number, string, string | null]>, rows: EpgProgrammeRow[], defs: Def[] = []) => {
+    vi.mocked(fetchLiveStreams).mockImplementationOnce(async (fetched) => channels.map(([id, name, tvg]) => channel(id, name, tvg, fetched)))
+    vi.mocked(fetchAndStreamEpg).mockImplementationOnce(async (onRow, _host, onDef) => {
+      for (const d of defs) onDef?.(d)
+      for (const r of rows) onRow(r)
+    })
+    return syncOnce(db)
+  }
+  const schedule = (id: string) => db.raw
+    .prepare('SELECT substr(start_utc, 12, 5) AS at, title FROM epg_programs WHERE channel_id = ? ORDER BY start_utc').all(id)
+  const listed = (streamId: number) => (db.raw
+    .prepare(`SELECT ${listedEpgSql()} AS id FROM channels WHERE stream_id = ?`).get(streamId) as { id: string | null }).id
+
+  it('replaces a rescheduled lineup instead of interleaving it (cinemaxclassics.us, 2026-10-15)', async () => {
+    const cinemax: Array<[number, string, string | null]> = [[200163548, 'US: Cinemax Classics', 'cinemaxclassics.us']]
+    await sync(cinemax, [
+      row('cinemaxclassics.us', '02:39', '04:01', 'Godzilla vs. Megalon'),
+      row('cinemaxclassics.us', '04:01', '05:23', 'Godzilla Raids Again'),
+      row('showtime.us', '02:15', '04:15', 'Patriot Games'),
+    ])
+    await sync(cinemax, [
+      row('cinemaxclassics.us', '01:56', '03:32', 'Just Friends'),
+      row('cinemaxclassics.us', '03:32', '04:58', 'Son of Godzilla'),
+      row('cinemaxclassics.us', '04:58', '06:45', 'The Usual Suspects'),
+    ])
+    expect(schedule('cinemaxclassics.us')).toEqual([
+      { at: '01:56', title: 'Just Friends' },
+      { at: '03:32', title: 'Son of Godzilla' },
+      { at: '04:58', title: 'The Usual Suspects' },
+    ])
+    // An id this sync did not deliver keeps its schedule.
+    expect(schedule('showtime.us')).toEqual([{ at: '02:15', title: 'Patriot Games' }])
+  })
+
+  it('a failed fetch leaves every schedule as it was', async () => {
+    const cinemax: Array<[number, string, string | null]> = [[200163548, 'US: Cinemax Classics', 'cinemaxclassics.us']]
+    await sync(cinemax, [row('cinemaxclassics.us', '01:56', '03:32', 'Just Friends')])
+    vi.mocked(fetchAndStreamEpg).mockImplementationOnce(async (onRow) => {
+      // More than one write batch arrives before the feed dies.
+      for (let i = 0; i < 1_500; i += 1) {
+        const at = Date.parse('2026-10-15T02:00:00.000Z') + i * 60_000
+        onRow({ channel_id: 'cinemaxclassics.us', start_utc: new Date(at).toISOString(),
+          stop_utc: new Date(at + 60_000).toISOString(), title: 'Partial', description: null })
+      }
+      throw new Error('epg_idle_timeout')
+    })
+    await expect(syncOnce(db)).rejects.toThrow('epg_idle_timeout')
+    expect(schedule('cinemaxclassics.us')).toEqual([{ at: '01:56', title: 'Just Friends' }])
+  })
+
+  it('stores no filler, so an id with only filler has no EPG (fox.us, 2026-10-15)', async () => {
+    db.stmts.upsertEpg.run(row('fox.us', '00:00', '04:00', 'No Match Today'))
+    await sync([[200168129, 'US: FOX 13 Memphis (WHBQ)', 'fox.us']], [
+      row('fox.us', '00:00', '04:00', 'No Match Today'),
+      row('fox.us', '02:00', '10:00', 'SIGN OFF'),
+      row('outdoorchannel.us', '02:05', '06:05', 'Channel Off Air'),
+      row('outdoorchannel.us', '03:00', '03:30', 'Guns & Ammo TV'),
+    ])
+    expect(schedule('fox.us')).toEqual([])
+    // A callsign station never falls back to the bare network id: no listing at all.
+    expect(listed(200168129)).toBeNull()
+    expect(schedule('outdoorchannel.us')).toEqual([{ at: '03:00', title: 'Guns & Ammo TV' }])
+  })
+
+  it('external ingest never replaces a schedule the provider delivered', async () => {
+    const external = await vi.importActual<typeof import('./iptvEpgExternal.js')>('./iptvEpgExternal.js')
+    const xml = '<tv><channel id="aljazeera.arabic.net"><display-name>Al Jazeera Arabic</display-name></channel>' +
+      '<programme channel="aljazeera.arabic.net" start="20261015030000 +0000" stop="20261015040000 +0000"><title>External</title></programme></tv>'
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(xml)))
+    vi.mocked(ingestAllExternalEpg).mockImplementationOnce(async (target, fed, west) => [
+      await external.ingestExternalEpg(target, 'https://epg.example/feed.xml', { fed, west }),
+    ])
+    await sync([[1, 'US: Al Jazeera Arabic', null]], [row('aljazeera.arabic.net', '03:00', '03:30', 'Provider')])
+    expect(schedule('aljazeera.arabic.net')).toEqual([{ at: '03:00', title: 'Provider' }])
+    expect(listed(1)).toBe('aljazeera.arabic.net')
+  })
+
+  it('drops a stored programme still airing when the rescheduled lineup starts later', async () => {
+    const x: Array<[number, string, string | null]> = [[1, 'US: X', 'x.us']]
+    await sync(x, [row('x.us', '03:00', '05:00', 'Old movie')])
+    await sync(x, [row('x.us', '03:30', '05:30', 'Rescheduled movie')])
+    expect(schedule('x.us')).toEqual([{ at: '03:30', title: 'Rescheduled movie' }])
+  })
+
+  it('stores a real film called Unknown', async () => {
+    const starz: Array<[number, string, string | null]> = [[1, 'US: Starz Encore Suspense', 'starzencoresuspense.us']]
+    await sync(starz, [{ ...row('starzencoresuspense.us', '03:00', '04:26', 'Unknown'),
+      description: 'When five men awake in a locked warehouse, none of them can remember his identity.' }])
+    expect(schedule('starzencoresuspense.us')).toEqual([{ at: '03:00', title: 'Unknown' }])
+  })
+
+  it('a real West schedule beats the East copy, this sync and the next', async () => {
+    const external = await vi.importActual<typeof import('./iptvEpgExternal.js')>('./iptvEpgExternal.js')
+    const xml = (body: string) => new Response('<tv><channel id="showtimewest.us"><display-name>Showtime West</display-name></channel>' + body + '</tv>')
+    const results: Array<Awaited<ReturnType<typeof external.ingestExternalEpg>>> = []
+    const viaExternal = (body: string) => {
+      vi.stubGlobal('fetch', vi.fn(async () => xml(body)))
+      vi.mocked(ingestAllExternalEpg).mockImplementationOnce(async (target, fed, west) => {
+        results.push(await external.ingestExternalEpg(target, 'https://epg.example/feed.xml', { fed, west }))
+        return results.slice(-1)
+      })
+    }
+    const catalog: Array<[number, string, string | null]> = [[5866, 'US Showtime West (S)', 'showtimewest.us'], [200163566, 'US: Showtime', 'showtime.us']]
+    const east = [row('showtime.us', '00:00', '02:15', 'V for Vendetta'), row('showtime.us', '02:15', '04:15', 'Patriot Games')]
+    viaExternal('<programme channel="showtimewest.us" start="20261015030000 +0000" stop="20261015050000 +0000"><title>Real West</title></programme>')
+    await sync(catalog, east)
+    expect(results[0]).toMatchObject({ ok: true, programmesStored: 1 })
+    expect(schedule('showtimewest.us')).toEqual([{ at: '03:00', title: 'Real West' }])
+    // Next sync the source has nothing for it; the stored listing still wins.
+    viaExternal('')
+    await sync(catalog, east)
+    expect(schedule('showtimewest.us')).toEqual([{ at: '03:00', title: 'Real West' }])
+    expect(listed(5866)).toBe('showtimewest.us')
+  })
+
+  it('lists Showtime West on showtimewest.us with West times (5866, 400124927; 2026-10-14)', async () => {
+    db.stmts.upsertChannel.run(channel(5866, 'US Showtime West (S)', 'showtimewest.us'))
+    db.raw.prepare("UPDATE channels SET epg_resolved_id = 'showtime2west.us' WHERE stream_id = 5866").run()
+    await sync([
+      [5866, 'US Showtime West (S)', 'showtimewest.us'],
+      [400124927, 'US: SHOWTIME WEST', null],
+      [200163566, 'US: Showtime', 'showtime.us'],
+    ], [
+      row('showtime.us', '00:00', '02:15', 'V for Vendetta'),
+      row('showtime.us', '02:15', '04:15', 'Patriot Games'),
+      row('showtime2west.us', '03:00', '05:00', 'The Return'),
+    ], [
+      { id: 'showtime.us', names: ['Showtime'] },
+      { id: 'showtime2west.us', names: ['Showtime 2 West'] },
+      { id: 'showtimewest.us', names: ['Showtime West'] },
+    ])
+    expect(listed(5866)).toBe('showtimewest.us')
+    expect(listed(400124927)).toBe('showtimewest.us')
+    expect(schedule('showtimewest.us')).toEqual([
+      { at: '03:00', title: 'V for Vendetta' },
+      { at: '05:15', title: 'Patriot Games' },
+    ])
+  })
+})
+
+describe('resolveEpgChannels', () => {
+  function catalogDb(channels: Array<[number, string, string | null]>) {
+    const db = openIptvDb(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-')), 'iptv.db'))
+    for (const [stream_id, name, epg_channel_id] of channels) {
+      db.stmts.upsertChannel.run({
+        stream_id, num: stream_id, name, stream_icon: null, epg_channel_id, category_id: 1,
+        is_adult: 0, tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: '2026-10-15T00:00:00Z',
+      })
+    }
+    const resolved = (stream_id: number) =>
+      (db.raw.prepare('SELECT epg_resolved_id FROM channels WHERE stream_id = ?').get(stream_id) as { epg_resolved_id: string | null }).epg_resolved_id
+    return { db, resolved }
+  }
+
+  it('prefers the callsign id whose schedule runs latest (2026-10-15)', () => {
+    // nbckare11minneapolis.us names the city but holds one programme that ended
+    // the day before; nbckare.us carries KARE's guide.
+    const { db, resolved } = catalogDb([[200168354, 'US: NBC 11 Minneapolis (KARE)', 'dubai.ae']])
+    const programme = (channel_id: string, start_utc: string, stop_utc: string) =>
+      db.stmts.upsertEpg.run({ channel_id, start_utc, stop_utc, title: 'KARE 11 News at 10', description: null })
+    programme('nbckare11minneapolis.us', '2026-10-14T01:00:00.000Z', '2026-10-14T02:00:00.000Z')
+    programme('nbckare.us', '2026-10-16T11:00:00.000Z', '2026-10-16T12:00:00.000Z')
+    resolveEpgChannels(db, [{ id: 'nbckare.us', names: [] }, { id: 'nbckare11minneapolis.us', names: [] }, { id: 'dubai.ae', names: [] }],
+      new Set(['nbckare.us', 'nbckare11minneapolis.us', 'dubai.ae']))
+    expect(resolved(200168354)).toBe('nbckare.us')
+  })
+
+  it('takes a refused provider tag off the guide (2026-10-15 WSBK, KCPQ on Al Jazeera Arabic)', () => {
+    const { db, resolved } = catalogDb([
+      [200168495, 'US: MY 38 Boston (WSBK)', 'aljazeera.arabic.net'],
+      [200168388, 'US: FOX 13 Seattle (KCPQ)', 'aljazeera.arabic.net'],
+      [200168199, 'US: ABC 3 Mobile (WEAR)', 'dubai.ae'],
+      [7, 'US: Al Jazeera Arabic', 'aljazeera.arabic.net'],
+    ])
+    db.stmts.upsertEpg.run({
+      channel_id: 'aljazeera.arabic.net', start_utc: '2026-10-15T01:00:00.000Z', stop_utc: '2026-10-15T02:00:00.000Z',
+      title: 'Al Jazeera News', description: null,
+    })
+    resolveEpgChannels(db, [{ id: 'aljazeera.arabic.net', names: ['Al Jazeera Arabic'] }], new Set(['aljazeera.arabic.net']))
+    const listed = (stream_id: number) =>
+      (db.raw.prepare(`SELECT ${listedEpgSql()} AS id FROM channels WHERE stream_id = ?`).get(stream_id) as { id: string | null }).id
+    for (const id of [200168495, 200168388, 200168199]) {
+      expect(resolved(id)).toBe('')
+      expect(listed(id)).toBeNull()
+    }
+    expect(listed(7)).toBe('aljazeera.arabic.net')
+    const now = epgNow(db, [200168495, 7], new Date('2026-10-15T01:30:00.000Z'))
+    expect(now.map((r) => r.current?.title ?? null)).toEqual([null, 'Al Jazeera News'])
+  })
+
+  it('gives a stream with a dead tvg-id the one its same-named US twins carry', () => {
+    const { db, resolved } = catalogDb([
+      [36206, 'US CMT (A)', 'cmt.us'], [67730, 'US CMT (East) (H)', 'cmt.us'], [30800, 'US CMT (S)', 'cmt.east.us'],
+      [1, 'UK: CMT', 'cmt.uk'],
+    ])
+    resolveEpgChannels(db, [{ id: 'cmt.us', names: [] }, { id: 'cmt.uk', names: [] }, { id: 'cmt.hd.us2', names: ['CMT'] }],
+      new Set(['cmt.us', 'cmt.uk', 'cmt.hd.us2']))
+    expect(resolved(30800)).toBe('cmt.us')
+    expect(resolved(1)).toBe('cmt.uk')
   })
 })
