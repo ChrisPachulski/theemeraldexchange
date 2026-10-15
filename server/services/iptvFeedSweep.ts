@@ -45,12 +45,16 @@ export const VIEWER_QUIET_MS = 30 * 60_000
 export interface GuideScope {
   categoryIds: number[]
   limit: number
+  /** Only channels with a schedule (hasEpg). Apple clients from 2026-10-15 keep
+   *  unscheduled channels as "No guide data" rows, so their 500 differ. A scope
+   *  stored before the flag existed was a hasEpg request. */
+  hasEpg?: boolean
 }
 
-/** Remember the guide the app shows (an /epg/grid request with categories and
- *  hasEpg). Written only when it changes. */
-export function rememberGuideScope(db: Database.Database, categoryIds: number[], limit: number | undefined): void {
-  const value = JSON.stringify({ categoryIds: [...categoryIds].sort((a, b) => a - b), limit: limit ?? DEFAULT_GUIDE_LIMIT })
+/** Remember the guide the app shows (an /epg/grid request with categories).
+ *  Written only when it changes. */
+export function rememberGuideScope(db: Database.Database, categoryIds: number[], limit: number | undefined, hasEpg = true): void {
+  const value = JSON.stringify({ categoryIds: [...categoryIds].sort((a, b) => a - b), limit: limit ?? DEFAULT_GUIDE_LIMIT, hasEpg })
   const row = db.prepare('SELECT value FROM iptv_sync_state WHERE key = ?').get(GUIDE_SCOPE_KEY) as { value: string } | undefined
   if (row?.value === value) return
   db.prepare(`
@@ -88,9 +92,9 @@ function sweepOrder(db: Database.Database, now: number): number[] {
     ? (db.prepare(`
         SELECT stream_id FROM channels
         WHERE category_id IN (${scope.categoryIds.map(() => '?').join(',')})
-          AND EXISTS (SELECT 1 FROM epg_programs p WHERE p.channel_id = ${listedEpgSql()} AND p.stop_utc > ?)
+          ${scope.hasEpg === false ? '' : `AND EXISTS (SELECT 1 FROM epg_programs p WHERE p.channel_id = ${listedEpgSql()} AND p.stop_utc > ?)`}
         ORDER BY num, name, stream_id LIMIT ?
-      `).all(...scope.categoryIds, new Date(now).toISOString(), scope.limit) as Array<{ stream_id: number }>)
+      `).all(...scope.categoryIds, ...(scope.hasEpg === false ? [] : [new Date(now).toISOString()]), scope.limit) as Array<{ stream_id: number }>)
         .map((r) => r.stream_id)
     : []
   return [...new Set([...watched, ...guide])]

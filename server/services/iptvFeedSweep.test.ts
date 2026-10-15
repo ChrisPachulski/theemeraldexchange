@@ -108,10 +108,29 @@ describe('feed check sweep', () => {
   it('remembers the guide the app shows, writing only on change', () => {
     rememberGuideScope(db.raw, [123, 2], 500)
     const first = db.stmts.getSyncState.get('feed_check_guide_scope') as { value: string; ts: string }
-    expect(JSON.parse(first.value)).toEqual({ categoryIds: [2, 123], limit: 500 })
+    expect(JSON.parse(first.value)).toEqual({ categoryIds: [2, 123], limit: 500, hasEpg: true })
     db.raw.prepare("UPDATE iptv_sync_state SET ts = 'unchanged' WHERE key = 'feed_check_guide_scope'").run()
     rememberGuideScope(db.raw, [2, 123], 500)
     expect((db.stmts.getSyncState.get('feed_check_guide_scope') as { ts: string }).ts).toBe('unchanged')
+  })
+
+  it('sweeps the 500 the app shows, with or without unscheduled rows (No guide data, 2026-10-15)', () => {
+    // An unscheduled channel numbered between CNN and Showtime.
+    db.stmts.upsertChannel.run({
+      stream_id: 901, num: 100, name: 'US: A&E', stream_icon: null, epg_channel_id: 'aetv.us', category_id: 123,
+      is_adult: 0, tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: '2026-10-10T00:00:00Z',
+    })
+    for (const [stream_id, listed] of [[777, 'hbozone.us'], [900, 'cnn.us']] as const) {
+      recordFeedCheck(db.raw, {
+        stream_id, verdict: 'match', listed_epg_id: listed, actual_epg_id: null, matched_stream_id: null, score: 1,
+      }, new Date(NOW))
+    }
+    // A hasEpg guide's first two rows are CNN and Showtime.
+    rememberGuideScope(db.raw, [123], 2, true)
+    expect(nextSweepChannel(db.raw, NOW)).toBe(200163566)
+    // Without hasEpg the unscheduled A&E holds the second row instead.
+    rememberGuideScope(db.raw, [123], 2, false)
+    expect(nextSweepChannel(db.raw, NOW)).toBe(901)
   })
 
   it('goes never-checked or re-listed channels first, then the longest unchecked, skipping the fresh', () => {
