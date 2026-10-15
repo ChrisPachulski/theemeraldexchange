@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { openIptvDb, type IptvDb } from './iptvDb.js'
 import { FP_FRAME_BYTES } from './iptvFeedFingerprint.js'
-import { getFeedCheck, recordFeedCheck } from './iptvFeedChecks.js'
+import { effectiveEpgId, feedCheckIsFresh, getFeedCheck, NO_SIBLING_REASON, recordFeedCheck } from './iptvFeedChecks.js'
 import {
   _resetFeedCheckSchedulerForTests,
   checkFeedStandalone,
@@ -117,6 +117,14 @@ function harness(opts: { session: Uint8Array; feeds: Record<number, Uint8Array>;
   return { db, io, ref, captured }
 }
 
+function addChannel(db: IptvDb, stream_id: number, num: number, name: string, tvg: string | null, resolved: string | null = null): void {
+  db.stmts.upsertChannel.run({
+    stream_id, num, name, stream_icon: null, epg_channel_id: tvg, category_id: 123, is_adult: 0,
+    tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: '2026-10-10T00:00:00Z',
+  })
+  db.raw.prepare('UPDATE channels SET epg_resolved_id = ? WHERE stream_id = ?').run(resolved, stream_id)
+}
+
 const FEEDS = {
   5864: slice(SHO1, 140),
   22597: slice(SHO1, 150),
@@ -206,6 +214,44 @@ describe('checkLiveSession', () => {
     expect(getFeedCheck(db.raw, 5864)).toMatchObject({ verdict: 'match', listed_epg_id: 'showtime.us', matched_stream_id: 200163566 })
   })
 
+  it('does not confirm a matched stream whose listing came from name matching (LMN, 2026-10-14)', async () => {
+    const { db, io, ref } = harness({ session: SHO1, feeds: FEEDS })
+    // Like 600001276 "USA  LIFETIME MOVIES": no provider tag, listed by name.
+    db.raw.prepare("UPDATE channels SET epg_channel_id = NULL, epg_resolved_id = 'showtime.us' WHERE stream_id = 5864").run()
+    const result = await checkLiveSession(io, ref, () => true)
+    expect(result.outcome).toMatchObject({ kind: 'carries', epgId: 'showtime.us', matchedStreamId: 5864 })
+    expect(getFeedCheck(db.raw, 5864)).toBeUndefined()
+  })
+
+  it('records nothing about a failover stream filed under another id (Travel Channel, 2026-10-14)', async () => {
+    const TRAVEL = broadcast(5)
+    const { db, io, ref, captured } = harness({ session: TRAVEL, feeds: { 22720: slice(TRAVEL, 140) } })
+    // 21099 was a dead feed; its name sibling 200163514 (travel.us) was dialed.
+    addChannel(db, 21099, 8272, 'US Travel Channel (East) (F)', 'travelchannel.us', 'travelchannel.us')
+    addChannel(db, 22720, 7286, 'US Travel Channel (East) (H)', 'travelchannel.us', 'travelchannel.us')
+    addChannel(db, 200163514, 191, 'US: Travel Channel', 'travel.us', 'travel.us')
+    const result = await checkLiveSession(io, { ...ref, tunedStreamId: 21099, dialedStreamId: 200163514 }, () => true)
+    // The viewer got the channel they picked...
+    expect(captured).toEqual([22720])
+    expect(result.outcome).toMatchObject({ kind: 'carries', epgId: 'travelchannel.us' })
+    expect(result.switchTo).toBeNull()
+    // ...which says nothing about travel.us: no 'mislabeled' on 200163514.
+    expect(getFeedCheck(db.raw, 200163514)).toBeUndefined()
+    expect(getFeedCheck(db.raw, 22720)).toBeUndefined()
+  })
+
+  it('re-checks when the fresh verdict was for a listing the stream no longer has', async () => {
+    const { io, ref, captured, db } = harness({ session: SHO1, feeds: FEEDS })
+    recordFeedCheck(db.raw, {
+      stream_id: 200163566, verdict: 'match', listed_epg_id: 'showtimeshowcase.us', actual_epg_id: null,
+      matched_stream_id: 5864, score: 0.97,
+    })
+    const result = await checkLiveSession(io, ref, () => true)
+    expect(captured).toEqual([5864])
+    expect(result.outcome).toMatchObject({ kind: 'carries', epgId: 'showtime.us', cached: false })
+    expect(getFeedCheck(db.raw, 200163566)?.listed_epg_id).toBe('showtime.us')
+  })
+
   it('moves past a candidate whose own capture fails', async () => {
     const { db, io, ref, captured } = harness({
       session: SHO2,
@@ -280,7 +326,59 @@ describe('checkFeedStandalone', () => {
     })
     const outcome = await checkFeedStandalone(io, 200163566)
     expect(outcome.kind).toBe('unknown')
-    expect(getFeedCheck(db.raw, 200163566)?.verdict).toBe('inconclusive')
+    expect(getFeedCheck(db.raw, 200163566)).toMatchObject({ verdict: 'inconclusive', score: null, reason: 'subject capture failed' })
+  })
+
+  it('calls a match on an id with the same schedule a match, not mislabeled (Travel Channel, 2026-10-14)', async () => {
+    const TRAVEL = broadcast(5)
+    const { db, io, captured } = harness({
+      session: TRAVEL,
+      feeds: { 200163514: slice(TRAVEL, 130), 400124999: slice(EXTREME, 140), 22720: slice(TRAVEL, 140) },
+    })
+    addChannel(db, 200163514, 191, 'US: Travel Channel', 'travel.us', 'travel.us')
+    addChannel(db, 400124999, 900, 'US: TRAVEL CHANNEL', 'travel.us', 'travel.us')
+    addChannel(db, 22720, 7286, 'US Travel Channel (East) (H)', 'travelchannel.us', 'travelchannel.us')
+    // One schedule under two ids, except the slot airing now was revised on one.
+    const hour = Math.floor(Date.now() / 3600_000) * 3600_000
+    for (let h = -13; h <= 13; h++) {
+      for (const id of ['travel.us', 'travelchannel.us']) {
+        db.stmts.upsertEpg.run({
+          channel_id: id, start_utc: new Date(hour + h * 3600_000).toISOString(),
+          stop_utc: new Date(hour + (h + 1) * 3600_000).toISOString(),
+          title: h === 0 && id === 'travel.us' ? 'Under Eye Bags? SOLUTION!' : `Ghost Adventures ${(h + 13) % 5}`,
+          description: null,
+        })
+      }
+    }
+    const outcome = await checkFeedStandalone(io, 200163514)
+    // The other travel.us stream differs, then travelchannel.us matches.
+    expect(captured).toEqual([200163514, 400124999, 200163514, 22720])
+    expect(outcome).toMatchObject({ kind: 'carries', epgId: 'travelchannel.us' })
+    expect(getFeedCheck(db.raw, 200163514)).toMatchObject({ verdict: 'match', listed_epg_id: 'travel.us', actual_epg_id: null })
+  })
+
+  // Review of the vouched-sibling rule: with Showtime 2's stream name-resolved
+  // (not vouched) or gone, a re-check found nothing to compare and recorded
+  // inconclusive over the mislabel, putting the guide back on the wrong listing.
+  it.each([
+    ['name-resolved', 'UPDATE channels SET epg_channel_id = NULL, epg_resolved_id = \'showtime2.us\' WHERE stream_id = 22599'],
+    ['gone from the catalog', 'DELETE FROM channels WHERE stream_id = 22599'],
+  ])('keeps a mislabel when the carried channel\'s stream is %s', async (_, sql) => {
+    const { db, io, captured } = harness({ session: SHO2, feeds: { ...FEEDS, 200163566: slice(SHO2, 130) } })
+    db.raw.prepare(sql).run()
+    recordFeedCheck(db.raw, {
+      stream_id: 200163566, verdict: 'mislabeled', listed_epg_id: 'showtime.us', actual_epg_id: 'showtime2.us',
+      matched_stream_id: 22599, score: 0.97,
+    }, new Date(Date.now() - 2 * 24 * 3600_000))
+    expect(effectiveEpgId(db.raw, 200163566)).toBe('showtime2.us')
+    const outcome = await checkFeedStandalone(io, 200163566)
+    expect(outcome).toMatchObject({ kind: 'unknown', reason: NO_SIBLING_REASON })
+    expect(captured).toEqual([])
+    const check = getFeedCheck(db.raw, 200163566)!
+    expect(check).toMatchObject({ verdict: 'mislabeled', actual_epg_id: 'showtime2.us', matched_stream_id: 22599, score: 0.97 })
+    expect(effectiveEpgId(db.raw, 200163566)).toBe('showtime2.us')
+    // Restamped, so the sweep does not pick it again straight away.
+    expect(feedCheckIsFresh(check, 'showtime.us')).toBe(true)
   })
 
   it('gives up its first slot when no second one is free', async () => {
