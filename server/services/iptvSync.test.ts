@@ -53,7 +53,7 @@ vi.mock('./iptvEpgExternal.js', () => ({
   ingestAllExternalEpg: vi.fn(async () => []),
 }))
 
-import { deriveWestFeedEpg, syncOnce } from './iptvSync.js'
+import { deriveWestFeedEpg, resolveEpgChannels, syncOnce } from './iptvSync.js'
 import { fetchAndStreamEpg } from './iptvEpg.js'
 import { fetchLiveStreams } from './xtream.js'
 import { ingestAllExternalEpg } from './iptvEpgExternal.js'
@@ -196,5 +196,44 @@ describe('deriveWestFeedEpg', () => {
     programme('showtimewest.us', '2026-10-15T03:30:00.000Z', '2026-10-15T05:00:00.000Z', 'Real West Listing')
     expect(deriveWestFeedEpg(db)).toEqual({ channels: 0, programmes: 0 })
     expect(titles('showtimewest.us')).toEqual([{ start_utc: '2026-10-15T03:30:00.000Z', title: 'Real West Listing' }])
+  })
+})
+
+describe('resolveEpgChannels', () => {
+  function catalogDb(channels: Array<[number, string, string | null]>) {
+    const db = openIptvDb(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'resolve-')), 'iptv.db'))
+    for (const [stream_id, name, epg_channel_id] of channels) {
+      db.stmts.upsertChannel.run({
+        stream_id, num: stream_id, name, stream_icon: null, epg_channel_id, category_id: 1,
+        is_adult: 0, tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: '2026-10-15T00:00:00Z',
+      })
+    }
+    const resolved = (stream_id: number) =>
+      (db.raw.prepare('SELECT epg_resolved_id FROM channels WHERE stream_id = ?').get(stream_id) as { epg_resolved_id: string | null }).epg_resolved_id
+    return { db, resolved }
+  }
+
+  it('prefers the callsign id whose schedule runs latest (2026-10-15)', () => {
+    // nbckare11minneapolis.us names the city but holds one programme that ended
+    // the day before; nbckare.us carries KARE's guide.
+    const { db, resolved } = catalogDb([[200168354, 'US: NBC 11 Minneapolis (KARE)', 'dubai.ae']])
+    const programme = (channel_id: string, start_utc: string, stop_utc: string) =>
+      db.stmts.upsertEpg.run({ channel_id, start_utc, stop_utc, title: 'KARE 11 News at 10', description: null })
+    programme('nbckare11minneapolis.us', '2026-10-14T01:00:00.000Z', '2026-10-14T02:00:00.000Z')
+    programme('nbckare.us', '2026-10-16T11:00:00.000Z', '2026-10-16T12:00:00.000Z')
+    resolveEpgChannels(db, [{ id: 'nbckare.us', names: [] }, { id: 'nbckare11minneapolis.us', names: [] }, { id: 'dubai.ae', names: [] }],
+      new Set(['nbckare.us', 'nbckare11minneapolis.us', 'dubai.ae']))
+    expect(resolved(200168354)).toBe('nbckare.us')
+  })
+
+  it('gives a stream with a dead tvg-id the one its same-named US twins carry', () => {
+    const { db, resolved } = catalogDb([
+      [36206, 'US CMT (A)', 'cmt.us'], [67730, 'US CMT (East) (H)', 'cmt.us'], [30800, 'US CMT (S)', 'cmt.east.us'],
+      [1, 'UK: CMT', 'cmt.uk'],
+    ])
+    resolveEpgChannels(db, [{ id: 'cmt.us', names: [] }, { id: 'cmt.uk', names: [] }, { id: 'cmt.hd.us2', names: ['CMT'] }],
+      new Set(['cmt.us', 'cmt.uk', 'cmt.hd.us2']))
+    expect(resolved(30800)).toBe('cmt.us')
+    expect(resolved(1)).toBe('cmt.uk')
   })
 })
