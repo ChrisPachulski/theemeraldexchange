@@ -55,6 +55,8 @@ vi.mock('./iptvEpgExternal.js', () => ({
 
 import { deriveWestFeedEpg, resolveEpgChannels, syncOnce } from './iptvSync.js'
 import { fetchAndStreamEpg } from './iptvEpg.js'
+import { listedEpgSql } from './iptvFeedChecks.js'
+import { epgNow } from './iptvEpgQuery.js'
 import { fetchLiveStreams } from './xtream.js'
 import { ingestAllExternalEpg } from './iptvEpgExternal.js'
 
@@ -224,6 +226,29 @@ describe('resolveEpgChannels', () => {
     resolveEpgChannels(db, [{ id: 'nbckare.us', names: [] }, { id: 'nbckare11minneapolis.us', names: [] }, { id: 'dubai.ae', names: [] }],
       new Set(['nbckare.us', 'nbckare11minneapolis.us', 'dubai.ae']))
     expect(resolved(200168354)).toBe('nbckare.us')
+  })
+
+  it('takes a refused provider tag off the guide (2026-10-15 WSBK, KCPQ on Al Jazeera Arabic)', () => {
+    const { db, resolved } = catalogDb([
+      [200168495, 'US: MY 38 Boston (WSBK)', 'aljazeera.arabic.net'],
+      [200168388, 'US: FOX 13 Seattle (KCPQ)', 'aljazeera.arabic.net'],
+      [200168199, 'US: ABC 3 Mobile (WEAR)', 'dubai.ae'],
+      [7, 'US: Al Jazeera Arabic', 'aljazeera.arabic.net'],
+    ])
+    db.stmts.upsertEpg.run({
+      channel_id: 'aljazeera.arabic.net', start_utc: '2026-10-15T01:00:00.000Z', stop_utc: '2026-10-15T02:00:00.000Z',
+      title: 'Al Jazeera News', description: null,
+    })
+    resolveEpgChannels(db, [{ id: 'aljazeera.arabic.net', names: ['Al Jazeera Arabic'] }], new Set(['aljazeera.arabic.net']))
+    const listed = (stream_id: number) =>
+      (db.raw.prepare(`SELECT ${listedEpgSql()} AS id FROM channels WHERE stream_id = ?`).get(stream_id) as { id: string | null }).id
+    for (const id of [200168495, 200168388, 200168199]) {
+      expect(resolved(id)).toBe('')
+      expect(listed(id)).toBeNull()
+    }
+    expect(listed(7)).toBe('aljazeera.arabic.net')
+    const now = epgNow(db, [200168495, 7], new Date('2026-10-15T01:30:00.000Z'))
+    expect(now.map((r) => r.current?.title ?? null)).toEqual([null, 'Al Jazeera News'])
   })
 
   it('gives a stream with a dead tvg-id the one its same-named US twins carry', () => {

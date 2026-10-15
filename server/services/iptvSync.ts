@@ -100,7 +100,8 @@ function assertSyncSawCatalog(args: {
  * the feed's channel alias defs (resolveEpgId: callsign, exact tvg-id, a
  * same-named stream's tvg-id, then unambiguous name/alias match). The catalog
  * itself knows "US HBO Hits (A)" is hbo2.us, so a stream named the same with
- * a dead tvg-id takes that before any alias. Runs in a single transaction
+ * a dead tvg-id takes that before any alias. A refused provider tag is stored
+ * as '' so the guide does not fall back to it. Runs in a single transaction
  * after EPG ingest.
  */
 export function resolveEpgChannels(db: IptvDb, channelDefs: FeedChannelDef[], feedWithEpg: Set<string>): { resolved: number } {

@@ -1,9 +1,10 @@
 // Feed-check records (migration 0008) and the guide id a channel joins EPG on.
 //
 // A channel's LISTED guide id is COALESCE(epg_resolved_id, epg_channel_id)
-// (iptvEpgResolve + migration 0006). Its EFFECTIVE guide id is the listed one,
-// unless a feed check proved the stream carries another channel's picture: then
-// it is that channel's id, for as long as the listing the check saw still holds.
+// (iptvEpgResolve + migration 0006), or none when the resolver refused the
+// tag. Its EFFECTIVE guide id is the listed one, unless a feed check proved the
+// stream carries another channel's picture: then it is that channel's id, for
+// as long as the listing the check saw still holds.
 
 import type Database from 'better-sqlite3'
 
@@ -19,9 +20,11 @@ export interface FeedCheck {
   checked_at: string
 }
 
-/** SQL for a channel row's listed guide id. `t` is the channels table alias. */
+/** SQL for a channel row's listed guide id. `t` is the channels table alias.
+ *  An epg_resolved_id of '' is a provider tag the resolver refused: no listing,
+ *  not a fall back to that tag. */
 export function listedEpgSql(t = 'channels'): string {
-  return `COALESCE(${t}.epg_resolved_id, ${t}.epg_channel_id)`
+  return `NULLIF(COALESCE(${t}.epg_resolved_id, ${t}.epg_channel_id), '')`
 }
 
 /** SQL for a channel row's effective guide id (the feed-check override first). */

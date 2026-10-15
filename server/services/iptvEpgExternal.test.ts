@@ -215,6 +215,30 @@ describe('ingestExternalEpg — vetoes', () => {
     expect(countPrograms(db, 'dubai.ae')).toBe(0)
     expect(resolvedId(db, 7)).toBe('aljazeera.english.net')
   })
+
+  it('lists a station under whichever of its ids has programmes (2026-10-15 WESH-DT, WESH-LD)', async () => {
+    insertChannel(db, { stream_id: 1, name: 'US: NBC 2 Orlando (WESH)', epg_channel_id: 'wesh-ld.us_locals1' })
+    insertChannel(db, { stream_id: 2, name: 'US NBC 2 (WESH) Orlando (H)' })
+    insertChannel(db, { stream_id: 3, name: 'US: FOX 7 Miami (WSVN)' })
+    const now = Date.now()
+    stubFetchXml(buildFeed(
+      [
+        { id: 'wesh-dt.us_locals1', name: 'WESH-DT' }, { id: 'wesh-ld.us_locals1', name: 'WESH-LD' },
+        { id: 'wsvn-dt.us_locals1', name: 'WSVN-DT' }, { id: 'wsvn-dt2.us_locals1', name: 'WSVN-DT2' },
+      ],
+      [
+        { channel: 'wesh-ld.us_locals1', startMs: now, stopMs: now + 3600_000, title: 'WESH 2 News' },
+        { channel: 'wsvn-dt.us_locals1', startMs: now, stopMs: now + 3600_000, title: '7 News' },
+        { channel: 'wsvn-dt2.us_locals1', startMs: now, stopMs: now + 7200_000, title: 'Cozi' },
+      ],
+    ))
+
+    await ingestExternalEpg(db, 'http://x')
+
+    expect(resolvedId(db, 1)).toBe('wesh-ld.us_locals1')
+    expect(resolvedId(db, 2)).toBe('wesh-ld.us_locals1')
+    expect(resolvedId(db, 3)).toBe('wsvn-dt.us_locals1')
+  })
 })
 
 describe('ingestExternalEpg — filtering / provider-wins', () => {

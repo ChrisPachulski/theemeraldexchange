@@ -100,7 +100,8 @@ const BARE_NETWORK = new RegExp(`^(?:${NETWORKS})(?:tv)?\\d*$`)
 // Where an id carries a callsign: after its network and channel number, or as
 // the whole id ("wusa9.us", "koco-dt.us_locals1").
 const ID_CALLSIGN = new RegExp(`^(?:${NETWORKS})?\\d*([wk][a-z]{2})([a-z]?)`)
-const ONLY_CALLSIGN = /^[wk][a-z]{2,3}(?:dt)?\d*$/
+const ONLY_CALLSIGN = /^[wk][a-z]{2,3}(?:dt|ld|cd)?\d*$/
+const ID_LEAD = new RegExp(`^(?:${NETWORKS})?\\d*`)
 // Parts of a name that mark a different channel of the same brand.
 const SUB_BRANDS = ['bet', 'jr', 'dodgers', 'lakers', 'sony']
 // Channels whose feed id goes by a newer or fuller name. HBO2 became HBO Hits
@@ -137,6 +138,8 @@ interface Station {
   callsign?: string
   /** name words that are not network, coast or callsign: the station's city. */
   words: string[]
+  /** every letter of the name outside parentheses ("West Palm Beach" keeps its "west"). */
+  letters: string
   tvgCountry: string | null
 }
 
@@ -155,6 +158,7 @@ function parseStation(name: string, tvg: string | null): Station {
     network: network?.startsWith('my') ? 'my' : network,
     callsign,
     words,
+    letters: name.toLowerCase().replace(/\([^)]*\)/g, '').replace(/[^a-z]/g, ''),
     tvgCountry: tvg ? countryOf(tvg) : null,
   }
 }
@@ -171,7 +175,7 @@ function parseStation(name: string, tvg: string | null): Station {
  * also keep the name's coast and channel number; a tvg-id need not, as the
  * provider's tag says which feed the stream carries.
  */
-function rejects(st: Station, id: string, index: EpgNameIndex, key?: string): boolean {
+function rejects(st: Station, id: string, key?: string): boolean {
   const stem = idStem(id)
   const idNetwork = ID_NETWORK.exec(stem)?.[1]
   if (st.network && idNetwork && idNetwork !== st.network) return true
@@ -179,7 +183,12 @@ function rejects(st: Station, id: string, index: EpgNameIndex, key?: string): bo
   const foreign = st.us && country !== null && country !== 'us'
   if (st.callsign) {
     if (foreign) return true // kntv.jp is not NBC Bay Area
-    if (index.idCallsigns.get(st.callsign)?.includes(id)) return false
+    if (carries(st, id)) return false
+    // An id led by another callsign is another station, whatever word it
+    // shares with this one's city: cbsktvtdallasfortworthtx.us is not CBS 15
+    // Fort Wayne, abckmbckansascitymo.us not ABC 5 Oklahoma City.
+    const rest = stem.replace(ID_LEAD, '')
+    if (/^[wk]/.test(rest) && !st.letters.includes(rest.slice(0, 4))) return true
     return BARE_NETWORK.test(stem) || !st.words.some((w) => stem.includes(w))
   }
   if (!st.us || !st.key) return false
@@ -197,28 +206,58 @@ function rejects(st: Station, id: string, index: EpgNameIndex, key?: string): bo
 }
 
 /**
- * The station's own id among those carrying its callsign: a US id of its
- * network, then the one whose schedule runs latest (the long
- * "<net><callsign><city><state>.us" ids run four days, the short provider ids
- * one), then the one naming its city.
+ * Whether the id itself names the station's callsign, after its network and
+ * channel number. Ids run the callsign into the city, so a 3-letter callsign
+ * counts only when a suffix, a number or the station's own name follows:
+ * cbswjzbaltimoremd.us is WJZ, wjzy-dt.us_locals1 is WJZY Charlotte. A
+ * subchannel (wsvn-dt2, koat-dt4) is another channel of the station.
  */
-function byCallsign(st: Station, index: EpgNameIndex): string | null {
+function carries(st: Station, id: string): boolean {
+  const stem = idStem(id)
+  if (!(ID_NETWORK.test(stem) || ONLY_CALLSIGN.test(stem)) || /-[a-z]{2}\d/.test(id)) return false
+  const rest = stem.replace(ID_LEAD, '')
+  if (!rest.startsWith(st.callsign!)) return false
+  const after = rest.slice(st.callsign!.length)
+  return st.callsign!.length === 4 || after === '' || /^(?:\d|dt|ld|cd|tv)/.test(after)
+    || (after.length >= 4 && st.letters.includes(after.slice(0, 4)))
+}
+
+/**
+ * The station's ids among those carrying its callsign, best first: a US id of
+ * its network, then the one whose schedule runs latest (the long
+ * "<net><callsign><city><state>.us" ids run four days, the short provider ids
+ * one), then the provider's own tag (the external feed lists wesh-dt and
+ * wesh-ld, and the tag says which), then the one naming its city.
+ */
+function byCallsign(st: Station, index: EpgNameIndex, tvg: string | null): string[] {
   const rank = (id: string): string => {
     const stem = idStem(id)
     return [
       (countryOf(id) ?? 'us') === 'us' ? 1 : 0,
       st.network && stem.startsWith(st.network) ? 1 : 0,
       (index.lastStop?.get(id) ?? '0').slice(0, 10),
+      id === tvg ? 1 : 0,
       st.words.some((w) => stem.includes(w)) ? 1 : 0,
       index.lastStop?.get(id) ?? '0',
       String(id.length).padStart(3, '0'),
     ].join('|')
   }
-  const best = (ids: string[] | undefined): string | null =>
-    (ids ?? []).filter((id) => !rejects(st, id, index)).sort((a, b) => rank(b).localeCompare(rank(a)))[0] ?? null
+  const ranked = (ids: string[] | undefined): string[] =>
+    (ids ?? []).filter((id) => !rejects(st, id)).sort((a, b) => rank(b).localeCompare(rank(a)))
   // A display name is weaker evidence than the id: it must also name the city.
-  return best(index.idCallsigns.get(st.callsign!))
-    ?? best(index.nameCallsigns.get(st.callsign!)?.filter((id) => st.words.some((w) => idStem(id).includes(w))))
+  const byId = ranked(index.idCallsigns.get(st.callsign!))
+  return byId.length > 0 ? byId
+    : ranked(index.nameCallsigns.get(st.callsign!)?.filter((id) => st.words.some((w) => idStem(id).includes(w))))
+}
+
+/**
+ * Every id the callsign pass weighs for this channel, for a feed whose
+ * schedules are not known until its programmes stream in (iptvEpgExternal).
+ */
+export function callsignIds(channel: { name: string; epg_channel_id: string | null }, index: EpgNameIndex): string[] {
+  const tvg = normalizeEpgChannelId(channel.epg_channel_id)
+  const st = parseStation(channel.name, tvg)
+  return st.callsign ? byCallsign(st, index, tvg) : []
 }
 
 /**
@@ -297,8 +336,11 @@ export function catalogTvgIndex(
  * Resolve a single catalog channel to the feed id whose EPG it should show, in
  * order: the station's callsign, its own tvg-id, the tvg-id same-named streams
  * carry, then its name (renamed, as written, without a trailing "east").
- * Returns null when nothing passes rejects(). The provider's CINEBOX genre
- * loops have no schedule anywhere.
+ * Returns null when nothing passes rejects(), and '' when the provider's own
+ * tag is refused too: the guide lists COALESCE(epg_resolved_id, tvg-id), so a
+ * NULL would put the refused tag back (2026-10-15 MY 38 Boston (WSBK) still
+ * showed Al Jazeera Arabic). The provider's CINEBOX genre loops have no
+ * schedule anywhere.
  */
 export function resolveEpgId(
   channel: { name: string; epg_channel_id: string | null },
@@ -308,21 +350,22 @@ export function resolveEpgId(
   const tvg = normalizeEpgChannelId(channel.epg_channel_id)
   const st = parseStation(channel.name, tvg)
   if (st.callsign) {
-    const id = byCallsign(st, index)
+    const id = byCallsign(st, index, tvg)[0]
     if (id) return id
   }
-  if (tvg && index.feedWithEpg.has(tvg) && !rejects(st, tvg, index)) return tvg // the provider's own tag
-  if (!st.key) return null
+  const tagRefused = tvg !== null && rejects(st, tvg)
+  if (tvg && index.feedWithEpg.has(tvg) && !tagRefused) return tvg // the provider's own tag
+  if (!st.key) return tagRefused ? '' : null
   // Some provider tags are junk (dubai.ae on WEAR, disneychannel.us on a
   // Disney XD stream), so a sibling's tvg-id must start like the name.
   const sibling = st.us ? index.catalogTvg?.get(st.key) : undefined
-  if (sibling && idStem(sibling).startsWith(st.key.slice(0, 3)) && !rejects(st, sibling, index)) return sibling
+  if (sibling && idStem(sibling).startsWith(st.key.slice(0, 3)) && !rejects(st, sibling)) return sibling
   const keys = [st.key, st.key.replace(/(.{3,})east$/, '$1')]
   for (const key of [...keys.map((k) => RENAMES.reduce((acc, [from, to]) => acc.replace(from, to), k)), ...keys]) {
     const hit = index.nameToFeedId.get(key) ?? (st.us ? index.usNameToFeedId.get(key) : undefined)
-    if (hit && !rejects(st, hit, index, key)) return hit // unambiguous name/alias
+    if (hit && !rejects(st, hit, key)) return hit // unambiguous name/alias
   }
-  return null
+  return tagRefused ? '' : null
 }
 
 /**

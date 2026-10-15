@@ -17,7 +17,7 @@
 import { streamXmltv, normalizeEpgChannelId, type XmltvChannelDef, type EpgProgrammeRow } from './iptvEpg.js'
 import { webStreamToNodeReadable } from './streamBridge.js'
 import { guardedFetchTrustedOrigin } from './ssrfGuard.js'
-import { buildEpgNameIndex, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
+import { buildEpgNameIndex, callsignIds, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
 import type { IptvDb } from './iptvDb.js'
 
 // Aggregated iptv-org EPG (epgshare01). Comma-separated override via env.
@@ -41,12 +41,17 @@ export interface ExternalEpgResult {
   error?: string
 }
 
+type Unresolved = { stream_id: number; name: string; epg_channel_id: string | null }
+
 /**
  * Resolve every still-unresolved catalog channel against the external feed's
  * channel aliases, returning tentative mappings and the external ids we want programmes for. Only touches
  * channels the provider feed left unresolved, so the provider always wins.
  */
-function resolveAgainstExternal(db: IptvDb, defs: XmltvChannelDef[]): { wanted: Set<string>; matches: Array<{ streamId: number; id: string }> } {
+function resolveAgainstExternal(db: IptvDb, defs: XmltvChannelDef[]): {
+  wanted: Set<string>
+  matches: Array<{ streamId: number; id: string; station?: Unresolved }>
+} {
   const feedWithEpg = new Set<string>()
   for (const d of defs) {
     const id = normalizeEpgChannelId(d.id)
@@ -55,15 +60,19 @@ function resolveAgainstExternal(db: IptvDb, defs: XmltvChannelDef[]): { wanted: 
   const index = buildEpgNameIndex(defs as FeedChannelDef[], feedWithEpg)
   const unresolved = db.raw
     .prepare(`SELECT stream_id, name, epg_channel_id FROM channels WHERE COALESCE(NULLIF(TRIM(epg_resolved_id), ''), '') = ''`)
-    .all() as Array<{ stream_id: number; name: string; epg_channel_id: string | null }>
+    .all() as Unresolved[]
 
   const wanted = new Set<string>()
-  const matches: Array<{ streamId: number; id: string }> = []
+  const matches: Array<{ streamId: number; id: string; station?: Unresolved }> = []
   for (const ch of unresolved) {
     const id = resolveEpgId(ch, index)
     if (id) {
       wanted.add(id)
-      matches.push({ streamId: ch.stream_id, id })
+      // Which of a station's ids (wesh-dt, wesh-ld) has programmes is not
+      // known until they stream in, so keep them all and pick after.
+      const ids = callsignIds(ch, index)
+      for (const alt of ids) wanted.add(alt)
+      matches.push({ streamId: ch.stream_id, id, station: ids.length > 1 ? ch : undefined })
     }
   }
   return { wanted, matches }
@@ -95,14 +104,15 @@ export async function ingestExternalEpg(
 
     const defs: XmltvChannelDef[] = []
     let candidates: ReturnType<typeof resolveAgainstExternal> | null = null
-    const storedIds = new Set<string>()
+    const lastStop = new Map<string, string>()
     let channelsMatched = 0
     let programmesStored = 0
     let batch: EpgProgrammeRow[] = []
     const flush = db.raw.transaction((rows: EpgProgrammeRow[]) => {
       for (const r of rows) {
         db.stmts.upsertEpg.run(r)
-        storedIds.add(r.channel_id)
+        const stop = lastStop.get(r.channel_id)
+        if (!stop || stop < r.stop_utc) lastStop.set(r.channel_id, r.stop_utc)
       }
     })
 
@@ -130,10 +140,14 @@ export async function ingestExternalEpg(
     if (batch.length) flush(batch)
     // Commit only mappings backed by successfully retained programmes. Empty,
     // expired and failed sources leave channels available for the next feed.
+    // A station with several ids is resolved again against the ids that kept
+    // programmes, now that their schedules are known.
     const setResolved = db.raw.prepare("UPDATE channels SET epg_resolved_id = ? WHERE stream_id = ? AND COALESCE(NULLIF(TRIM(epg_resolved_id), ''), '') = ''")
+    const stored = Object.assign(buildEpgNameIndex(defs as FeedChannelDef[], new Set(lastStop.keys())), { lastStop })
     db.raw.transaction(() => {
       for (const match of candidates?.matches ?? []) {
-        if (storedIds.has(match.id)) channelsMatched += setResolved.run(match.id, match.streamId).changes
+        const id = (match.station && resolveEpgId(match.station, stored)) || match.id
+        if (lastStop.has(id)) channelsMatched += setResolved.run(id, match.streamId).changes
       }
     })()
     return { url, ok: true, channelsMatched, programmesStored }

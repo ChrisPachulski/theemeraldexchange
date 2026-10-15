@@ -94,6 +94,25 @@ describe('resolveEpgId vetoes (2026-10-15 guide audit)', () => {
     expect(resolve('US: Telemundo', [{ id: 'telemundo.us', names: [] }])).toBe('telemundo.us')
   })
 
+  it("never takes another station's callsign or city", () => {
+    const wjz = [{ id: 'wjz-dt.us_locals1', names: ['WJZ-DT'] }, { id: 'wjzy-dt.us_locals1', names: ['WJZY-DT'] }]
+    expect(resolve('US: CBS 13 Baltimore (WJZ)', wjz, 'wjz-dt.us_locals1')).toBe('wjz-dt.us_locals1')
+    expect(resolve('US: CBS 13 Baltimore (WJZ)', wjz)).toBe('wjz-dt.us_locals1')
+    expect(resolve('US: CBS 13 Baltimore (WJZ)', [{ id: 'wjzy-dt.us_locals1', names: ['WJZY-DT'] }])).toBeNull()
+    expect(resolve('US: CBS 13 Baltimore (WJZ)', [{ id: 'cbswjzbaltimoremd.us', names: [] }])).toBe('cbswjzbaltimoremd.us')
+    // A shared word is not the same city when the id names another callsign.
+    expect(resolve('US: CBS 15 Fort Wayne (WANE)', [{ id: 'cbsktvtdallasfortworthtx.us', names: ['CBS 15 Fort Wayne'] }])).toBeNull()
+    expect(resolve('US: ABC 5 Oklahoma City (KOCO)', [{ id: 'abckmbckansascitymo.us', names: ['ABC 5 Oklahoma City'] }])).toBeNull()
+    expect(resolve('US: CBS 12 West Palm Beach (WPEC)', [{ id: 'cbswestpalmbeach.us', names: ['CBS 12 West Palm Beach'] }]))
+      .toBe('cbswestpalmbeach.us')
+  })
+
+  it("takes the provider's tag among a station's ids, never a subchannel", () => {
+    const wesh = [{ id: 'wesh-dt.us_locals1', names: ['WESH-DT'] }, { id: 'wesh-ld.us_locals1', names: ['WESH-LD'] }]
+    expect(resolve('US: NBC 2 Orlando (WESH)', wesh, 'wesh-ld.us_locals1')).toBe('wesh-ld.us_locals1')
+    expect(resolve('US: FOX 7 Miami (WSVN)', [{ id: 'wsvn-dt2.us_locals1', names: ['WSVN-DT2'] }])).toBeNull()
+  })
+
   it('never crosses networks, even on the callsign', () => {
     expect(resolve('US: NBC 2 Orlando (WESH)', [{ id: 'abcorlando.us', names: ['NBC 2 Orlando'] }])).toBeNull()
     expect(resolve('US: NBC 3 Cleveland (WKYC)', [{ id: 'cnbc.us', names: ['NBC 3 Cleveland'] }])).toBeNull()
@@ -101,8 +120,10 @@ describe('resolveEpgId vetoes (2026-10-15 guide audit)', () => {
   })
 
   it('does not honor a junk tvg-id', () => {
-    expect(resolve('US: ABC 3 Mobile (WEAR)', [{ id: 'dubai.ae', names: ['Dubai TV'] }], 'dubai.ae')).toBeNull()
-    expect(resolve('US: News 12 New Jersey', [{ id: 'dubai.ae', names: [] }], 'dubai.ae')).toBeNull()
+    // '' rather than null, so the guide does not fall back to the tag.
+    expect(resolve('US: ABC 3 Mobile (WEAR)', [{ id: 'dubai.ae', names: ['Dubai TV'] }], 'dubai.ae')).toBe('')
+    expect(resolve('US: News 12 New Jersey', [{ id: 'dubai.ae', names: [] }], 'dubai.ae')).toBe('')
+    expect(resolve('US: MY 38 Boston (WSBK)', [], 'aljazeera.arabic.net')).toBe('')
     expect(resolve('US: Al Jazeera', [{ id: 'aljazeera.english.net', names: [] }], 'aljazeera.english.net'))
       .toBe('aljazeera.english.net')
     expect(resolve('US: GINX eSports', [{ id: 'ginx.esports.gr', names: ['GINX eSports'] }], 'ginxesportstvcanada.ca'))
@@ -166,9 +187,13 @@ describe('resolveEpgId vetoes (2026-10-15 guide audit)', () => {
     provider.lastStop = new Map(f.provider.map((d) => [d.id, d.lastStop!]))
     const external = buildEpgNameIndex(f.external, new Set(f.external.map((d) => d.id)))
     const stored = new Set(f.external.filter((d) => d.stored).map((d) => d.id))
-    // Provider feed first, then the external one, keeping only ids it stored.
+    // What the guide lists: the provider feed's id, else the external one it
+    // stored, else COALESCE(epg_resolved_id, tvg-id), where '' says the tag
+    // was refused. Only an id with programmes shows a schedule.
     const resolve = (ch: { name: string; epg_channel_id: string | null }) => {
-      const id = resolveEpgId(ch, provider) ?? resolveEpgId(ch, external)
+      const p = resolveEpgId(ch, provider)
+      const e = p ? null : resolveEpgId(ch, external)
+      const id = p || (e && stored.has(e) ? e : null) || (p === '' ? null : ch.epg_channel_id?.trim().toLowerCase())
       return id && (provider.feedWithEpg.has(id) || stored.has(id)) ? id : null
     }
     expect(f.cases.length).toBeGreaterThan(290)
