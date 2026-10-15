@@ -140,6 +140,23 @@ describe('checkLiveSession', () => {
     })
   })
 
+  it('catches a stream carrying the West feed and switches to East (the 2026-10-14 incident)', async () => {
+    const WEST = broadcast(4)
+    const { db, io, ref, captured } = harness({ session: WEST, feeds: { ...FEEDS, 5866: slice(WEST, 140) } })
+    db.stmts.upsertChannel.run({
+      stream_id: 5866, num: 5388, name: 'US Showtime West (S)', stream_icon: null, epg_channel_id: 'showtimewest.us',
+      category_id: 123, is_adult: 0, tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: '2026-10-10T00:00:00Z',
+    })
+    db.stmts.upsertEpg.run({
+      channel_id: 'showtimewest.us', start_utc: '2026-01-01T00:00:00Z', stop_utc: '2099-01-01T00:00:00Z',
+      title: 'V for Vendetta', description: null,
+    })
+    const result = await checkLiveSession(io, ref, () => true)
+    expect(result.outcome).toMatchObject({ kind: 'carries', epgId: 'showtimewest.us', matchedStreamId: 5866 })
+    expect(result.switchTo).toBe(5864)
+    expect(captured).toEqual([5864, 5866])
+  })
+
   it('confirms a healthy stream with one comparison and no switch', async () => {
     const { db, io, ref, captured } = harness({ session: SHO1, feeds: FEEDS })
     const result = await checkLiveSession(io, ref, () => true)

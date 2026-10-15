@@ -223,9 +223,14 @@ export function feedCheckCandidates(
 
   const siblings = (byEpg.get(intendedEpg) ?? []).sort(byRank)
   const intendedBase = epgIdFamily(intendedEpg).base
+  // The other coast's feed of the same channel is the likeliest mix-up
+  // (Showtime West, HGTV West): always compare it first.
+  const coast = (base: string): string => base.replace(/(?:east|west|pacific)$/, '')
+  const otherCoast = (epg: string): number => (coast(epgIdFamily(epg).base) === coast(intendedBase) ? 0 : 1)
   const family = [...byEpg.keys()]
     .filter((epg) => relatedEpgIds(intendedEpg, epg) && hasProgrammes.get(epg))
-    .sort((a, b) => editDistance(intendedBase, epgIdFamily(a).base) - editDistance(intendedBase, epgIdFamily(b).base)
+    .sort((a, b) => otherCoast(a) - otherCoast(b)
+      || editDistance(intendedBase, epgIdFamily(a).base) - editDistance(intendedBase, epgIdFamily(b).base)
       || a.localeCompare(b))
     .slice(0, maxFamily)
     .map((epg) => ({ streamId: byEpg.get(epg)!.sort(byRank)[0].stream_id, epgId: epg, role: 'family' as const }))

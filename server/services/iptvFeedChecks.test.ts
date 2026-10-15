@@ -113,6 +113,19 @@ describe('feed checks', () => {
     ])
   })
 
+  it('compares the other coast first, ahead of closer-named channels', () => {
+    db.stmts.upsertChannel.run({
+      stream_id: 5866, num: 5388, name: 'US Showtime West (S)', stream_icon: null, epg_channel_id: 'showtimewest.us',
+      category_id: 123, is_adult: 0, tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: NOW,
+    })
+    db.stmts.upsertEpg.run({
+      channel_id: 'showtimewest.us', start_utc: '2026-10-10T02:00:00.000Z', stop_utc: '2026-10-10T04:30:00.000Z',
+      title: 'The Firm', description: null,
+    })
+    const list = feedCheckCandidates(db.raw, 200163566, 'showtime.us', { isDead: () => false })
+    expect(list.map((c) => c.epgId)).toEqual(['showtime.us', 'showtimewest.us', 'showtime2.us', 'shoxbet.us', 'showtimeextreme.us', 'showtime.us'])
+  })
+
   it('prefers a verified stream and skips dead or excluded ones', () => {
     recordFeedCheck(db.raw, {
       stream_id: 22597, verdict: 'match', listed_epg_id: 'showtime.us', actual_epg_id: null,
