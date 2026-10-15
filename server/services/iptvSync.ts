@@ -2,7 +2,7 @@ import {
   credsFromEnv, fetchCategories, fetchLiveStreams, fetchVodStreams,
   fetchSeriesList, fetchSeriesInfo,
 } from './xtream.js'
-import { fetchAndStreamEpg, type EpgProgrammeRow } from './iptvEpg.js'
+import { fetchAndStreamEpg, stageEpg, type EpgProgrammeRow } from './iptvEpg.js'
 import { listedEpgSql } from './iptvFeedChecks.js'
 import { buildEpgNameIndex, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
 import { ingestAllExternalEpg } from './iptvEpgExternal.js'
@@ -125,39 +125,50 @@ const WEST_DELAY_MS = 3 * 3600_000
 
 /**
  * Give every catalog "<x>west.us" guide id the East schedule three hours later
- * when no feed lists it (US West feeds replay East on Pacific time all year).
- * Without it a West stream had no guide, and feed checks could never compare a
- * stream against West: 2026-10-14 "US: Showtime" carried Showtime West, and the
- * viewer stayed on V for Vendetta while the guide said Patriot Games. A West id
- * with any programme that is not such a copy has real listings and is left
- * alone. Runs after all EPG ingest.
+ * when the provider feed did not deliver it (US West feeds replay East on
+ * Pacific time all year). Without it a West stream had no guide, and feed
+ * checks could never compare a stream against West: 2026-10-14 "US: Showtime"
+ * carried Showtime West, and the viewer stayed on V for Vendetta while the
+ * guide said Patriot Games. Candidates are provider tvg ids as well as listed
+ * ids. Copies are stored as derived and each run replaces its earlier ones, so
+ * a moved East programme does not leave a stale West copy behind; a West id
+ * with a real listing running in the copies' window (an external source's, or
+ * a feed's from an earlier sync) is left alone. `ids` are the West ids that
+ * have a schedule either way. Runs after provider ingest, before resolution.
  */
-export function deriveWestFeedEpg(db: IptvDb): { channels: number; programmes: number } {
-  const ids = db.raw.prepare(`SELECT DISTINCT ${listedEpgSql()} AS id FROM channels`).all() as Array<{ id: string | null }>
+export function deriveWestFeedEpg(db: IptvDb, fed: Set<string>): { channels: number; programmes: number; ids: string[] } {
+  const rows = db.raw.prepare(`SELECT epg_channel_id AS id FROM channels UNION SELECT ${listedEpgSql()} FROM channels`)
+    .all() as Array<{ id: string | null }>
   const rowsOf = db.raw.prepare('SELECT start_utc, stop_utc, title, description FROM epg_programs WHERE channel_id = ?')
+  const hasOwn = db.raw.prepare('SELECT 1 FROM epg_programs WHERE channel_id = ? AND derived = 0 AND stop_utc > ? LIMIT 1')
+  const clear = db.raw.prepare('DELETE FROM epg_programs WHERE channel_id = ? AND derived = 1 AND stop_utc > ?')
+  const insert = db.raw.prepare(`INSERT INTO epg_programs (channel_id, start_utc, stop_utc, title, description, derived)
+    VALUES (@channel_id, @start_utc, @stop_utc, @title, @description, 1)`)
   const later = (iso: string): string => new Date(Date.parse(iso) + WEST_DELAY_MS).toISOString()
+  const ids: string[] = []
   let channels = 0
   let programmes = 0
   db.raw.transaction(() => {
-    for (const { id } of ids) {
-      const m = id ? /^(.+?)west\.us$/.exec(id) : null
-      if (!m) continue
+    for (const { id } of rows) {
+      // Southwest/Midwest/Northwest are regional networks, not a coast feed.
+      const m = id ? /^(.+?)(?<!south|mid|north)west\.us$/.exec(id) : null
+      if (!m || fed.has(id!)) continue
       const east = [`${m[1]}.us`, `${m[1]}east.us`]
         .map((e) => rowsOf.all(e) as EpgProgrammeRow[])
-        .find((rows) => rows.length > 0)
+        .find((r) => r.length > 0)
       if (!east) continue
       const copies = east.map((r) => ({ ...r, channel_id: id!, start_utc: later(r.start_utc), stop_utc: later(r.stop_utc) }))
-      const copyStarts = new Set(copies.map((r) => r.start_utc))
       const firstCopy = copies.reduce((min, r) => (r.start_utc < min ? r.start_utc : min), copies[0].start_utc)
+      ids.push(id!)
       // Copies outlive their East source by three hours at the stale cutoff, so
-      // only rows inside the East window can prove real listings.
-      const own = rowsOf.all(id!) as EpgProgrammeRow[]
-      if (own.some((r) => r.start_utc >= firstCopy && !copyStarts.has(r.start_utc))) continue
-      for (const r of copies) programmes += db.stmts.upsertEpg.run(r).changes
+      // only rows running in the East window count, and only those are replaced.
+      if (hasOwn.get(id, firstCopy)) continue
+      clear.run(id, firstCopy)
+      for (const r of copies) programmes += insert.run(r).changes
       channels += 1
     }
   })()
-  return { channels, programmes }
+  return { channels, programmes, ids }
 }
 
 export async function syncOnce(db: IptvDb): Promise<SyncResult> {
@@ -249,29 +260,19 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
     db.raw.prepare(`DELETE FROM epg_programs WHERE stop_utc < ?`).run(cutoff)
 
     const horizon = new Date(Date.now() + 7 * 24 * 3600_000).toISOString()
-    let batch: Parameters<typeof db.stmts.upsertEpg.run>[0][] = []
-    const flushBatch = db.raw.transaction((rows: typeof batch) => {
-      for (const r of rows) db.stmts.upsertEpg.run(r)
-    })
+    const stage = stageEpg(db)
     let flushError: unknown = null
     // Capture the feed's <channel> alias defs in the same pass so we can
     // name-match catalog channels to feed EPG (see resolveEpgChannels below).
     const channelDefs: FeedChannelDef[] = []
-    const providerIds = new Set<string>()
     await fetchAndStreamEpg(
       (row) => {
         if (flushError) return
         if (row.stop_utc < cutoff || row.stop_utc > horizon) return
-        providerIds.add(row.channel_id)
-        batch.push(row)
-        epg += 1
-        if (batch.length >= 1_000) {
-          try {
-            flushBatch(batch)
-          } catch (err) {
-            flushError = err
-          }
-          batch = []
+        try {
+          if (stage.add(row)) epg += 1
+        } catch (err) {
+          flushError = err
         }
       },
       undefined,
@@ -280,32 +281,35 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
       },
     )
     if (flushError) throw flushError
-    if (batch.length) {
-      try {
-        flushBatch(batch)
-      } catch (err) {
-        flushError = err
-      }
-    }
-    if (flushError) throw flushError
+    const provider = stage.commit()
+    const providerIds = provider.ids
+    log.info('provider epg', { programmes: epg, idsReplaced: provider.replaced, placeholdersDropped: provider.placeholders })
+
+    // Before resolution, so a catalog tvg "<x>west.us" with no feed of its own
+    // has programmes when the resolver checks it and is kept: 2026-10-15 the
+    // tvg showtimewest.us on 5866/14187 was name-matched to showtime2west.us
+    // first, and derivation never saw it.
+    const west = deriveWestFeedEpg(db, providerIds)
+    log.info('west feed epg', { channels: west.channels, programmes: west.programmes })
 
     // Resolve each catalog channel to the feed id that actually carries its
     // schedule — exact tvg-id first, then unambiguous name/alias match. Lifts
     // EPG coverage from the ~806 exact-tvg matches to ~12.5k channels.
-    resolveEpgChannels(db, channelDefs, providerIds)
+    resolveEpgChannels(db, channelDefs, new Set([...providerIds, ...west.ids]))
 
     // Supplement with third-party EPG (iptv-org via epgshare01) for channels the
     // provider's own XMLTV omits — lifts coverage from ~14k toward ~22k. Stores
-    // programmes only for channels our catalog matches. Best-effort: a failed
-    // external fetch never fails the provider sync.
+    // programmes only for channels our catalog matches, and never for an id the
+    // provider just delivered (the provider wins). A real West schedule replaces
+    // the derived copy. Best-effort: a failed external fetch never fails the
+    // provider sync.
     try {
-      for (const r of await ingestAllExternalEpg(db)) {
+      for (const r of await ingestAllExternalEpg(db, new Set(providerIds), new Set(west.ids))) {
         log.info('external epg', { result: r })
       }
     } catch (err) {
       log.error('external epg failed', { err })
     }
-    log.info('west feed epg', deriveWestFeedEpg(db))
 
     // Refresh planner statistics after catalog/schedule changes. Grid and
     // search now scope programmes by channel before materializing rows; fresh

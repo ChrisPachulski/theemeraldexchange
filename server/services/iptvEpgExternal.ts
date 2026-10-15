@@ -14,7 +14,7 @@
 // channels against the external aliases, then store only the matched channels'
 // programmes as the rest of the stream flows by.
 
-import { streamXmltv, normalizeEpgChannelId, type XmltvChannelDef, type EpgProgrammeRow } from './iptvEpg.js'
+import { streamXmltv, normalizeEpgChannelId, stageEpg, type XmltvChannelDef } from './iptvEpg.js'
 import { webStreamToNodeReadable } from './streamBridge.js'
 import { guardedFetchTrustedOrigin } from './ssrfGuard.js'
 import { buildEpgNameIndex, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
@@ -38,6 +38,8 @@ export interface ExternalEpgResult {
   ok: boolean
   channelsMatched: number
   programmesStored: number
+  idsReplaced?: number
+  placeholdersDropped?: number
   error?: string
 }
 
@@ -69,10 +71,18 @@ function resolveAgainstExternal(db: IptvDb, defs: XmltvChannelDef[]): { wanted: 
   return { wanted, matches }
 }
 
+/**
+ * `fed` holds ids an earlier feed delivered this sync (the provider first, then
+ * earlier sources). Their schedules stay as delivered: this source stores no
+ * rows for them, which would otherwise replace them, and adds the ids it stores.
+ * `west` holds the West ids deriveWestFeedEpg covers. Their channels are already
+ * resolved, so name matching never asks for them, but a real West schedule from
+ * this source beats the East copy and is stored.
+ */
 export async function ingestExternalEpg(
   db: IptvDb,
   url: string,
-  opts: { horizonMs?: number } = {},
+  opts: { horizonMs?: number; fed?: Set<string>; west?: Set<string> } = {},
 ): Promise<ExternalEpgResult> {
   const now = Date.now()
   const horizonIso = new Date(now + (opts.horizonMs ?? 7 * 24 * 3600_000)).toISOString()
@@ -95,16 +105,11 @@ export async function ingestExternalEpg(
 
     const defs: XmltvChannelDef[] = []
     let candidates: ReturnType<typeof resolveAgainstExternal> | null = null
-    const storedIds = new Set<string>()
+    const fed = opts.fed ?? new Set<string>()
+    const west = opts.west ?? new Set<string>()
+    const stage = stageEpg(db)
     let channelsMatched = 0
     let programmesStored = 0
-    let batch: EpgProgrammeRow[] = []
-    const flush = db.raw.transaction((rows: EpgProgrammeRow[]) => {
-      for (const r of rows) {
-        db.stmts.upsertEpg.run(r)
-        storedIds.add(r.channel_id)
-      }
-    })
 
     await streamXmltv(
       src,
@@ -112,14 +117,9 @@ export async function ingestExternalEpg(
         // First programme ⇒ the channel section is fully parsed (standard XMLTV
         // ordering). Resolve now, once, and learn which external ids to keep.
         candidates ??= resolveAgainstExternal(db, defs)
-        if (!candidates.wanted.has(row.channel_id)) return
+        if ((!candidates.wanted.has(row.channel_id) && !west.has(row.channel_id)) || fed.has(row.channel_id)) return
         if (row.stop_utc < cutoffIso || row.stop_utc > horizonIso) return
-        batch.push(row)
-        programmesStored += 1
-        if (batch.length >= 1000) {
-          flush(batch)
-          batch = []
-        }
+        if (stage.add(row)) programmesStored += 1
       },
       controller.signal,
       (def) => {
@@ -127,16 +127,18 @@ export async function ingestExternalEpg(
       },
     )
 
-    if (batch.length) flush(batch)
-    // Commit only mappings backed by successfully retained programmes. Empty,
-    // expired and failed sources leave channels available for the next feed.
+    const staged = stage.commit()
+    // Commit only mappings backed by retained programmes, this source's or an
+    // earlier feed's. Empty, expired and failed sources leave channels
+    // available for the next feed.
     const setResolved = db.raw.prepare("UPDATE channels SET epg_resolved_id = ? WHERE stream_id = ? AND COALESCE(NULLIF(TRIM(epg_resolved_id), ''), '') = ''")
     db.raw.transaction(() => {
       for (const match of candidates?.matches ?? []) {
-        if (storedIds.has(match.id)) channelsMatched += setResolved.run(match.id, match.streamId).changes
+        if (staged.ids.has(match.id) || fed.has(match.id)) channelsMatched += setResolved.run(match.id, match.streamId).changes
       }
     })()
-    return { url, ok: true, channelsMatched, programmesStored }
+    for (const id of staged.ids) fed.add(id)
+    return { url, ok: true, channelsMatched, programmesStored, idsReplaced: staged.replaced, placeholdersDropped: staged.placeholders }
   } catch (e) {
     return { url, ok: false, channelsMatched: 0, programmesStored: 0, error: e instanceof Error ? e.message : String(e) }
   } finally {
@@ -145,10 +147,10 @@ export async function ingestExternalEpg(
 }
 
 /** Ingest every configured external EPG source in sequence. */
-export async function ingestAllExternalEpg(db: IptvDb): Promise<ExternalEpgResult[]> {
+export async function ingestAllExternalEpg(db: IptvDb, fed = new Set<string>(), west = new Set<string>()): Promise<ExternalEpgResult[]> {
   const out: ExternalEpgResult[] = []
   for (const url of externalEpgUrls()) {
-    out.push(await ingestExternalEpg(db, url))
+    out.push(await ingestExternalEpg(db, url, { fed, west }))
   }
   return out
 }
