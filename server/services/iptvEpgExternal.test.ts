@@ -239,6 +239,39 @@ describe('ingestExternalEpg — vetoes', () => {
     expect(resolvedId(db, 2)).toBe('wesh-ld.us_locals1')
     expect(resolvedId(db, 3)).toBe('wsvn-dt.us_locals1')
   })
+
+  it('lists a station under the id whose stored schedule runs latest (2026-10-15 KARE)', async () => {
+    insertChannel(db, { stream_id: 1, name: 'US: NBC 11 Minneapolis (KARE)' })
+    const now = Date.now()
+    stubFetchXml(buildFeed(
+      [{ id: 'nbckare.us', name: 'NBC KARE' }, { id: 'nbckare11minneapolis.us', name: 'NBC KARE 11 Minneapolis' }],
+      [
+        { channel: 'nbckare.us', startMs: now, stopMs: now + 3 * 24 * 3600_000, title: 'KARE 11 News' },
+        { channel: 'nbckare11minneapolis.us', startMs: now, stopMs: now + 3600_000, title: 'KARE 11 News' },
+      ],
+    ))
+
+    await ingestExternalEpg(db, 'http://x')
+
+    expect(resolvedId(db, 1)).toBe('nbckare.us')
+  })
+
+  it('counts a schedule an earlier feed stored when ranking a station\'s ids', async () => {
+    insertChannel(db, { stream_id: 1, name: 'US: NBC 11 Minneapolis (KARE)' })
+    const now = Date.now()
+    db.stmts.upsertEpg.run({
+      channel_id: 'nbckare.us', start_utc: new Date(now).toISOString(),
+      stop_utc: new Date(now + 3 * 24 * 3600_000).toISOString(), title: 'KARE 11 News', description: null,
+    })
+    stubFetchXml(buildFeed(
+      [{ id: 'nbckare.us', name: 'NBC KARE' }, { id: 'nbckare11minneapolis.us', name: 'NBC KARE 11 Minneapolis' }],
+      [{ channel: 'nbckare11minneapolis.us', startMs: now, stopMs: now + 3600_000, title: 'KARE 11 News' }],
+    ))
+
+    await ingestExternalEpg(db, 'http://x', { fed: new Set(['nbckare.us']) })
+
+    expect(resolvedId(db, 1)).toBe('nbckare.us')
+  })
 })
 
 describe('ingestExternalEpg — filtering / provider-wins', () => {
