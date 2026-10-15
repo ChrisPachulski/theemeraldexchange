@@ -45,8 +45,11 @@ import {
   getFeedCheck,
   knownCarriedEpgId,
   listedEpgId,
+  listedEpgSql,
   listingsDiffer,
+  NO_SIBLING_REASON,
   recordFeedCheck,
+  sameScheduleEpgIds,
   type FeedCandidate,
 } from './iptvFeedChecks.js'
 
@@ -165,11 +168,14 @@ function sessionSegments(dir: string, fromMs: number): string[] {
   return out
 }
 
-/** Record what a check learned about `streamId`. Aborted checks record nothing. */
-function recordOutcome(db: Database.Database, streamId: number, listed: string | null, outcome: FeedCheckOutcome): void {
+/** Record what a check learned about `streamId`. Aborted checks record nothing.
+ *  Carrying an id whose schedule is the listing's own (travel.us and
+ *  travelchannel.us, 2026-10-14) is a match: calling it mislabeled changes
+ *  nothing on the guide but sends the stream's corrections down a wrong path. */
+function recordOutcome(db: Database.Database, streamId: number, listed: string | null, outcome: FeedCheckOutcome, at: Date): void {
   if (outcome.kind === 'carries') {
     if (outcome.cached) return
-    const matches = outcome.epgId === listed
+    const matches = outcome.epgId === listed || (listed != null && sameScheduleEpgIds(db, listed, outcome.epgId, at))
     recordFeedCheck(db, {
       stream_id: streamId,
       verdict: matches ? 'match' : 'mislabeled',
@@ -186,19 +192,25 @@ function recordOutcome(db: Database.Database, streamId: number, listed: string |
       actual_epg_id: null,
       matched_stream_id: null,
       score: outcome.score,
+      reason: outcome.reason,
     })
   }
 }
 
 /** The matched candidate carries the same picture as the subject, and its own
  *  listing says so: confirm it too (a second sweep check of it would only
- *  repeat this comparison). Leaves a fresh verdict alone. */
+ *  repeat this comparison). Only the provider's own tag vouches for that
+ *  listing: a name-resolved id can be wrong for both streams (2026-10-11, USA
+ *  NETWORK WEST "confirmed" on a westerns channel's id). Leaves a fresh verdict
+ *  alone. */
 function recordCorroboration(db: Database.Database, outcome: FeedCheckOutcome, subject: number, now: number): void {
   if (outcome.kind !== 'carries' || outcome.cached || outcome.matchedStreamId == null) return
   const candidate = outcome.matchedStreamId
-  if (listedEpgId(db, candidate) !== outcome.epgId) return
+  const row = db.prepare(`SELECT epg_channel_id AS tvg, ${listedEpgSql()} AS listed FROM channels WHERE stream_id = ?`)
+    .get(candidate) as { tvg: string | null; listed: string | null } | undefined
+  if (row?.listed !== outcome.epgId || row.tvg !== outcome.epgId) return
   const prior = getFeedCheck(db, candidate)
-  if (prior && feedCheckIsFresh(prior, now)) return
+  if (prior && feedCheckIsFresh(prior, outcome.epgId, now)) return
   recordFeedCheck(db, {
     stream_id: candidate,
     verdict: 'match',
@@ -279,7 +291,7 @@ async function compareAgainst(
   return { kind: 'unknown', reason: candidates.length ? 'no candidate matched' : 'no candidate streams', score: bestScore }
 }
 
-const NO_SIBLING: FeedCheckOutcome = { kind: 'unknown', reason: 'no other stream of its listing to compare', score: null }
+const NO_SIBLING: FeedCheckOutcome = { kind: 'unknown', reason: NO_SIBLING_REASON, score: null }
 
 /** Capture ~`seconds` of a stream through a spare upstream slot. */
 async function captureUpstream(io: FeedCheckIo, streamId: number, seconds: number): Promise<Capture | 'no slot'> {
@@ -318,14 +330,25 @@ export async function checkLiveSession(
   if (!intendedEpg) return { outcome: { kind: 'unknown', reason: 'no guide id', score: null }, intendedEpg, switchTo: null }
   const subject = ref.dialedStreamId
   const listed = listedEpgId(db, subject)
-  const list = feedCheckCandidates(db, subject, intendedEpg, { isDead: io.isDead, exclude: [ref.tunedStreamId] })
+  // After a dead-feed failover the dialed stream can be a name sibling filed
+  // under another guide id (2026-10-14: tuned 21099 on travelchannel.us, dialed
+  // 200163514 on travel.us). Comparing it with streams of the TUNED listing
+  // tells whether the viewer got the channel they picked, but nothing about the
+  // dialed stream's own listing, so such a check records no verdict.
+  const ownListing = effectiveEpgId(db, subject) === intendedEpg
+  const record = (outcome: FeedCheckOutcome): void => {
+    if (!ownListing) return
+    recordOutcome(db, subject, listed, outcome, new Date(io.now()))
+    recordCorroboration(db, outcome, subject, io.now())
+  }
+  const list = feedCheckCandidates(db, subject, intendedEpg, { isDead: io.isDead, exclude: [ref.tunedStreamId], now: io.now() })
   const switchTarget = (outcome: FeedCheckOutcome): number | null =>
     outcome.kind === 'carries' && outcome.epgId !== intendedEpg
       ? (list.find((c) => c.role === 'sibling')?.streamId ?? null)
       : null
 
   const prior = getFeedCheck(db, subject)
-  if (prior && feedCheckIsFresh(prior, io.now())) {
+  if (prior && feedCheckIsFresh(prior, listed, io.now())) {
     const carried = knownCarriedEpgId(prior, listed)
     const outcome: FeedCheckOutcome = carried
       ? { kind: 'carries', epgId: carried, matchedStreamId: prior.matched_stream_id, score: prior.score, cached: true }
@@ -333,7 +356,7 @@ export async function checkLiveSession(
     return { outcome, intendedEpg, switchTo: switchTarget(outcome) }
   }
   if (!list.some((c) => c.role === 'sibling')) {
-    recordOutcome(db, subject, listed, NO_SIBLING)
+    record(NO_SIBLING)
     return { outcome: NO_SIBLING, intendedEpg, switchTo: null }
   }
 
@@ -357,8 +380,7 @@ export async function checkLiveSession(
     return { subject: subj.frames, candidate: cand.frames }
   }
   const outcome = await compareAgainst(io, subject, intendedEpg, list, footage, isActive, SESSION_GAP_MS)
-  recordOutcome(db, subject, listed, outcome)
-  recordCorroboration(db, outcome, subject, io.now())
+  record(outcome)
   const switchTo = switchTarget(outcome)
   log.info('feed check', { subject, tuned: ref.tunedStreamId, listed, intendedEpg, outcome, switchTo })
   return { outcome, intendedEpg, switchTo }
@@ -370,9 +392,9 @@ export async function checkFeedStandalone(io: FeedCheckIo, streamId: number, sti
   const intendedEpg = effectiveEpgId(db, streamId)
   if (!intendedEpg) return { kind: 'unknown', reason: 'no guide id', score: null }
   const listed = listedEpgId(db, streamId)
-  const list = feedCheckCandidates(db, streamId, intendedEpg, { isDead: io.isDead })
+  const list = feedCheckCandidates(db, streamId, intendedEpg, { isDead: io.isDead, now: io.now() })
   if (!list.some((c) => c.role === 'sibling')) {
-    recordOutcome(db, streamId, listed, NO_SIBLING)
+    recordOutcome(db, streamId, listed, NO_SIBLING, new Date(io.now()))
     return NO_SIBLING
   }
   const spawnCapture = (id: number): ChildProcess | null =>
@@ -395,7 +417,7 @@ export async function checkFeedStandalone(io: FeedCheckIo, streamId: number, sti
     return { subject: subj.frames, candidate: cand.frames }
   }
   const outcome = await compareAgainst(io, streamId, intendedEpg, list, footage, stillWanted, STANDALONE_GAP_MS)
-  recordOutcome(db, streamId, listed, outcome)
+  recordOutcome(db, streamId, listed, outcome, new Date(io.now()))
   recordCorroboration(db, outcome, streamId, io.now())
   log.info('feed check (standalone)', { subject: streamId, listed, intendedEpg, outcome })
   return outcome

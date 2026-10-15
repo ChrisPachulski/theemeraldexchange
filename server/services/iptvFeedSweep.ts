@@ -4,13 +4,15 @@
 // instead of during a viewer's first seconds on it.
 //
 // The guide's channel set is what the app last asked /epg/grid for (categories
-// + row limit, rememberGuideScope). Channels go watched/favorite first, then in
-// guide order; each is checked once per verdict lifetime (iptvFeedChecks). Only
-// channels with another stream of their listing are checked (others can never
-// be confirmed). A run checks channels back to back with a gap, and stops the
-// moment a viewer or recording needs the provider. Runs happen only in the
-// overnight window (IPTV_FEED_SWEEP_HOURS_UTC) and only after VIEWER_QUIET_MS
-// with no viewer: a gap between two channel hops is not idle.
+// + row limit, rememberGuideScope). Each is checked once per verdict lifetime
+// (iptvFeedChecks): never-checked channels and ones whose listing changed go
+// first, then the longest unchecked, watched/favorite before guide order on a
+// tie. A channel with no other stream of its listing is recorded inconclusive
+// without a connection. A run checks channels back to back with a gap after
+// each one that dialed, and stops the moment a viewer or recording needs the
+// provider. Runs happen only in the overnight window (IPTV_FEED_SWEEP_HOURS_UTC)
+// and only after VIEWER_QUIET_MS with no viewer: a gap between two channel hops
+// is not idle.
 
 import type Database from 'better-sqlite3'
 import { env } from '../env.js'
@@ -25,7 +27,7 @@ import {
   UPSTREAM_USER_AGENT,
   viewerUpstreamCount,
 } from './iptvRemux.js'
-import { effectiveOf, feedCheckIsFresh, feedOverrides, getFeedCheck, listedEpgSql } from './iptvFeedChecks.js'
+import { feedCheckIsFresh, listedEpgSql, NO_SIBLING_REASON, type FeedCheck } from './iptvFeedChecks.js'
 import { checkFeedStandalone, feedCheckIo, runExclusiveFeedCheck, type FeedCheckIo } from './iptvFeedVerify.js'
 
 const log = createLogger('iptv-feed-check')
@@ -94,28 +96,25 @@ function sweepOrder(db: Database.Database, now: number): number[] {
   return [...new Set([...watched, ...guide])]
 }
 
-/** The next channel due a check: in sweep order, with another stream of its
- *  listing, and no fresh verdict. Null when every one is fresh. */
+/** The next channel due a check (no fresh verdict for its current listing): a
+ *  never-checked or re-listed one first, then the one checked longest ago, in
+ *  sweep order on a tie. Null when every one is fresh. */
 export function nextSweepChannel(db: Database.Database, now = Date.now()): number | null {
-  const overrides = feedOverrides(db)
-  const rows = db.prepare(`SELECT stream_id, ${listedEpgSql()} AS listed FROM channels WHERE COALESCE(${listedEpgSql()}, '') != ''`)
-    .all() as Array<{ stream_id: number; listed: string }>
-  const epgOf = new Map<number, string>()
-  const streamsPerEpg = new Map<string, number>()
-  for (const r of rows) {
-    const epg = effectiveOf(r.stream_id, r.listed, overrides)
-    if (!epg) continue
-    epgOf.set(r.stream_id, epg)
-    streamsPerEpg.set(epg, (streamsPerEpg.get(epg) ?? 0) + 1)
-  }
+  const listed = new Map((db.prepare(`SELECT stream_id, ${listedEpgSql()} AS listed FROM channels
+    WHERE COALESCE(${listedEpgSql()}, '') != ''`).all() as Array<{ stream_id: number; listed: string }>)
+    .map((r) => [r.stream_id, r.listed]))
+  const checks = new Map((db.prepare('SELECT * FROM channel_feed_checks').all() as FeedCheck[]).map((c) => [c.stream_id, c]))
+  let best: { id: number; key: string } | null = null
   for (const id of sweepOrder(db, now)) {
-    const epg = epgOf.get(id)
-    if (!epg || (streamsPerEpg.get(epg) ?? 0) < 2) continue
-    const check = getFeedCheck(db, id)
-    if (check && feedCheckIsFresh(check, now)) continue
-    return id
+    const epg = listed.get(id)
+    if (!epg) continue
+    const check = checks.get(id)
+    if (check && feedCheckIsFresh(check, epg, now)) continue
+    // Nothing is known about what the guide shows on it now: '' sorts first.
+    const key = !check || check.listed_epg_id !== epg ? '' : check.checked_at
+    if (!best || key < best.key) best = { id, key }
   }
-  return null
+  return best?.id ?? null
 }
 
 function recordingStartsSoon(db: Database.Database, now: number): boolean {
@@ -173,7 +172,8 @@ export async function runFeedCheckSweep(
       const outcome = await runExclusiveFeedCheck(() => checkFeedStandalone(io, streamId, idle))
       // An on-tune check holds the slot, or a viewer arrived: stop until next run.
       if (outcome == null || outcome.kind === 'aborted') break
-      await io.sleep(gapMs)
+      // A stream with nothing to compare opened no connection: no gap needed.
+      if (outcome.kind !== 'unknown' || outcome.reason !== NO_SIBLING_REASON) await io.sleep(gapMs)
     }
   } finally {
     sweeping = false

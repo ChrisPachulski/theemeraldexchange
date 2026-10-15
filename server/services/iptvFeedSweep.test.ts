@@ -7,7 +7,7 @@ import path from 'node:path'
 import { env } from '../env.js'
 import { openIptvDb, type IptvDb } from './iptvDb.js'
 import { FP_FRAME_BYTES } from './iptvFeedFingerprint.js'
-import { getFeedCheck, recordFeedCheck } from './iptvFeedChecks.js'
+import { getFeedCheck, NO_SIBLING_REASON, recordFeedCheck } from './iptvFeedChecks.js'
 import { _resetFeedCheckSchedulerForTests, type FeedCheckIo } from './iptvFeedVerify.js'
 import { _setViewerActivityForTests } from './iptvRemux.js'
 import {
@@ -114,27 +114,45 @@ describe('feed check sweep', () => {
     expect((db.stmts.getSyncState.get('feed_check_guide_scope') as { ts: string }).ts).toBe('unchanged')
   })
 
-  it('goes watched channels first, then the guide in order, skipping the uncheckable and the fresh', () => {
+  it('goes never-checked or re-listed channels first, then the longest unchecked, skipping the fresh', () => {
     rememberGuideScope(db.raw, [123], 500)
+    const check = (stream_id: number, listed: string, at: number): void => recordFeedCheck(db.raw, {
+      stream_id, verdict: 'match', listed_epg_id: listed, actual_epg_id: null, matched_stream_id: null, score: 1,
+    }, new Date(at))
+    // All never checked: watched first, then guide order.
     expect(nextSweepChannel(db.raw, NOW)).toBe(777)
-    recordFeedCheck(db.raw, {
-      stream_id: 777, verdict: 'match', listed_epg_id: 'hbozone.us', actual_epg_id: null, matched_stream_id: 778, score: 1,
-    }, new Date(NOW))
-    // CNN (channel 1) has no second stream to compare, so Showtime is next.
+    check(777, 'hbozone.us', NOW)
+    expect(nextSweepChannel(db.raw, NOW)).toBe(900)
+    check(900, 'cnn.us', NOW)
+    // Showtime's match expired; Showtime 2 was never checked, so it goes first.
+    check(200163566, 'showtime.us', NOW - 8 * 24 * 3600_000)
+    expect(nextSweepChannel(db.raw, NOW)).toBe(200163567)
+    check(200163567, 'showtime2.us', NOW - 9 * 24 * 3600_000)
+    // Both expired: the one checked longest ago.
+    expect(nextSweepChannel(db.raw, NOW)).toBe(200163567)
+    check(200163567, 'showtime2.us', NOW)
+    expect(nextSweepChannel(db.raw, NOW)).toBe(200163566)
+    check(200163566, 'showtime.us', NOW)
+    expect(nextSweepChannel(db.raw, NOW)).toBeNull()
+    // A fresh verdict for a listing the stream no longer has does not count.
+    db.raw.prepare("UPDATE channels SET epg_resolved_id = 'showtime2.us' WHERE stream_id = 200163566").run()
     expect(nextSweepChannel(db.raw, NOW)).toBe(200163566)
   })
 
   it('checks due channels back to back while idle, confirming matched streams on the way', async () => {
     rememberGuideScope(db.raw, [123], 500)
     const captured: number[] = []
-    const ran = await runFeedCheckSweep(db.raw, { io: fakeIo(db, captured), idle: () => true, gapMs: 0 })
+    const io = { ...fakeIo(db, captured), sleep: vi.fn(async () => undefined) }
+    const ran = await runFeedCheckSweep(db.raw, { io, idle: () => true, gapMs: 0 })
     // 777 confirms 778 too; 200163566 confirms 5864; 200163567 confirms 22599.
-    expect(ran).toBe(3)
+    expect(ran).toBe(4)
     expect(captured).toEqual([777, 778, 200163566, 5864, 200163567, 22599])
     for (const id of [777, 778, 200163566, 5864, 200163567, 22599]) {
       expect(getFeedCheck(db.raw, id)?.verdict).toBe('match')
     }
-    expect(getFeedCheck(db.raw, 900)).toBeUndefined()
+    // CNN has no second stream: recorded without a connection, and no gap after it.
+    expect(getFeedCheck(db.raw, 900)).toMatchObject({ verdict: 'inconclusive', reason: NO_SIBLING_REASON })
+    expect(io.sleep).toHaveBeenCalledTimes(3)
     expect(nextSweepChannel(db.raw)).toBeNull()
   })
 
