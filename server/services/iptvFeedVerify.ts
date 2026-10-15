@@ -18,7 +18,8 @@
 //
 // A stream with no other stream of its listing can never be confirmed or caught
 // (a related-channel match alone is symmetric, see compareAgainst), so it is
-// recorded inconclusive without opening any connection.
+// recorded inconclusive without opening any connection (a standing mislabel is
+// kept: nothing was compared).
 //
 // Captures never outrank a viewer: they go through spawnAuxUpstream, which only
 // starts in a free slot, and any viewer or recording that needs the slot kills
@@ -185,6 +186,15 @@ function recordOutcome(db: Database.Database, streamId: number, listed: string |
       score: outcome.score,
     })
   } else if (outcome.kind === 'unknown') {
+    // Nothing to compare is no evidence against a mislabel: the carried
+    // channel's streams may be name-resolved (not vouched) or gone from the
+    // catalog. Keep the verdict and restamp it, so the sweep moves on instead of
+    // clearing the correction or picking this stream again.
+    const prior = getFeedCheck(db, streamId)
+    if (outcome.reason === NO_SIBLING_REASON && prior?.verdict === 'mislabeled' && prior.listed_epg_id === listed) {
+      recordFeedCheck(db, { ...prior, reason: outcome.reason })
+      return
+    }
     recordFeedCheck(db, {
       stream_id: streamId,
       verdict: 'inconclusive',

@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { openIptvDb, type IptvDb } from './iptvDb.js'
 import { FP_FRAME_BYTES } from './iptvFeedFingerprint.js'
-import { getFeedCheck, recordFeedCheck } from './iptvFeedChecks.js'
+import { effectiveEpgId, feedCheckIsFresh, getFeedCheck, NO_SIBLING_REASON, recordFeedCheck } from './iptvFeedChecks.js'
 import {
   _resetFeedCheckSchedulerForTests,
   checkFeedStandalone,
@@ -355,6 +355,30 @@ describe('checkFeedStandalone', () => {
     expect(captured).toEqual([200163514, 400124999, 200163514, 22720])
     expect(outcome).toMatchObject({ kind: 'carries', epgId: 'travelchannel.us' })
     expect(getFeedCheck(db.raw, 200163514)).toMatchObject({ verdict: 'match', listed_epg_id: 'travel.us', actual_epg_id: null })
+  })
+
+  // Review of the vouched-sibling rule: with Showtime 2's stream name-resolved
+  // (not vouched) or gone, a re-check found nothing to compare and recorded
+  // inconclusive over the mislabel, putting the guide back on the wrong listing.
+  it.each([
+    ['name-resolved', 'UPDATE channels SET epg_channel_id = NULL, epg_resolved_id = \'showtime2.us\' WHERE stream_id = 22599'],
+    ['gone from the catalog', 'DELETE FROM channels WHERE stream_id = 22599'],
+  ])('keeps a mislabel when the carried channel\'s stream is %s', async (_, sql) => {
+    const { db, io, captured } = harness({ session: SHO2, feeds: { ...FEEDS, 200163566: slice(SHO2, 130) } })
+    db.raw.prepare(sql).run()
+    recordFeedCheck(db.raw, {
+      stream_id: 200163566, verdict: 'mislabeled', listed_epg_id: 'showtime.us', actual_epg_id: 'showtime2.us',
+      matched_stream_id: 22599, score: 0.97,
+    }, new Date(Date.now() - 2 * 24 * 3600_000))
+    expect(effectiveEpgId(db.raw, 200163566)).toBe('showtime2.us')
+    const outcome = await checkFeedStandalone(io, 200163566)
+    expect(outcome).toMatchObject({ kind: 'unknown', reason: NO_SIBLING_REASON })
+    expect(captured).toEqual([])
+    const check = getFeedCheck(db.raw, 200163566)!
+    expect(check).toMatchObject({ verdict: 'mislabeled', actual_epg_id: 'showtime2.us', matched_stream_id: 22599, score: 0.97 })
+    expect(effectiveEpgId(db.raw, 200163566)).toBe('showtime2.us')
+    // Restamped, so the sweep does not pick it again straight away.
+    expect(feedCheckIsFresh(check, 'showtime.us')).toBe(true)
   })
 
   it('gives up its first slot when no second one is free', async () => {
