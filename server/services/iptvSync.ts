@@ -2,7 +2,8 @@ import {
   credsFromEnv, fetchCategories, fetchLiveStreams, fetchVodStreams,
   fetchSeriesList, fetchSeriesInfo,
 } from './xtream.js'
-import { fetchAndStreamEpg } from './iptvEpg.js'
+import { fetchAndStreamEpg, type EpgProgrammeRow } from './iptvEpg.js'
+import { listedEpgSql } from './iptvFeedChecks.js'
 import { buildEpgNameIndex, resolveEpgId, type FeedChannelDef } from './iptvEpgResolve.js'
 import { ingestAllExternalEpg } from './iptvEpgExternal.js'
 import type { IptvDb } from './iptvDb.js'
@@ -118,6 +119,45 @@ export function resolveEpgChannels(db: IptvDb, channelDefs: FeedChannelDef[], fe
   })
   apply(channels)
   return { resolved }
+}
+
+const WEST_DELAY_MS = 3 * 3600_000
+
+/**
+ * Give every catalog "<x>west.us" guide id the East schedule three hours later
+ * when no feed lists it (US West feeds replay East on Pacific time all year).
+ * Without it a West stream had no guide, and feed checks could never compare a
+ * stream against West: 2026-10-14 "US: Showtime" carried Showtime West, and the
+ * viewer stayed on V for Vendetta while the guide said Patriot Games. A West id
+ * with any programme that is not such a copy has real listings and is left
+ * alone. Runs after all EPG ingest.
+ */
+export function deriveWestFeedEpg(db: IptvDb): { channels: number; programmes: number } {
+  const ids = db.raw.prepare(`SELECT DISTINCT ${listedEpgSql()} AS id FROM channels`).all() as Array<{ id: string | null }>
+  const rowsOf = db.raw.prepare('SELECT start_utc, stop_utc, title, description FROM epg_programs WHERE channel_id = ?')
+  const later = (iso: string): string => new Date(Date.parse(iso) + WEST_DELAY_MS).toISOString()
+  let channels = 0
+  let programmes = 0
+  db.raw.transaction(() => {
+    for (const { id } of ids) {
+      const m = id ? /^(.+?)west\.us$/.exec(id) : null
+      if (!m) continue
+      const east = [`${m[1]}.us`, `${m[1]}east.us`]
+        .map((e) => rowsOf.all(e) as EpgProgrammeRow[])
+        .find((rows) => rows.length > 0)
+      if (!east) continue
+      const copies = east.map((r) => ({ ...r, channel_id: id!, start_utc: later(r.start_utc), stop_utc: later(r.stop_utc) }))
+      const copyStarts = new Set(copies.map((r) => r.start_utc))
+      const firstCopy = copies.reduce((min, r) => (r.start_utc < min ? r.start_utc : min), copies[0].start_utc)
+      // Copies outlive their East source by three hours at the stale cutoff, so
+      // only rows inside the East window can prove real listings.
+      const own = rowsOf.all(id!) as EpgProgrammeRow[]
+      if (own.some((r) => r.start_utc >= firstCopy && !copyStarts.has(r.start_utc))) continue
+      for (const r of copies) programmes += db.stmts.upsertEpg.run(r).changes
+      channels += 1
+    }
+  })()
+  return { channels, programmes }
 }
 
 export async function syncOnce(db: IptvDb): Promise<SyncResult> {
@@ -265,6 +305,7 @@ export async function syncOnce(db: IptvDb): Promise<SyncResult> {
     } catch (err) {
       log.error('external epg failed', { err })
     }
+    log.info('west feed epg', deriveWestFeedEpg(db))
 
     // Refresh planner statistics after catalog/schedule changes. Grid and
     // search now scope programmes by channel before materializing rows; fresh

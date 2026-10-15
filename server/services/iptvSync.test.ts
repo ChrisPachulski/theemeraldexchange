@@ -53,7 +53,7 @@ vi.mock('./iptvEpgExternal.js', () => ({
   ingestAllExternalEpg: vi.fn(async () => []),
 }))
 
-import { syncOnce } from './iptvSync.js'
+import { deriveWestFeedEpg, syncOnce } from './iptvSync.js'
 import { fetchAndStreamEpg } from './iptvEpg.js'
 import { fetchLiveStreams } from './xtream.js'
 import { ingestAllExternalEpg } from './iptvEpgExternal.js'
@@ -144,5 +144,57 @@ describe('iptv sync orchestrator', () => {
         category_id: 1, is_adult: 0, tv_archive: 1, tv_archive_duration: 7,
         added_ts: null, fetched_at: '2026-05-24T00:00:00Z' },
     ])
+  })
+})
+
+describe('deriveWestFeedEpg', () => {
+  function westDb() {
+    const db = openIptvDb(path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'west-')), 'iptv.db'))
+    for (const [stream_id, epg_channel_id] of [[200163566, 'showtime.us'], [5866, 'showtimewest.us'], [7, 'hgtvwest.us']] as const) {
+      db.stmts.upsertChannel.run({
+        stream_id, num: stream_id, name: String(stream_id), stream_icon: null, epg_channel_id, category_id: 1,
+        is_adult: 0, tv_archive: 0, tv_archive_duration: null, added_ts: null, fetched_at: '2026-10-15T00:00:00Z',
+      })
+    }
+    const programme = (channel_id: string, start_utc: string, stop_utc: string, title: string): void => {
+      db.stmts.upsertEpg.run({ channel_id, start_utc, stop_utc, title, description: null })
+    }
+    programme('showtime.us', '2026-10-15T00:00:00.000Z', '2026-10-15T02:15:00.000Z', 'V for Vendetta')
+    programme('showtime.us', '2026-10-15T02:15:00.000Z', '2026-10-15T04:15:00.000Z', 'Patriot Games')
+    const titles = (channel: string) => db.raw
+      .prepare('SELECT start_utc, title FROM epg_programs WHERE channel_id = ? ORDER BY start_utc').all(channel)
+    return { db, programme, titles }
+  }
+
+  it('lists a West feed with no guide as the East schedule three hours later (the 2026-10-14 incident)', () => {
+    const { db, titles } = westDb()
+    expect(deriveWestFeedEpg(db)).toEqual({ channels: 1, programmes: 2 })
+    expect(titles('showtimewest.us')).toEqual([
+      { start_utc: '2026-10-15T03:00:00.000Z', title: 'V for Vendetta' },
+      { start_utc: '2026-10-15T05:15:00.000Z', title: 'Patriot Games' },
+    ])
+    // Idempotent, and it follows a later East change on the next sync.
+    db.stmts.upsertEpg.run({
+      channel_id: 'showtime.us', start_utc: '2026-10-15T02:15:00.000Z', stop_utc: '2026-10-15T04:15:00.000Z',
+      title: 'Sleeping Dogs', description: null,
+    })
+    expect(deriveWestFeedEpg(db).channels).toBe(1)
+    expect(titles('showtimewest.us')).toHaveLength(2)
+    expect(titles('showtimewest.us')[1]).toMatchObject({ title: 'Sleeping Dogs' })
+  })
+
+  it('keeps going after the East source ages out ahead of its copy', () => {
+    const { db, titles } = westDb()
+    deriveWestFeedEpg(db)
+    db.raw.prepare("DELETE FROM epg_programs WHERE channel_id = 'showtime.us' AND title = 'V for Vendetta'").run()
+    expect(deriveWestFeedEpg(db).channels).toBe(1)
+    expect(titles('showtimewest.us')).toHaveLength(2)
+  })
+
+  it('leaves a West feed with its own listings alone', () => {
+    const { db, programme, titles } = westDb()
+    programme('showtimewest.us', '2026-10-15T03:30:00.000Z', '2026-10-15T05:00:00.000Z', 'Real West Listing')
+    expect(deriveWestFeedEpg(db)).toEqual({ channels: 0, programmes: 0 })
+    expect(titles('showtimewest.us')).toEqual([{ start_utc: '2026-10-15T03:30:00.000Z', title: 'Real West Listing' }])
   })
 })
