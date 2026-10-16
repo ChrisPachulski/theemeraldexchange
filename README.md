@@ -295,8 +295,11 @@ Two tracks (see **[DEPLOY.md](./DEPLOY.md)**):
 The **backend track is shipped and running on the NAS**: the IPTV core, the locked cross-service
 contract (Rust↔TS↔Python byte parity enforced in CI), the Rust media-core (library scan /
 metadata / serve), and the ffmpeg transcoder (HEVC→H.264, hardware-encoded via Intel VAAPI).
-The **Apple client track** — native playback, offline downloads, the Plex-Pass-equivalent tier
-— is hard-blocked on Apple tooling (Xcode + Developer Program) and not started.
+The **Apple client track** (native iOS/tvOS, `EmeraldMobile` + `EmeraldTV`) lives in a
+separate repo and ships through TestFlight; this repo carries its server half — the
+device-link pairing routes (`/api/auth/device/*`), Sign in with Apple, the `EmeraldKit` Swift
+package, and the endpoint specs in `goal-apple-companion.md`. Offline downloads and the
+Plex-Pass-equivalent tier are still ahead.
 
 ## License
 
