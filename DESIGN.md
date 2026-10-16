@@ -248,7 +248,7 @@ On the catalog tabs (TV, Movies) the search input lives in a fixed dock at
 the viewport bottom, floating over the result grid on a soft top-fading
 gradient so the kraken atmosphere bleeds through rather than being cut by a
 hard chrome edge. Content beneath hero search starts at `--hero-pad-top`
-(132px; 96px on ≤520px).
+(132px; 148px at 521–1099px where the tab pills drop to their own row; 120px on ≤520px).
 
 Spacing runs a 4pt scale from `--s-1` (4px) to `--s-9` (96px). Vary, do not
 repeat: card-to-card gaps `--s-4`, inside cards `--s-3`, modal outer `--s-6`
@@ -258,8 +258,9 @@ metadata flow beside the poster, never stacked uniformly under it. Long
 grids use `content-visibility: auto` with a matched `contain-intrinsic-size`
 so off-screen cards skip paint with zero visual change.
 
-Breakpoints observed: 520px (chrome tightens, type steps down) and 720px
-(modals move from top-anchored to centered).
+Breakpoints observed: 520px (chrome tightens, type steps down), 720px
+(modals move from top-anchored to centered), and 1099px (tab pills return to
+the top band).
 
 ## Elevation & Depth
 
@@ -396,8 +397,8 @@ bezel. The In-Library badge deliberately breaks its poster's corner (offset
 - **Kraken** — the page background is a full-screen video loop
   (`public/kraken.webm`/`.mp4` on Home; the calmer `resting` variant on
   inner tabs), no pointer-events, behind everything. The static SVG
-  constellation (`Constellation.tsx`) stays in the tree unmounted as the
-  fallback atmosphere.
+  constellation it replaced was deleted in `8d1a0e8`; the poster frame
+  (`public/kraken-poster.jpg`) is the fallback.
 
 ## Do's and Don'ts
 

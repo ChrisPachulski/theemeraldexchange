@@ -190,7 +190,7 @@ A fixture-backed stub that speaks media-core's HTTP surface (12 movies, 3 shows,
 store; direct-play only). Backend wiring: `USE_MEDIA_CORE=1`,
 `MEDIA_CORE_URL=http://127.0.0.1:8095`, and any 32+ char `INTERNAL_PRINCIPAL_SECRET`
 placeholder — without one the proxy sends no internal principal at all (the off posture,
-`server/routes/media.ts:123`) rather than refusing, so set the placeholder to exercise the
+`server/routes/media.ts:141`) rather than refusing, so set the placeholder to exercise the
 prod-shaped path; the mock ignores its value. Builds the library UI without the Rust binary
 or a real `/media` library.
 </details>
@@ -267,7 +267,7 @@ Two tracks (see **[DEPLOY.md](./DEPLOY.md)**):
 - **[PRODUCT.md](./PRODUCT.md)** — audience, principles, scope.
 - **[DESIGN.md](./DESIGN.md)** — the design contract (palette, type, motion).
 - **[DEPLOY.md](./DEPLOY.md)** — NAS setup and ongoing deploys.
-- **[goal-apple-companion.md](./goal-apple-companion.md)** — the M2 Apple-client track (not started).
+- **[goal-apple-companion.md](./goal-apple-companion.md)** — server-side companion to the Apple client repo: the cross-repo audit (2026-07-06) and the endpoint specs each Apple feature needs.
 - **[crates/emerald-contracts/README.md](./crates/emerald-contracts/README.md)** — the cross-language
   token/HKDF/`sub` contract and its test-vector oracle.
 

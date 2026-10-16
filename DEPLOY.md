@@ -154,10 +154,12 @@ What the script actually does (`./scripts/deploy-nas.sh --help` prints its own s
    the `cap_drop: ALL` sidecars.
 6. Tags every currently-deployed image (`backend`, `recommender`, `media-core`,
    `transcoder`) as **`:rollback-<UTC timestamp>`** — one generation per run,
-   the last 2 kept, and any legacy bare `:rollback` tag pruned. Then builds each
-   service sequentially through `nas-safe-build.sh`. Its detached load, memory,
-   timeout, and Plex-health watchdogs abort before a compile can brown out
-   the NAS.
+   the last 2 kept, and any legacy bare `:rollback` tag pruned. Then pulls the
+   CI-built `:sha-<commit>` image for each service from GHCR and retags it to
+   the compose name — nothing compiles on the NAS. Only `--build-on-nas`
+   builds each service sequentially through `nas-safe-build.sh`, whose
+   detached load, memory, timeout, and Plex-health watchdogs abort before a
+   compile can brown out the NAS.
 7. Recreates the stack with `docker compose up -d --no-build`, then
    force-recreates `exchange-cloudflared` (it shares the backend's netns; only
    recreation rebinds it to a new backend container).
@@ -178,8 +180,8 @@ GlitchTip is optional and reported separately from the core health gate. An
 unset DSN never excuses an unhealthy backend or sidecar; every failed core
 release is rolled back.
 
-First build takes several minutes (npm ci + two Rust release builds + image
-layers). Subsequent deploys are much faster (cached layers).
+The deploy itself is a pull + recreate; the wait is CI (npm ci + two Rust
+release builds) before `ci-gate.sh` lets it proceed.
 
 ### 6. Verify end-to-end
 
@@ -386,7 +388,7 @@ without it, every nightly run records the candidate model as an
 inactive proposal and the active model stays put. Note the gate is not
 merely "a file exists": the optimizer stays record-only until the set
 has **at least 30 usable rows** (`MIN_HOLDOUT_SIZE`,
-`recommender/workers/optimizer.py:49`). The set is one
+`recommender/workers/optimizer.py:5`). The set is one
 JSON object per line (see `recommender/eval/README.md` for the
 schema) and lives at `RECOMMENDER_HOLDOUT_PATH` inside the container,
 defaulting to `/data/holdout.jsonl`.

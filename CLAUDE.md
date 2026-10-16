@@ -24,7 +24,7 @@ Exit code 0 is not done. After every step in stateful/deploy work, verify the ac
 
 ## Multi-Agent Workflow Rules
 
-1. Sessions share ONE working tree on `m3-media-core`. Mutating-agent workflows MUST use `isolation: 'worktree'`; never run parallel/long mutating agents against the shared tree.
+1. Sessions share ONE working tree on `main`. Mutating-agent workflows MUST use `isolation: 'worktree'`; never run parallel/long mutating agents against the shared tree.
 2. Bound every workflow: no unbounded loop-until-dry. Cap fan-out (≤8 mutating agents/phase), cap total agents, wall-clock/budget-guard any accumulation loop. One bounded phase per turn beats a mega-workflow.
 3. Never trust an agent's "green" self-report — re-run the real build/test from scratch before declaring done.
 4. Watch, don't babysit: commit monitor + completion notification, not tight-loop polling or short `ScheduleWakeup`. No commit/journal result for ~10 min → stop it and finish by hand.
