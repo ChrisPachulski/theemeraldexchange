@@ -785,3 +785,13 @@ def test_featurize_rebuilds_every_vector_when_the_model_changes(conn) -> None:
     assert 801 not in pending()
     featurize._reconcile_model_identity(conn, "model-a@rev2")
     assert 801 in pending()
+
+
+def test_fused_scores_from_likes_alone(conn) -> None:
+    # 2026-10-16 review item 31: retrieval used library + liked embeddings, but
+    # the rerank read only the library and returned nothing for a profile whose
+    # taste came only from likes.
+    ctx = _ctx(conn, library=[], feedback=[{"tmdb_id": LIB_A1, "signal": "like"}], household_rejections=[])
+    result = fused.score(ctx, conn, n=10, params={})
+    assert result.diag["path"] != "no_library_embeddings" and result.items
+    assert LIB_A1 not in [it.tmdb_id for it in result.items]
