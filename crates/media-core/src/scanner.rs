@@ -1331,7 +1331,7 @@ async fn upsert_show(
     added_at: &str,
     tmdb: Option<&TmdbMatch>,
 ) -> Result<i64, AppError> {
-    let key = filename::normalize_show_name(display_title);
+    let mut key = filename::normalize_show_name(display_title);
     let final_title = tmdb.map(|m| m.title.as_str()).unwrap_or(display_title);
     let final_year = tmdb.and_then(|m| m.year);
     let tmdb_id = tmdb.map(|m| m.tmdb_id);
@@ -1354,10 +1354,23 @@ async fn upsert_show(
             {
                 Some(id) => Some(id),
                 None => {
-                    sqlx::query_scalar("SELECT id FROM shows WHERE norm_title = ?")
-                        .bind(&key)
-                        .fetch_optional(&db.pool)
-                        .await?
+                    // The year-stripped key collides for same-name series
+                    // (Doctor Who 1963 / 2005): only an unmatched row is the
+                    // same show. A row matched to another series stays put, and
+                    // this one gets a key of its own (norm_title is UNIQUE).
+                    let row: Option<(i64, Option<i64>)> =
+                        sqlx::query_as("SELECT id, tmdb_id FROM shows WHERE norm_title = ?")
+                            .bind(&key)
+                            .fetch_optional(&db.pool)
+                            .await?;
+                    match row {
+                        Some((id, None)) => Some(id),
+                        Some(_) => {
+                            key = format!("{key} tmdb{tid}");
+                            None
+                        }
+                        None => None,
+                    }
                 }
             }
         }
@@ -3430,6 +3443,47 @@ mod tests {
 
         assert_eq!(id1, id2, "same tmdb_id must collapse to one show id");
         assert_eq!(count(&db, "shows").await, 1);
+    }
+
+    // 2026-10-16 review item 26: a second same-name series matched to another
+    // TMDB id merged into the first and overwrote its tmdb_id.
+    #[tokio::test]
+    async fn same_name_series_with_different_tmdb_ids_stay_apart() {
+        let db = Db::connect_memory().await.unwrap();
+        let classic = TmdbMatch {
+            tmdb_id: 121,
+            title: "Doctor Who".into(),
+            year: Some(1963),
+            imdb_id: None,
+            tvdb_id: None,
+            overview: None,
+            poster_path: None,
+            content_rating: None,
+        };
+        let revival = TmdbMatch {
+            tmdb_id: 57243,
+            year: Some(2005),
+            ..classic.clone()
+        };
+        let id1 = upsert_show(&db, "Doctor Who 1963", "t", Some(&classic))
+            .await
+            .unwrap();
+        let id2 = upsert_show(&db, "Doctor Who 2005", "t", Some(&revival))
+            .await
+            .unwrap();
+        assert_ne!(id1, id2);
+        let tmdb: i64 = sqlx::query_scalar("SELECT tmdb_id FROM shows WHERE id = ?")
+            .bind(id1)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(tmdb, 121);
+        assert_eq!(
+            upsert_show(&db, "Doctor Who 2005", "t", Some(&revival))
+                .await
+                .unwrap(),
+            id2
+        );
     }
 
     #[tokio::test]
