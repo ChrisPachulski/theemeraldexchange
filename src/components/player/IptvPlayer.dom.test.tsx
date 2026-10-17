@@ -152,6 +152,35 @@ describe('IptvPlayer (mounted) — hls.js engine wiring', () => {
   })
 })
 
+// 2026-10-16 review item 4: LiveTab passes onEscalate inline, a new function
+// every render, and it sat in the engine effect's deps: every parent re-render
+// destroyed the engine and reset the <video>.
+describe('IptvPlayer (mounted) — parent re-renders', () => {
+  it('keeps the engine when the parent passes fresh inline callbacks', async () => {
+    const grant = hlsGrant()
+    const props = () => ({ onDeliveryStruggling: () => {}, onSeekableEndUpdate: () => {}, onLiveLost: () => {} })
+    const { rerender } = render(<IptvPlayer grant={grant} {...props()} />)
+    await waitFor(() => expect(hlsInstances).toHaveLength(1))
+    rerender(<IptvPlayer grant={grant} {...props()} />)
+    rerender(<IptvPlayer grant={grant} {...props()} />)
+    expect(hlsInstances).toHaveLength(1)
+    expect(hlsInstances[0].destroy).not.toHaveBeenCalled()
+  })
+
+  it('calls the latest callback the parent passed', () => {
+    const grant: StreamGrant = { delivery: 'progressive', url: '/api/media/stream/movie/9?t=tok' }
+    const first = vi.fn()
+    const latest = vi.fn()
+    const { rerender } = render(<IptvPlayer grant={grant} onDeliveryStruggling={first} />)
+    rerender(<IptvPlayer grant={grant} onDeliveryStruggling={latest} />)
+    const video = screen.getByTestId('iptv-player-video')
+    Object.defineProperty(video, 'error', { configurable: true, value: { code: 3 } })
+    video.dispatchEvent(new Event('error'))
+    expect(first).not.toHaveBeenCalled()
+    expect(latest).toHaveBeenCalledOnce()
+  })
+})
+
 describe('IptvPlayer (mounted) — hls.js alternate audio', () => {
   // hls.js fills audioTracks when it selects the variant's audio group
   // (AUDIO_TRACKS_UPDATED), after MANIFEST_PARSED.
