@@ -134,3 +134,19 @@ export function parseSub(s: string): SubJs
 export function piiScrubKeys(): Array<string>
 /** Returns a JSON string with PII keys scrubbed in-place. */
 export function piiScrubValue(jsonStr: string): string
+
+// ---------------------------------------------------------------------------
+// XMLTV parsing (server/services/iptvEpg.ts streamXmltv)
+// ---------------------------------------------------------------------------
+
+/**
+ * Incremental XMLTV parser over raw (optionally gzipped) feed bytes. push()
+ * and finish() return the rows completed so far as JSON
+ * `{"programmes": EpgProgrammeRow[], "channels": XmltvChannelDef[]}`, and
+ * throw on malformed XML or a corrupt gzip stream.
+ */
+export class XmltvParser {
+  constructor(sniffChannels: boolean)
+  push(chunk: Buffer): string
+  finish(): string
+}

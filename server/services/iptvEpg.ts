@@ -1,20 +1,12 @@
-import sax from 'sax'
 import { Readable } from 'node:stream'
-import { setImmediate as yieldEventLoop } from 'node:timers/promises'
 import { env } from '../env.js'
-import { gunzipNodeStream, webStreamToNodeReadable } from './streamBridge.js'
+import { contracts } from './contractsBinding.js'
+import { webStreamToNodeReadable } from './streamBridge.js'
 import { guardedFetchTrustedOrigin } from './ssrfGuard.js'
 import type { IptvDb } from './iptvDb.js'
 
 const EPG_FETCH_TIMEOUT_MS = 5 * 60_000
 const EPG_WALL_TIMEOUT_MS = 30 * 60_000
-
-// Hard ceiling on the channel-def sniff buffer. A real <channel> block is a few
-// KB; this cap only ever trips on a malformed/hostile feed that opens a <channel
-// tag and never closes it (or floods junk after it), which would otherwise grow
-// sniffBuf without bound -> OOM. When tripped we keep only the trailing slice so
-// a <channel> that legitimately straddles the boundary can still complete.
-const SNIFF_BUF_MAX = 1_000_000 // 1 MB
 
 export interface EpgProgrammeRow {
   channel_id: string
@@ -54,203 +46,62 @@ function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason ?? 'aborted'))
 }
 
-async function waitForReadable(input: Readable, signal?: AbortSignal): Promise<'readable' | 'end'> {
-  if (input.readableEnded) return 'end'
-  if (signal?.aborted) throw abortReason(signal)
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      input.off('readable', onReadable)
-      input.off('end', onEnd)
-      input.off('error', onError)
-      signal?.removeEventListener('abort', onAbort)
-    }
-    const onReadable = () => {
-      cleanup()
-      resolve('readable')
-    }
-    const onEnd = () => {
-      cleanup()
-      resolve('end')
-    }
-    const onError = (err: Error) => {
-      cleanup()
-      reject(err)
-    }
-    const onAbort = () => {
-      cleanup()
-      reject(abortReason(signal as AbortSignal))
-    }
-    input.once('readable', onReadable)
-    input.once('end', onEnd)
-    input.once('error', onError)
-    signal?.addEventListener('abort', onAbort, { once: true })
-  })
-}
-
 export interface XmltvChannelDef {
   id: string
   names: string[]
 }
 
+/**
+ * Parse an XMLTV feed (plain or gzipped, detected from its first two bytes)
+ * as it streams in, calling onProgramme per programme and onChannelDef per
+ * <channel> alias block. The parsing runs in Rust (XmltvParser,
+ * crates/emerald-contracts-napi/src/xmltv.rs); malformed XML or a corrupt
+ * gzip stream rejects.
+ *
+ * Channel defs come from a regex sniffer over the raw text, not the XML
+ * parser: this provider's feed once had unescaped '&' in <display-name>,
+ * which the strict parser skipped, emitting zero <channel> tags from the
+ * 151MB feed while every <programme> still parsed. The sniffer scans the whole
+ * stream (some channel defs follow the first <programme>) and keeps at most
+ * one partial <channel> block buffered, capped at 1MB for a block that never
+ * closes. Without it name-based EPG matching degrades to exact-tvg only (~820
+ * channels instead of ~12k).
+ */
 export async function streamXmltv(
   input: Readable,
   onProgramme: (row: EpgProgrammeRow) => void,
   signal?: AbortSignal,
   onChannelDef?: (def: XmltvChannelDef) => void,
 ): Promise<void> {
-  // Auto-detect gzip by reading the first two bytes.
-  const headChunks: Buffer[] = []
-  let total = 0
-  while (total < 2) {
-    const chunk = input.read() as Buffer | Uint8Array | string | null
-    if (chunk !== null) {
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-      headChunks.push(buf)
-      total += buf.length
-      continue
-    }
-    if (await waitForReadable(input, signal) === 'end') break
+  if (signal?.aborted) throw abortReason(signal)
+  const parser = new contracts.XmltvParser(Boolean(onChannelDef))
+  // Defs first: iptvEpgExternal resolves against the defs seen by the first programme.
+  const emit = (json: string): void => {
+    const batch = JSON.parse(json) as { programmes: EpgProgrammeRow[]; channels: XmltvChannelDef[] }
+    for (const def of batch.channels) onChannelDef?.(def)
+    for (const row of batch.programmes) onProgramme(row)
   }
-  const head = Buffer.concat(headChunks, total)
-  const isGzip = head[0] === 0x1f && head[1] === 0x8b
-  const stream = Readable.from((async function* () {
-    for (const chunk of headChunks) yield chunk
-    for await (const chunk of input) yield chunk as Buffer
-  })())
-  const xmlStream: Readable = isGzip ? gunzipNodeStream(stream) : stream
-
-  const parser = sax.createStream(true, { trim: true, normalize: true })
-  let cur: Partial<EpgProgrammeRow> | null = null
-  let text = ''
-  let inTitle = false
-  let inDesc = false
-  let counter = 0
-
-  parser.on('opentag', (node) => {
-    if (node.name === 'programme') {
-      const a = node.attributes as Record<string, string>
-      try {
-        cur = {
-          channel_id: normalizeEpgChannelId(a.channel) ?? '',
-          start_utc: xmltvTimeToIso(a.start),
-          stop_utc: xmltvTimeToIso(a.stop),
-          title: null,
-          description: null,
-        }
-      } catch {
-        cur = null
-      }
-    } else if (cur && node.name === 'title') {
-      inTitle = true; text = ''
-    } else if (cur && node.name === 'desc') {
-      inDesc = true; text = ''
+  // Abort rejects at once: destroying a stalled source can wait forever.
+  let onAbort = (): void => {}
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      const reason = abortReason(signal as AbortSignal)
+      reject(reason)
+      input.destroy(reason)
     }
   })
-  parser.on('text', (t) => { if (inTitle || inDesc) text += t })
-  parser.on('cdata', (t) => { if (inTitle || inDesc) text += t })
-  parser.on('closetag', (name) => {
-    if (name === 'title' && inTitle && cur) { cur.title = text || null; inTitle = false; text = '' }
-    else if (name === 'desc' && inDesc && cur) { cur.description = text || null; inDesc = false; text = '' }
-    else if (name === 'programme' && cur) {
-      if (cur.channel_id && cur.start_utc && cur.stop_utc) {
-        onProgramme(cur as EpgProgrammeRow)
-      }
-      cur = null
-      counter += 1
-      if (counter % 500 === 0) void yieldEventLoop()
+  signal?.addEventListener('abort', onAbort, { once: true })
+  const consume = async (): Promise<void> => {
+    for await (const chunk of input) {
+      emit(parser.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array | string)))
     }
-  })
-
-  // Channel-definition capture is done with a REGEX SNIFFER on the raw text,
-  // NOT via SAX. This provider's feed has unescaped '&' (and similar) inside
-  // <display-name> in the channel section, which SAX strict mode silently skips
-  // — it parses every <programme> but emits ZERO <channel> open-tags (verified
-  // on the live 151MB feed: tv:1, programme:507973, channel:0). The programmes
-  // we need still stream through SAX above; the channel aliases (used for
-  // name-based EPG matching) are extracted here from the byte stream instead.
-  // Scan the WHOLE stream for <channel> blocks (this feed interleaves some
-  // channel defs after the first <programme>, so we can't stop early). Memory
-  // stays bounded: after extracting complete channels we drop everything up to
-  // the last "<channel" start (or keep just a short tail if none), so the
-  // buffer never holds the 151MB of programme text — only at most one partial
-  // <channel> block plus a small carry for a tag split across a chunk boundary.
-  let sniffBuf = ''
-  const sniffEnabled = Boolean(onChannelDef)
-  const CHANNEL_RE = /<channel\b[^>]*\bid="([^"]+)"[^>]*>([\s\S]*?)<\/channel>/g
-  const extractChannelDefs = (): void => {
-    CHANNEL_RE.lastIndex = 0
-    let lastEnd = 0
-    let m: RegExpExecArray | null
-    while ((m = CHANNEL_RE.exec(sniffBuf)) !== null) {
-      const names: string[] = []
-      const dre = /<display-name[^>]*>([^<]+)<\/display-name>/g
-      let dm: RegExpExecArray | null
-      while ((dm = dre.exec(m[2])) !== null) {
-        const t = dm[1].trim()
-        if (t) names.push(t)
-      }
-      onChannelDef?.({ id: m[1], names })
-      lastEnd = CHANNEL_RE.lastIndex
-    }
-    if (lastEnd > 0) sniffBuf = sniffBuf.slice(lastEnd)
-    // Drop accumulated programme text but keep any trailing partial <channel>.
-    const lastOpen = sniffBuf.lastIndexOf('<channel')
-    if (lastOpen === -1) sniffBuf = sniffBuf.slice(-16)
-    else if (lastOpen > 0) sniffBuf = sniffBuf.slice(lastOpen)
-    // Final safety net: if normal trimming still left an oversized buffer (e.g. a
-    // <channel tag that never closes, or junk flooded after it), drop everything
-    // but a trailing window. Bounds memory on malformed/hostile feeds.
-    if (sniffBuf.length > SNIFF_BUF_MAX) {
-      sniffBuf = sniffBuf.slice(-SNIFF_BUF_MAX)
-    }
+    emit(parser.finish())
   }
-  const onSniffData = (chunk: Buffer | string): void => {
-    sniffBuf += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
-    extractChannelDefs()
+  try {
+    await Promise.race([consume(), aborted])
+  } finally {
+    signal?.removeEventListener('abort', onAbort)
   }
-
-  await new Promise<void>((resolve, reject) => {
-    let settled = false
-    const cleanup = () => {
-      parser.off('error', fail)
-      parser.off('end', done)
-      xmlStream.off('error', fail)
-      xmlStream.off('data', onSniffData)
-      signal?.removeEventListener('abort', onAbort)
-    }
-    const fail = (err: Error) => {
-      if (settled) return
-      settled = true
-      cleanup()
-      input.destroy(err)
-      xmlStream.destroy(err)
-      reject(err)
-    }
-    const done = () => {
-      if (settled) return
-      settled = true
-      cleanup()
-      resolve()
-    }
-    const onAbort = () => fail(abortReason(signal as AbortSignal))
-    if (signal?.aborted) {
-      fail(abortReason(signal))
-      return
-    }
-    parser.on('error', fail)
-    parser.on('end', done)
-    xmlStream.on('error', fail)
-    // Attach the channel-def sniffer to the SAME post-gunzip stream the parser
-    // reads: both consumers see every chunk; the sniffer extracts <channel>
-    // alias blocks via regex while SAX parses <programme>. WITHOUT this line the
-    // sniffer never fires, channelDefs is empty, and name-based EPG matching
-    // silently degrades to exact-tvg only (~820 channels instead of ~12k).
-    // Attach before pipe() so the channel section (which precedes most
-    // programmes) is not missed.
-    if (sniffEnabled) xmlStream.on('data', onSniffData)
-    signal?.addEventListener('abort', onAbort, { once: true })
-    xmlStream.pipe(parser)
-  })
 }
 
 export async function fetchAndStreamEpg(

@@ -586,6 +586,7 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
+module.exports.XmltvParser = nativeBinding.XmltvParser
 module.exports.deviceTokenDecrypt = nativeBinding.deviceTokenDecrypt
 module.exports.deviceTokenEncrypt = nativeBinding.deviceTokenEncrypt
 module.exports.hkdfDerive = nativeBinding.hkdfDerive
