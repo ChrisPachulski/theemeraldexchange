@@ -1403,6 +1403,14 @@ impl SessionManager {
         Ok(session_id)
     }
 
+    /// Push a session's last heartbeat `secs` into the past.
+    #[cfg(test)]
+    pub(crate) async fn age_for_test(&self, id: &str, secs: u64) {
+        if let Some(s) = self.sessions.lock().await.get_mut(id) {
+            s.last_seen = s.last_seen.saturating_sub(secs);
+        }
+    }
+
     /// Refresh a session's heartbeat. Returns `false` for an unknown id so the
     /// route can answer 404 — a client whose session was reaped must be able
     /// to detect the death instead of heart-beating a ghost forever.
