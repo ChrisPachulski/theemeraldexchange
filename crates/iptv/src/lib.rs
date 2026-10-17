@@ -13,6 +13,8 @@ pub mod epg;
 pub mod epg_resolve;
 pub mod hls;
 pub mod playlist;
+pub mod remux;
+pub mod remux_map;
 pub mod scheduler;
 pub mod siblings;
 pub mod streams;

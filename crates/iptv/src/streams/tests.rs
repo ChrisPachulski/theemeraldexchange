@@ -1668,3 +1668,288 @@ async fn session_titles_join_series_and_episode_with_fallbacks() {
         Some("CNN")
     );
 }
+
+// ---- live remux (AVPlayer) ---------------------------------------------------------
+
+use crate::remux::tests::{Fake, LIVE, SEGS, until};
+
+async fn remux_setup(run: &str) -> (T, Fake) {
+    let fake = Fake::new(run);
+    let pairs = fake.pairs();
+    let p: Vec<(&str, &str)> = pairs
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    (setup_with(Router::new(), &p).await, fake)
+}
+
+fn manifest_uri(id: &str, sub: &str) -> String {
+    format!(
+        "/api/iptv/stream/live/{id}/remux/index.m3u8?t={}",
+        token(StreamKind::Remux, id, sub)
+    )
+}
+
+fn seg_uri_for(id: &str, rid: &str, kind: StreamKind) -> String {
+    format!(
+        "/api/iptv/stream/live/{id}/remux/seg?t={}",
+        token(kind, rid, "plex:42")
+    )
+}
+
+impl T {
+    async fn watch(&self, id: &str) -> Res {
+        let g = self
+            .post(&format!("/api/iptv/stream/live/{id}/grant?client=avplayer"))
+            .await;
+        assert_eq!(g.status, StatusCode::OK, "{}", g.text());
+        self.get(&manifest_uri(id, "plex:42")).await
+    }
+    fn remux_session(&self, id: &str) -> Option<String> {
+        self.state
+            .streams
+            .live
+            .get_active(id, "plex:42")
+            .map(|e| e.session_id)
+    }
+}
+
+#[tokio::test]
+async fn the_manifest_refuses_a_bad_id_or_token() {
+    let (t, fake) = remux_setup(SEGS).await;
+    let r = t.get(&manifest_uri("abc", "plex:42")).await;
+    assert_eq!(
+        (r.status, r.json()["error"].clone()),
+        (StatusCode::BAD_REQUEST, json!("invalid_id"))
+    );
+    let r = t
+        .get("/api/iptv/stream/live/10/remux/index.m3u8?t=bogus")
+        .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    let r = t.get(&manifest_uri("10", "plex:42")).await;
+    assert_eq!(
+        (r.status, r.json()),
+        (StatusCode::GONE, json!({"error": "session_gone"})),
+        "no reservation"
+    );
+    assert!(fake.pids().is_empty());
+}
+
+#[tokio::test]
+async fn the_manifest_starts_a_remux_and_serves_stable_signed_segment_urls() {
+    let (t, fake) = remux_setup(&format!("{SEGS}{LIVE}")).await;
+    let r = t.watch("10").await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.text());
+    assert_eq!(
+        r.headers[header::CONTENT_TYPE],
+        "application/vnd.apple.mpegurl"
+    );
+    assert_eq!(r.headers[header::CACHE_CONTROL], "no-store");
+    let text = r.text();
+    assert!(text.starts_with("#EXTM3U\n"), "{text}");
+    assert!(text.contains("#EXTINF:2.0,"));
+    assert!(
+        !text.contains("#EXT-X-DISCONTINUITY"),
+        "the pre-segment tag is dropped"
+    );
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("/remux/seg?t="))
+        .collect();
+    assert_eq!(lines.len(), 4);
+    assert!(!text.lines().any(|l| l.starts_with("seg_")));
+    let session = t.remux_session("10").unwrap();
+    let (kind, rid, ttl) = claims_of(&query_token(lines[0], "t"));
+    assert_eq!(
+        (kind, rid, ttl),
+        (StreamKind::Remux, format!("{session}/seg_00000.ts"), 300)
+    );
+    let argv = &fake.argvs()[0];
+    let i = argv.iter().position(|a| a == "-i").unwrap();
+    assert_eq!(argv[i + 1], format!("{}/live/u/p/10.ts", t.panel));
+    // A reload keeps every URL (AVPlayer -12312 otherwise).
+    let again = t.get(&manifest_uri("10", "plex:42")).await;
+    assert_eq!(again.text(), text);
+    assert_eq!(fake.pids().len(), 1);
+
+    let seg = t
+        .get(&format!(
+            "/api/iptv/stream/live/10/remux/seg?t={}",
+            query_token(lines[0], "t")
+        ))
+        .await;
+    assert_eq!(seg.status, StatusCode::OK);
+    assert_eq!(seg.headers[header::CONTENT_TYPE], "video/mp2t");
+    assert_eq!(&seg.body[..], b"seg0");
+}
+
+#[tokio::test]
+async fn a_feed_that_dies_before_its_window_is_503_remux_warming_with_retry_after() {
+    let (t, fake) = remux_setup("exit 255\n").await;
+    let r = t.watch("10").await;
+    assert_eq!(
+        (r.status, r.json()),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": "remux_warming"})
+        )
+    );
+    assert_eq!(r.headers[header::RETRY_AFTER], "3");
+    // The reconnect throttle held the redial back.
+    assert_eq!(fake.pids().len(), 1);
+}
+
+#[tokio::test]
+async fn a_dead_feed_is_terminal_channel_offline_without_a_dial() {
+    let (t, fake) = remux_setup(SEGS).await;
+    t.state.streams.dead.strike("10");
+    t.state.streams.dead.strike("10");
+    let r = t.watch("10").await;
+    assert_eq!(
+        (r.status, r.json()),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": "channel_offline_upstream"})
+        )
+    );
+    assert!(r.headers.get(header::RETRY_AFTER).is_none());
+    assert!(fake.pids().is_empty());
+}
+
+#[tokio::test]
+async fn the_segment_route_checks_id_kind_resource_session_and_file() {
+    let (t, _fake) = remux_setup(&format!("{SEGS}{LIVE}")).await;
+    let err = |r: &Res| (r.status, r.json()["error"].clone());
+    let r = t
+        .get(&seg_uri_for("x", "sess-1/seg_00000.ts", StreamKind::Remux))
+        .await;
+    assert_eq!(err(&r), (StatusCode::BAD_REQUEST, json!("invalid_id")));
+    let r = t
+        .get(&seg_uri_for(
+            "10",
+            "sess-1/seg_00000.ts",
+            StreamKind::Segment,
+        ))
+        .await;
+    assert_eq!(err(&r), (StatusCode::UNAUTHORIZED, json!("invalid_token")));
+    let r = t
+        .get(&seg_uri_for("10", "sess-1/notaseg.ts", StreamKind::Remux))
+        .await;
+    assert_eq!(err(&r), (StatusCode::BAD_REQUEST, json!("bad_resource")));
+    let g = t
+        .post("/api/iptv/stream/live/10/grant?client=avplayer")
+        .await;
+    assert_eq!(g.status, StatusCode::OK);
+    let r = t
+        .get(&seg_uri_for("10", "sess-1/seg_00000.ts", StreamKind::Remux))
+        .await;
+    assert_eq!(
+        err(&r),
+        (StatusCode::GONE, json!("session_gone")),
+        "no index entry"
+    );
+    assert_eq!(
+        t.get(&manifest_uri("10", "plex:42")).await.status,
+        StatusCode::OK
+    );
+    let session = t.remux_session("10").unwrap();
+    let r = t
+        .get(&seg_uri_for("10", "sess-1/seg_00000.ts", StreamKind::Remux))
+        .await;
+    assert_eq!(
+        err(&r),
+        (StatusCode::GONE, json!("session_gone")),
+        "another session"
+    );
+    let r = t
+        .get(&seg_uri_for(
+            "10",
+            &format!("{session}/seg_00009.ts"),
+            StreamKind::Remux,
+        ))
+        .await;
+    assert_eq!(err(&r), (StatusCode::NOT_FOUND, json!("segment_gone")));
+    let r = t
+        .get(&seg_uri_for(
+            "10",
+            &format!("{session}/seg_00003.ts"),
+            StreamKind::Remux,
+        ))
+        .await;
+    assert_eq!((r.status, &r.body[..]), (StatusCode::OK, &b"seg3"[..]));
+}
+
+#[tokio::test]
+async fn a_watch_grant_stops_the_viewers_other_remux_and_a_preview_does_not() {
+    let (t, _fake) = remux_setup(&format!("{SEGS}{LIVE}")).await;
+    assert_eq!(t.watch("10").await.status, StatusCode::OK);
+    let s10 = t.remux_session("10").unwrap();
+    let preview = t
+        .post("/api/iptv/stream/live/20/grant?client=avplayer&intent=preview")
+        .await;
+    assert_eq!(preview.status, StatusCode::OK);
+    assert!(t.state.streams.live.remux.is_active(&s10));
+    let watch = t
+        .post("/api/iptv/stream/live/20/grant?client=avplayer")
+        .await;
+    assert_eq!(watch.status, StatusCode::OK);
+    assert!(!t.state.streams.live.remux.is_active(&s10));
+}
+
+#[tokio::test]
+async fn deleting_a_remux_slot_stops_its_ffmpeg_and_its_token_cannot_reopen_it() {
+    let (t, fake) = remux_setup(&format!("{SEGS}{LIVE}")).await;
+    assert_eq!(t.watch("10").await.status, StatusCode::OK);
+    let s10 = t.remux_session("10").unwrap();
+    let slot = t
+        .tracker()
+        .find("plex:42", Kind::Remux, "10")
+        .unwrap()
+        .session_id;
+    let d = t
+        .call(
+            "DELETE",
+            &format!("/api/iptv/sessions/{slot}"),
+            ("plex:42", "admin"),
+            &[],
+        )
+        .await;
+    assert_eq!(d.status, StatusCode::OK);
+    assert!(!t.state.streams.live.remux.is_active(&s10));
+    let stale = t.get(&manifest_uri("10", "plex:42")).await;
+    assert_eq!(stale.status, StatusCode::GONE);
+    assert_eq!(fake.pids().len(), 1);
+}
+
+#[tokio::test]
+async fn deleting_the_grant_while_the_manifest_warms_cannot_respawn_its_child() {
+    let (t, fake) = remux_setup(LIVE).await;
+    let g = t
+        .post("/api/iptv/stream/live/10/grant?client=avplayer")
+        .await;
+    let slot = g.json()["sessionId"].as_str().unwrap().to_string();
+    let req = Request::builder()
+        .uri(manifest_uri("10", "plex:42"))
+        .header(header::AUTHORIZATION, bearer("plex:42", "admin"))
+        .body(Body::empty())
+        .unwrap();
+    let warming = tokio::spawn(t.app.clone().oneshot(req));
+    until("the first dial", || fake.pids().len() == 1).await;
+    let d = t
+        .call(
+            "DELETE",
+            &format!("/api/iptv/sessions/{slot}"),
+            ("plex:42", "admin"),
+            &[],
+        )
+        .await;
+    assert_eq!(d.status, StatusCode::OK);
+    let res = tokio::time::timeout(Duration::from_secs(2), warming)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::GONE);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(fake.pids().len(), 1);
+}

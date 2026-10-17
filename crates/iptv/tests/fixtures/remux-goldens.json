@@ -1,0 +1,174 @@
+{
+  "drops_the_pre_segment_discontinuity": [
+    {
+      "text": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-DISCONTINUITY\n#EXTINF:2.069000,\nseg_00000.ts\n#EXTINF:2.502000,\nseg_00001.ts\n",
+      "streamId": "42",
+      "sessionId": "sess",
+      "sub": "subA",
+      "cache": null,
+      "out": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.069000,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00000.ts%231)\n#EXTINF:2.502000,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00001.ts%232)\n",
+      "cacheKeys": null
+    }
+  ],
+  "stable_seg_urls_across_polls": [
+    {
+      "text": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-DISCONTINUITY\n#EXTINF:2.069000,\nseg_00000.ts\n#EXTINF:2.502000,\nseg_00001.ts\n",
+      "streamId": "42",
+      "sessionId": "sess",
+      "sub": "subA",
+      "cache": "a",
+      "out": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.069000,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00000.ts%231)\n#EXTINF:2.502000,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00001.ts%232)\n",
+      "cacheKeys": [
+        "seg_00000.ts",
+        "seg_00001.ts"
+      ]
+    },
+    {
+      "text": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-DISCONTINUITY\n#EXTINF:2.069000,\nseg_00000.ts\n#EXTINF:2.502000,\nseg_00001.ts\n",
+      "streamId": "42",
+      "sessionId": "sess",
+      "sub": "subA",
+      "cache": "a",
+      "out": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.069000,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00000.ts%231)\n#EXTINF:2.502000,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00001.ts%232)\n",
+      "cacheKeys": [
+        "seg_00000.ts",
+        "seg_00001.ts"
+      ]
+    },
+    {
+      "text": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-DISCONTINUITY\n#EXTINF:2.069000,\nseg_00000.ts\n#EXTINF:2.502000,\nseg_00001.ts\n",
+      "streamId": "42",
+      "sessionId": "sess",
+      "sub": "subA",
+      "cache": null,
+      "out": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.069000,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00000.ts%233)\n#EXTINF:2.502000,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00001.ts%234)\n",
+      "cacheKeys": null
+    },
+    {
+      "text": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-DISCONTINUITY\n#EXTINF:2.069000,\nseg_00000.ts\n#EXTINF:2.502000,\nseg_00001.ts\n",
+      "streamId": "42",
+      "sessionId": "sess",
+      "sub": "subA",
+      "cache": null,
+      "out": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.069000,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00000.ts%235)\n#EXTINF:2.502000,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00001.ts%236)\n",
+      "cacheKeys": null
+    }
+  ],
+  "prunes_rolled_off_segments": [
+    {
+      "text": "#EXTINF:2.0,\nseg_00000.ts\n#EXTINF:2.0,\nseg_00001.ts\n",
+      "streamId": "42",
+      "sessionId": "sess",
+      "sub": "subA",
+      "cache": "a",
+      "out": "#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00000.ts%231)\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00001.ts%232)\n",
+      "cacheKeys": [
+        "seg_00000.ts",
+        "seg_00001.ts"
+      ]
+    },
+    {
+      "text": "#EXTINF:2.0,\nseg_00001.ts\n#EXTINF:2.0,\nseg_00002.ts\n",
+      "streamId": "42",
+      "sessionId": "sess",
+      "sub": "subA",
+      "cache": "a",
+      "out": "#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00001.ts%232)\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00002.ts%233)\n",
+      "cacheKeys": [
+        "seg_00001.ts",
+        "seg_00002.ts"
+      ]
+    }
+  ],
+  "keeps_a_mid_stream_discontinuity": [
+    {
+      "text": "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:2.0,\nseg_00010.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:2.0,\nseg_00011.ts\n",
+      "streamId": "42",
+      "sessionId": "sess",
+      "sub": "subA",
+      "cache": null,
+      "out": "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00010.ts%231)\n#EXT-X-DISCONTINUITY\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess%2Fseg_00011.ts%232)\n",
+      "cacheKeys": null
+    }
+  ],
+  "passes_through_unknown_lines": [
+    {
+      "text": "#EXTINF:2.0,\nseg_00000.ts\nnot-a-segment.bin\n",
+      "streamId": "7",
+      "sessionId": "s",
+      "sub": "u",
+      "cache": null,
+      "out": "#EXTINF:2.0,\n/api/iptv/stream/live/7/remux/seg?t=TOK(s%2Fseg_00000.ts%231)\nnot-a-segment.bin\n",
+      "cacheKeys": null
+    }
+  ],
+  "steady_state": [
+    {
+      "text": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:2.0,\nseg_00010.ts\n#EXTINF:2.0,\nseg_00011.ts\n#EXTINF:2.0,\nseg_00012.ts\n",
+      "streamId": "42",
+      "sessionId": "sess-A",
+      "sub": "subZ",
+      "cache": null,
+      "out": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:10\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-A%2Fseg_00010.ts%231)\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-A%2Fseg_00011.ts%232)\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-A%2Fseg_00012.ts%233)\n",
+      "cacheKeys": null
+    },
+    {
+      "text": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:11\n#EXTINF:2.0,\nseg_00011.ts\n#EXTINF:2.0,\nseg_00012.ts\n#EXTINF:2.0,\nseg_00013.ts\n",
+      "streamId": "42",
+      "sessionId": "sess-A",
+      "sub": "subZ",
+      "cache": null,
+      "out": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:11\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-A%2Fseg_00011.ts%234)\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-A%2Fseg_00012.ts%235)\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-A%2Fseg_00013.ts%236)\n",
+      "cacheKeys": null
+    }
+  ],
+  "swap_continuity": [
+    {
+      "text": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:12\n#EXTINF:2.0,\nseg_00012.ts\n#EXTINF:2.0,\nseg_00013.ts\n#EXTINF:2.0,\nseg_00014.ts\n",
+      "streamId": "42",
+      "sessionId": "sess-A",
+      "sub": "subZ",
+      "cache": null,
+      "out": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:12\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-A%2Fseg_00012.ts%231)\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-A%2Fseg_00013.ts%232)\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-A%2Fseg_00014.ts%233)\n",
+      "cacheKeys": null
+    },
+    {
+      "text": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:2.0,\nseg_00000.ts\n#EXTINF:2.0,\nseg_00001.ts\n#EXTINF:2.0,\nseg_00002.ts\n",
+      "streamId": "42",
+      "sessionId": "sess-B",
+      "sub": "subZ",
+      "cache": null,
+      "out": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:15\n#EXT-X-DISCONTINUITY-SEQUENCE:1\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-B%2Fseg_00000.ts%234)\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-B%2Fseg_00001.ts%235)\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-B%2Fseg_00002.ts%236)\n",
+      "cacheKeys": null
+    },
+    {
+      "text": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2.0,\nseg_00001.ts\n#EXTINF:2.0,\nseg_00002.ts\n#EXTINF:2.0,\nseg_00003.ts\n",
+      "streamId": "42",
+      "sessionId": "sess-B",
+      "sub": "subZ",
+      "cache": null,
+      "out": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:16\n#EXT-X-DISCONTINUITY-SEQUENCE:1\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-B%2Fseg_00001.ts%237)\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-B%2Fseg_00002.ts%238)\n#EXTINF:2.0,\n/api/iptv/stream/live/42/remux/seg?t=TOK(sess-B%2Fseg_00003.ts%239)\n",
+      "cacheKeys": null
+    }
+  ],
+  "swap_without_a_sequence_header": [
+    {
+      "text": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:5\n#EXTINF:2.0,\nseg_00005.ts\n#EXTINF:2.0,\nseg_00006.ts\n",
+      "streamId": "9",
+      "sessionId": "sess-A",
+      "sub": "u",
+      "cache": null,
+      "out": "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:3\n#EXT-X-MEDIA-SEQUENCE:5\n#EXTINF:2.0,\n/api/iptv/stream/live/9/remux/seg?t=TOK(sess-A%2Fseg_00005.ts%231)\n#EXTINF:2.0,\n/api/iptv/stream/live/9/remux/seg?t=TOK(sess-A%2Fseg_00006.ts%232)\n",
+      "cacheKeys": null
+    },
+    {
+      "text": "#EXTM3U\n#EXTINF:2.0,\nseg_00000.ts\r\n#EXTINF:2.0,\nseg_00001.ts\n",
+      "streamId": "9",
+      "sessionId": "sess-B",
+      "sub": "u",
+      "cache": null,
+      "out": "#EXTM3U\n#EXTINF:2.0,\n#EXT-X-MEDIA-SEQUENCE:7\n#EXT-X-DISCONTINUITY-SEQUENCE:1\n/api/iptv/stream/live/9/remux/seg?t=TOK(sess-B%2Fseg_00000.ts%233)\n#EXTINF:2.0,\n/api/iptv/stream/live/9/remux/seg?t=TOK(sess-B%2Fseg_00001.ts%234)\n",
+      "cacheKeys": null
+    }
+  ]
+}

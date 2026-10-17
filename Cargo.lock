@@ -1319,6 +1319,7 @@ dependencies = [
  "emerald-contracts",
  "flate2",
  "futures-util",
+ "libc",
  "media-core",
  "memchr",
  "quick-xml 0.42.0",

@@ -10,7 +10,7 @@
 #![allow(clippy::result_large_err)]
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,8 +30,11 @@ use tokio_util::sync::CancellationToken;
 use crate::api::{AppState, Claims, Params, js_date, param};
 use crate::concurrency::{Acquire, Kind, Limit, Session, Tracker};
 use crate::config::Config;
+use crate::egress::Egress;
 use crate::hls::{self, Owner, Rewrite, internal, is_word_id, json_error, upstream_status};
 use crate::playlist;
+use crate::remux::Remux;
+use crate::remux_map::{self, EnsureOpts, LiveMap};
 use crate::siblings::sibling_feeds;
 use crate::xtream::{self, Creds, fetch_guarded};
 
@@ -57,12 +60,10 @@ const DRAIN_WAIT: Duration = Duration::from_secs(6);
 const REDACTED: &str = "another household member";
 
 pub struct Streams {
-    pub tracker: Tracker,
-    pub dead: DeadFeeds,
-    /// Provider sockets held outside the tracker's live kind (remux children,
-    /// children still draining, feed-check captures). The remux and feed-check
-    /// slices count them; the raw live route waits on the total.
-    pub children: AtomicUsize,
+    pub tracker: Arc<Tracker>,
+    pub dead: Arc<DeadFeeds>,
+    /// The AVPlayer live remux: ffmpeg children and the (channel, viewer) index.
+    pub live: LiveMap,
     /// No redirects followed (each hop is guarded by hand), the provider UA.
     pub http: reqwest::Client,
     leases: Mutex<HashMap<String, Lease>>,
@@ -79,11 +80,20 @@ struct Lease {
 }
 
 impl Streams {
+    /// Needs a tokio runtime: it binds the ffmpeg egress proxy and starts
+    /// the remux idle reaper.
     pub fn new(config: &Config) -> Self {
+        let tracker = Arc::new(Tracker::new(
+            config.iptv_max_concurrent_streams as usize,
+            IDLE_MS,
+        ));
+        let dead = Arc::new(DeadFeeds::default());
+        let egress = Egress::start(&config.xtream_host);
+        let remux = Remux::new(config, tracker.clone(), dead.clone(), egress);
         Streams {
-            tracker: Tracker::new(config.iptv_max_concurrent_streams as usize, IDLE_MS),
-            dead: DeadFeeds::default(),
-            children: AtomicUsize::new(0),
+            live: LiveMap::new(remux, config),
+            tracker,
+            dead,
             http: reqwest::Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
                 .user_agent(UPSTREAM_USER_AGENT)
@@ -98,7 +108,7 @@ impl Streams {
 
     /// Provider connections right now; this is what the upstream cap bounds.
     pub fn live_upstream_count(&self) -> usize {
-        self.tracker.live_count() + self.children.load(Ordering::SeqCst)
+        self.live.remux.live_upstream_count()
     }
 
     /// One physical byte proxy per viewer/channel: publish the new owner, then
@@ -282,6 +292,11 @@ pub(crate) fn routes() -> Router<AppState> {
         .route("/api/iptv/stream/vod/{id}/grant", post(vod_grant))
         .route("/api/iptv/stream/series/{id}/grant", post(series_grant))
         .route("/api/iptv/stream/live/{file}", get(live_ts))
+        .route(
+            "/api/iptv/stream/live/{id}/remux/index.m3u8",
+            get(remux_manifest),
+        )
+        .route("/api/iptv/stream/live/{id}/remux/seg", get(remux_seg))
         .route(
             "/api/iptv/stream/catchup/{id}/{start}/{file}",
             get(catchup_ts),
@@ -711,8 +726,17 @@ async fn release_session(
         );
     }
     s.streams.tracker.release(&id);
-    if target.kind == Kind::Live {
-        s.streams.stop_raw_live(&target.sub, &target.resource_id);
+    match target.kind {
+        Kind::Live => s.streams.stop_raw_live(&target.sub, &target.resource_id),
+        // The remux child holds a provider connection: stop it now, not at
+        // the idle reap.
+        Kind::Remux => {
+            let live = &s.streams.live;
+            if let Some(e) = live.get_active(&target.resource_id, &target.sub) {
+                live.forget(&target.resource_id, &target.sub, &e.session_id);
+            }
+        }
+        _ => {}
     }
     axum::Json(json!({ "ok": true, "released": id })).into_response()
 }
@@ -763,6 +787,9 @@ async fn live_grant(
         // Admission replaced the caller's live reservations; only now stop
         // the old renderers, so a failed admission keeps existing playback.
         s.streams.stop_other_raw_lives(&sub, None);
+        s.streams
+            .live
+            .drop_others(&sub, if remux { id.as_str() } else { "" });
     }
     let ttl = s.config.iptv_live_token_ttl_secs as i64;
     let secret = &s.config.stream_token_secret;
@@ -1340,6 +1367,172 @@ async fn on_demand_bytes(
             }
         }
     }
+}
+
+/// Starting window the first manifest response waits for.
+const START_SEGMENTS: usize = 4;
+/// Well inside the client's 25 s readiness watchdog; a cold HEVC probe (10M
+/// analyzeduration) can push the first segment past 8 s.
+const MANIFEST_WAIT: Duration = Duration::from_secs(15);
+
+/// 503 for a missing session: terminal when every candidate feed is dead,
+/// otherwise a transient warming retry (re-dialing here is the churn that
+/// trips the provider's abuse block, so the throttle decides).
+fn remux_unavailable(live: &LiveMap, candidates: &[String]) -> Response {
+    if live.is_offline(candidates) {
+        return json_error(StatusCode::SERVICE_UNAVAILABLE, "channel_offline_upstream");
+    }
+    with_headers(
+        json_error(StatusCode::SERVICE_UNAVAILABLE, "remux_warming"),
+        &[(header::RETRY_AFTER, "3")],
+    )
+}
+
+/// The AVPlayer live playlist: ensure the viewer's remux session, wait for a
+/// small starting window, and serve it rewritten to signed segment URLs.
+async fn remux_manifest(
+    State(s): State<AppState>,
+    claims: Claims,
+    Path(id): Path<String>,
+    Query(q): Params,
+) -> Response {
+    if !is_digits(&id) {
+        return json_error(StatusCode::BAD_REQUEST, "invalid_id");
+    }
+    let token = param(&q, "t").unwrap_or("");
+    let (sub, _) = match check_token(&s, &claims, token, StreamKind::Remux, Some(&id)) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let tracker = &s.streams.tracker;
+    // Every poll keeps the grant's slot alive; a released slot never reopens.
+    if !tracker.heartbeat_by_resource(&sub, Kind::Remux, &id) {
+        return json_error(StatusCode::GONE, "session_gone");
+    }
+    let Some(reservation) = tracker.find(&sub, Kind::Remux, &id) else {
+        return json_error(StatusCode::GONE, "session_gone");
+    };
+    let owns = || tracker.has(&reservation.session_id);
+    let creds = match creds(&s) {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let url_for = |sid: &str| {
+        format!(
+            "{}/live/{}/{}/{sid}.ts",
+            creds.host,
+            encode_uri_component(&creds.username),
+            encode_uri_component(&creds.password)
+        )
+    };
+    // Itself first, then siblings; dead placeholders are skipped.
+    let candidates = match sibling_feeds(&s.pool, &id).await {
+        Ok(c) => c,
+        Err(e) => return internal(&e.to_string()),
+    };
+    let opts = EnsureOpts {
+        stream_id: &id,
+        sub: &sub,
+        feeds: &candidates,
+        url_for: &url_for,
+    };
+    let live = &s.streams.live;
+    // The viewer's other channels were freed at grant time, not here: on this
+    // hot path two overlapping sessions of one sub would kill each other.
+    let mut entry = match live.ensure(&opts, Instant::now()) {
+        Ok(Some(e)) => e,
+        Ok(None) => return remux_unavailable(live, &candidates),
+        Err(e) => return internal(&e),
+    };
+    live.remux.heartbeat(&entry.session_id);
+    let deadline = Instant::now() + MANIFEST_WAIT;
+    while !remux_map::manifest_ready(&entry.manifest_path, START_SEGMENTS)
+        && Instant::now() < deadline
+    {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        if !owns() {
+            return json_error(StatusCode::GONE, "session_gone");
+        }
+        // A copy session that found non-H.264 input kills itself; re-ensure so
+        // it respawns as a re-encode within this request. None = cooldown.
+        match live.ensure(&opts, Instant::now()) {
+            Ok(Some(e)) => entry = e,
+            Ok(None) => break,
+            Err(e) => return internal(&e),
+        }
+        live.remux.heartbeat(&entry.session_id);
+    }
+    // A slow channel serves what it has; only a missing manifest is a retry,
+    // and the session is left running (forgetting it feeds respawn churn).
+    let text = match tokio::fs::read_to_string(&entry.manifest_path).await {
+        Ok(t) => t,
+        Err(_) => return remux_unavailable(live, &candidates),
+    };
+    if !owns() {
+        return json_error(StatusCode::GONE, "session_gone");
+    }
+    // The wait may have outlived the token.
+    if let Err(r) = check_token(&s, &claims, token, StreamKind::Remux, Some(&id)) {
+        return r;
+    }
+    let body = live.rewrite(&text, &id, &entry.session_id, &sub);
+    with_headers(
+        Response::new(Body::from(body)),
+        &[
+            (header::CONTENT_TYPE, "application/vnd.apple.mpegurl"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+    )
+}
+
+/// One remux segment, bound by its token to a session of this viewer.
+async fn remux_seg(
+    State(s): State<AppState>,
+    claims: Claims,
+    Path(id): Path<String>,
+    Query(q): Params,
+) -> Response {
+    if !is_digits(&id) {
+        return json_error(StatusCode::BAD_REQUEST, "invalid_id");
+    }
+    let (sub, rid) = match check_token(
+        &s,
+        &claims,
+        param(&q, "t").unwrap_or(""),
+        StreamKind::Remux,
+        None,
+    ) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some((session_id, seg)) = remux_map::segment_resource(&rid) else {
+        return json_error(StatusCode::BAD_REQUEST, "bad_resource");
+    };
+    if !s
+        .streams
+        .tracker
+        .heartbeat_by_resource(&sub, Kind::Remux, &id)
+    {
+        return json_error(StatusCode::GONE, "session_gone");
+    }
+    let live = &s.streams.live;
+    let Some(entry) = live
+        .get_active(&id, &sub)
+        .filter(|e| e.session_id == session_id)
+    else {
+        return json_error(StatusCode::GONE, "session_gone");
+    };
+    let Ok(file) = tokio::fs::File::open(entry.dir.join(seg)).await else {
+        return json_error(StatusCode::NOT_FOUND, "segment_gone");
+    };
+    live.remux.heartbeat(&entry.session_id);
+    with_headers(
+        Response::new(Body::from_stream(tokio_util::io::ReaderStream::new(file))),
+        &[
+            (header::CONTENT_TYPE, "video/mp2t"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+    )
 }
 
 fn rewrite<'a>(s: &'a AppState, sub: &'a str) -> Rewrite<'a> {

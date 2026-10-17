@@ -38,9 +38,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = std::net::SocketAddr::new(ip, config.port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("iptv listening on http://{addr}");
+    let streams = state.streams.clone();
     axum::serve(listener, api::router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    // Stop every remux ffmpeg and wait (bounded) for them to exit.
+    streams
+        .live
+        .remux
+        .drain(std::time::Duration::from_secs(5))
+        .await;
     Ok(())
 }
 

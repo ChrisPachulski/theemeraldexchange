@@ -26,11 +26,14 @@ pub struct Egress {
 }
 
 impl Egress {
-    /// Bind 127.0.0.1:0 and serve. `trusted` is XTREAM_HOST. A failed bind is
-    /// logged and leaves the proxy absent.
-    pub async fn start(trusted: &str) -> Egress {
+    /// Bind 127.0.0.1:0 and serve (needs a tokio runtime). `trusted` is
+    /// XTREAM_HOST. A failed bind is logged and leaves the proxy absent.
+    pub fn start(trusted: &str) -> Egress {
         let trusted = Url::parse(trusted).ok().map(|u| authority(&u));
-        match TcpListener::bind("127.0.0.1:0").await {
+        let bound = std::net::TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.set_nonblocking(true).map(|_| l))
+            .and_then(TcpListener::from_std);
+        match bound {
             Ok(listener) => {
                 let addr = listener.local_addr().ok();
                 tokio::spawn(async move {
@@ -186,7 +189,7 @@ mod tests {
         let internal_hits = Arc::new(AtomicUsize::new(0));
         let provider = serve("stream", Arc::new(AtomicUsize::new(0))).await;
         let internal = serve("secret", internal_hits.clone()).await;
-        let egress = Egress::start(&format!("http://{provider}")).await;
+        let egress = Egress::start(&format!("http://{provider}"));
         let [flag, url] = egress.proxy_args().unwrap();
         assert_eq!(flag, "-http_proxy");
         let proxy = url.trim_start_matches("http://").to_string();
@@ -220,7 +223,7 @@ mod tests {
     #[tokio::test]
     async fn a_connect_tunnel_closes_the_client_when_the_upstream_closes() {
         let provider = serve("stream", Arc::new(AtomicUsize::new(0))).await;
-        let egress = Egress::start(&format!("http://{provider}")).await;
+        let egress = Egress::start(&format!("http://{provider}"));
         let proxy = egress.proxy_args().unwrap()[1]
             .trim_start_matches("http://")
             .to_string();

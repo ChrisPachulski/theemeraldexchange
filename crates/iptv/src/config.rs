@@ -53,6 +53,8 @@ pub struct Config {
     pub iptv_manifest_max_bytes: u64,
     pub iptv_sync_cron: String,
     pub iptv_remux_tmp_dir: String,
+    /// The ffmpeg the live remux spawns (tests point it at a stub).
+    pub iptv_ffmpeg_bin: String,
     pub iptv_reencode_preset: String,
     pub iptv_reencode_threads: u64,
     pub iptv_reencode_max_height: u64,
@@ -152,6 +154,7 @@ impl Config {
             iptv_manifest_max_bytes: pos("IPTV_MANIFEST_MAX_BYTES", 2 * 1024 * 1024)?,
             iptv_sync_cron: raw("IPTV_SYNC_CRON", "0 */6 * * *"),
             iptv_remux_tmp_dir: raw("IPTV_REMUX_TMP_DIR", "/tmp/iptv-remux"),
+            iptv_ffmpeg_bin: raw("IPTV_FFMPEG_BIN", "ffmpeg"),
             iptv_reencode_preset: raw("IPTV_REENCODE_PRESET", "veryfast"),
             iptv_reencode_threads: pos("IPTV_REENCODE_THREADS", 2)?,
             iptv_reencode_max_height: pos("IPTV_REENCODE_MAX_HEIGHT", 1080)?,

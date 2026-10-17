@@ -40,6 +40,10 @@ on:
       - "crates/transcoder/**"
       - "crates/media-core/**"
       - "crates/emerald-contracts/**"
+      # The iptv live remux's real-ffmpeg test rides the same job.
+      - "crates/iptv/src/remux.rs"
+      - "crates/iptv/src/remux/**"
+      - "crates/iptv/src/egress.rs"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/transcoder-ffmpeg.yml"
@@ -48,6 +52,10 @@ on:
       - "crates/transcoder/**"
       - "crates/media-core/**"
       - "crates/emerald-contracts/**"
+      # The iptv live remux's real-ffmpeg test rides the same job.
+      - "crates/iptv/src/remux.rs"
+      - "crates/iptv/src/remux/**"
+      - "crates/iptv/src/egress.rs"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/transcoder-ffmpeg.yml"
@@ -142,3 +150,6 @@ jobs:
           TRANSCODER_FFMPEG_BIN: /usr/bin/ffmpeg
           TRANSCODER_FFPROBE_BIN: /usr/bin/ffprobe
         run: cargo test -p transcoder --features requires-ffmpeg -- --nocapture
+
+      - name: Run the iptv live-remux real-ffmpeg test
+        run: cargo test -p iptv --features requires-ffmpeg -- real_ffmpeg --nocapture
