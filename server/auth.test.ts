@@ -958,6 +958,28 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
     expect(await r.json()).toEqual({ error: 'apple_not_configured' })
   })
 
+  // 2026-10-16 review item 11: omitting device_id skipped the nonce check, so
+  // a nonce-less identity token (replayed, or minted for another flow) bought
+  // a cookie session.
+  it('400s a browser sign-in that carries no nonce', async () => {
+    await withApple(async () => {
+      allowlist.set(APPLE_SUB, 'allowed')
+      let verified = false
+      appleVerifyImpl.fn = async () => {
+        verified = true
+        return { ok: true, sub: { raw: APPLE_SUB }, email: null } as never
+      }
+      const r = await app().request('/auth/apple', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identityToken: 'valid-apple-token' }),
+      })
+      expect(r.status).toBe(400)
+      expect(await r.json()).toEqual({ error: 'invalid_nonce' })
+      expect(verified).toBe(false)
+    })
+  })
+
   it('400s a missing identity token', async () => {
     await withApple(async () => {
       const r = await app().request('/auth/apple', {
@@ -975,7 +997,7 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
       const r = await app().request('/auth/apple', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identityToken: 'forged' }),
+        body: JSON.stringify({ nonce: 'n', identityToken: 'forged' }),
       })
       expect(r.status).toBe(401)
       const body = (await r.json()) as { error: string; reason: string }
@@ -994,7 +1016,7 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
         const r = await app().request('/auth/apple', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identityToken: 'valid-apple-token' }),
+          body: JSON.stringify({ nonce: 'n', identityToken: 'valid-apple-token' }),
         })
 
         expect(r.status).toBe(200)
@@ -1012,7 +1034,7 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
       const r = await app().request('/auth/apple', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identityToken: 'valid-apple-token' }),
+        body: JSON.stringify({ nonce: 'n', identityToken: 'valid-apple-token' }),
       })
       expect(r.status).toBe(503)
     })
@@ -1036,7 +1058,7 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
             'Content-Type': 'application/json',
             'cf-connecting-ip': `203.0.113.${i}`, // rotating, untrusted
           },
-          body: JSON.stringify({ identityToken: stuffedToken }),
+          body: JSON.stringify({ nonce: 'n', identityToken: stuffedToken }),
         })
         // Verifier rejects the forgery, but the limiter hasn't tripped yet.
         expect(r.status).toBe(401)
@@ -1044,7 +1066,7 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
       const limited = await a.request('/auth/apple', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': '203.0.113.250' },
-        body: JSON.stringify({ identityToken: stuffedToken }),
+        body: JSON.stringify({ nonce: 'n', identityToken: stuffedToken }),
       })
       expect(limited.status).toBe(429)
       expect(await limited.json()).toEqual({ error: 'rate_limited' })
@@ -1054,7 +1076,7 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
       const other = await a.request('/auth/apple', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identityToken: fakeJwt('009999.feedfacefeedfacefeedfacefeedface.1111') }),
+        body: JSON.stringify({ nonce: 'n', identityToken: fakeJwt('009999.feedfacefeedfacefeedfacefeedface.1111') }),
       })
       expect(other.status).toBe(401)
     })
@@ -1065,7 +1087,7 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
       const r = await app().request('/auth/apple', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identityToken: 'not-a-jwt-at-all' }),
+        body: JSON.stringify({ nonce: 'n', identityToken: 'not-a-jwt-at-all' }),
       })
       // No identity to key on → no identity bucket; the verifier rejects it.
       expect(r.status).toBe(401)
@@ -1078,7 +1100,7 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
       const r = await app().request('/auth/apple', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identityToken: 'valid-apple-token', inviteCode: 'APPLECODE' }),
+        body: JSON.stringify({ nonce: 'n', identityToken: 'valid-apple-token', inviteCode: 'APPLECODE' }),
       })
       expect(r.status).toBe(200)
       const body = (await r.json()) as { status: string; user: { sub: string; email?: string } }
@@ -1096,7 +1118,7 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
       const r = await app().request('/auth/apple', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identityToken: 'valid-apple-token' }),
+        body: JSON.stringify({ nonce: 'n', identityToken: 'valid-apple-token' }),
       })
       expect(r.status).toBe(200)
       expect(redeemSpy).not.toHaveBeenCalled()
@@ -1108,7 +1130,7 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
       const r = await app().request('/auth/apple', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identityToken: 'valid-apple-token' }),
+        body: JSON.stringify({ nonce: 'n', identityToken: 'valid-apple-token' }),
       })
       expect(r.status).toBe(403)
       expect(await r.json()).toEqual({ status: 'denied', reason: 'no_invite' })
@@ -1121,7 +1143,7 @@ describe('POST /auth/apple (Sign in with Apple)', () => {
       const r1 = await app().request('/auth/apple', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identityToken: 'valid-apple-token' }),
+        body: JSON.stringify({ nonce: 'n', identityToken: 'valid-apple-token' }),
       })
       const cookie = r1.headers.get('set-cookie')!.split(';')[0]
       const r2 = await app().request('/me', { headers: { Cookie: cookie } })
@@ -1329,7 +1351,7 @@ describe('structured browser login outcomes', () => {
           'Content-Type': 'application/json',
           'X-Request-Id': `${provider}-cookie-outcome`,
         },
-        body: JSON.stringify({ identityToken: token }),
+        body: JSON.stringify({ nonce: 'n', identityToken: token }),
       })
       expect(response.status).toBe(200)
       const lines = logs.lines()
@@ -1378,7 +1400,7 @@ describe('structured browser login outcomes', () => {
           'Content-Type': 'application/json',
           'X-Request-Id': `${provider}-verifier-error`,
         },
-        body: JSON.stringify({ identityToken: 'TOKEN-SECRET' }),
+        body: JSON.stringify({ nonce: 'n', identityToken: 'TOKEN-SECRET' }),
       })
       expect(response.status).toBe(500)
       const lines = logs.lines()
