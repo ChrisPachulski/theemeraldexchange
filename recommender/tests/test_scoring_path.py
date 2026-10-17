@@ -768,3 +768,20 @@ def test_optimizer_eval_ignores_live_engagement(conn, monkeypatch) -> None:
     monkeypatch.setattr(optimizer, "load_user_context", capture)
     optimizer.evaluate(conn, "ranker", {}, [{"sub": "plex:1", "kind": "movie", "library": [], "positives": [11]}])
     assert seen and 11 not in seen[0].liked_ids
+
+
+def test_featurize_rebuilds_every_vector_when_the_model_changes(conn) -> None:
+    # 2026-10-16 review item 31: features carried no model identity, so a model
+    # or revision change left old vectors in place beside new ones.
+    from workers import featurize
+
+    add_title(conn, 801, title="Old Vector", vec=axis_vec({1: 1.0}), genres=(35,))
+    def pending() -> set[int]:
+        return {r["tmdb_id"] for r in featurize._load_pending(conn, None)}
+
+    featurize._reconcile_model_identity(conn, "model-a@rev1")
+    assert 801 not in pending()
+    featurize._reconcile_model_identity(conn, "model-a@rev1")
+    assert 801 not in pending()
+    featurize._reconcile_model_identity(conn, "model-a@rev2")
+    assert 801 in pending()
