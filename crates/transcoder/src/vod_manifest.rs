@@ -196,6 +196,25 @@ pub(crate) fn copy_resume_base(
     (start_idx, base)
 }
 
+/// Source time where full-title copy segment `index` starts (segment 0 at 0),
+/// on the same cut grid as [`copy_resume_base`]; `None` past the last segment.
+pub(crate) fn copy_segment_start(
+    keyframes: &[f64],
+    total_duration_secs: f64,
+    index: u64,
+) -> Option<f64> {
+    if index == 0 {
+        return Some(0.0);
+    }
+    let cuts = copy_cut_points(
+        keyframes,
+        0.0,
+        total_duration_secs,
+        f64::from(HLS_SEGMENT_SECS),
+    );
+    cuts.get(usize::try_from(index - 1).ok()?).copied()
+}
+
 /// Build a complete VOD playlist for a COPY-remux session from the source's
 /// keyframe list — the analogue of [`synthesize`] for sessions that do NOT
 /// re-encode (HEVC→fMP4 / H264→TS), whose segments are cut at the source's own
