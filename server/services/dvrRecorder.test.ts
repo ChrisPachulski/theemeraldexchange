@@ -50,6 +50,12 @@ describe('buildRecordArgs', () => {
     expect(args[args.indexOf('-t') + 1]).toBe('1800')
     expect(args[args.length - 1]).toBe('/rec/r.ts')
   })
+  // 2026-10-16 review item 33: a resumed recording reuses <id>.ts, and ffmpeg
+  // under -nostdin refused the existing partial (exiting 0 all the same).
+  it('overwrites an existing partial file', () => {
+    const args = buildRecordArgs('https://x/42.ts', '/rec/r.ts', 60, ['-http_proxy', 'http://127.0.0.1:9'])
+    expect(args.slice(-2)).toEqual(['-y', '/rec/r.ts'])
+  })
   it('floors a tiny/zero duration up to at least 1s', () => {
     const a = buildRecordArgs('u', 'f', 0, ['-http_proxy', 'http://127.0.0.1:9'])
     expect(a[a.indexOf('-t') + 1]).toBe('1')

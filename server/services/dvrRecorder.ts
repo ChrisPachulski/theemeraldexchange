@@ -65,6 +65,9 @@ export function buildRecordArgs(
     'copy',
     '-f',
     'mpegts',
+    // A resumed recording re-captures into its fresh file (see tick). Without
+    // -y, ffmpeg under -nostdin refuses the existing partial and still exits 0.
+    '-y',
     filePath,
   ]
 }
