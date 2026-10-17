@@ -27,6 +27,10 @@ use serde::Serialize;
 const SNIFF_BUF_MAX: usize = 1_000_000;
 // A real programme is a few KB; text with no closing tag this long is hostile.
 const UNPARSED_MAX: usize = 64 * 1024 * 1024;
+// Text is parsed in batches this large so it can be split across threads.
+const PARALLEL_BATCH: usize = 8 * 1024 * 1024;
+// ponytail: fixed cap; the NAS has 6 threads and shares them with Plex.
+const MAX_THREADS: usize = 4;
 
 static CHANNEL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?s-u)<channel\b[^>]*\bid="([^"]+)"[^>]*>(.*?)</channel>"#).unwrap()
@@ -58,7 +62,7 @@ pub struct Batch {
 enum Input {
     Head(Vec<u8>),
     Plain,
-    Gzip(MultiGzDecoder<Vec<u8>>),
+    Gzip(Box<MultiGzDecoder<Vec<u8>>>),
 }
 
 pub struct Parser {
@@ -66,6 +70,12 @@ pub struct Parser {
     sniff: Option<Vec<u8>>,
     unparsed: Vec<u8>,
     first_fragment: bool,
+    machine: Machine,
+}
+
+/// The sax handlers' state: the open programme and the title/desc text.
+#[derive(Default, Clone)]
+struct Machine {
     cur: Option<Programme>,
     in_title: bool,
     in_desc: bool,
@@ -79,16 +89,13 @@ impl Parser {
             sniff: sniff_channels.then(Vec::new),
             unparsed: Vec::new(),
             first_fragment: true,
-            cur: None,
-            in_title: false,
-            in_desc: false,
-            text: String::new(),
+            machine: Machine::default(),
         }
     }
 
     pub fn push(&mut self, chunk: &[u8]) -> Result<Batch, String> {
         let mut batch = Batch::default();
-        let bytes = match &mut self.input {
+        match &mut self.input {
             Input::Head(head) => {
                 head.extend_from_slice(chunk);
                 if head.len() < 2 {
@@ -96,17 +103,21 @@ impl Parser {
                 }
                 let head = std::mem::take(head);
                 if head[..2] == [0x1f, 0x8b] {
-                    self.input = Input::Gzip(MultiGzDecoder::new(Vec::new()));
-                    self.gunzip(&head)?
+                    self.input = Input::Gzip(Box::new(MultiGzDecoder::new(Vec::new())));
+                    let bytes = self.gunzip(&head)?;
+                    self.feed(&bytes, false, &mut batch)?;
                 } else {
                     self.input = Input::Plain;
-                    head
+                    self.feed(&head, false, &mut batch)?;
                 }
             }
-            Input::Plain => chunk.to_vec(),
-            Input::Gzip(_) => self.gunzip(chunk)?,
-        };
-        self.feed(&bytes, false, &mut batch)?;
+            // Plain input is fed straight from the caller's buffer.
+            Input::Plain => self.feed(chunk, false, &mut batch)?,
+            Input::Gzip(_) => {
+                let bytes = self.gunzip(chunk)?;
+                self.feed(&bytes, false, &mut batch)?;
+            }
+        }
         Ok(batch)
     }
 
@@ -136,12 +147,20 @@ impl Parser {
             sniff_channels(buf, &mut batch.channels);
         }
         self.unparsed.extend_from_slice(bytes);
+        if !last && self.unparsed.len() < PARALLEL_BATCH {
+            return Ok(());
+        }
         let cut = if last {
             self.unparsed.len()
         } else {
-            let end =
-                |tag: &[u8]| memchr::memmem::rfind(&self.unparsed, tag).map(|i| i + tag.len());
-            match end(b"</programme>").max(end(b"</channel>")) {
+            // A </channel> that counts sits after the last </programme>, so
+            // only that tail is searched: the programme section has none, and
+            // a whole-buffer search for one ran on every push.
+            let programme = memchr::memmem::rfind(&self.unparsed, b"</programme>").map(|i| i + 12);
+            let tail = programme.unwrap_or(0);
+            let channel =
+                memchr::memmem::rfind(&self.unparsed[tail..], b"</channel>").map(|i| tail + i + 10);
+            match channel.or(programme) {
                 Some(cut) => cut,
                 None if self.unparsed.len() > UNPARSED_MAX => {
                     return Err("xmltv_element_too_large".into());
@@ -149,10 +168,83 @@ impl Parser {
                 None => return Ok(()),
             }
         };
-        let fragment = self.unparsed.drain(..cut).collect::<Vec<u8>>();
-        let fragment = String::from_utf8_lossy(&fragment);
-        let bom = std::mem::take(&mut self.first_fragment) && fragment.starts_with('\u{feff}');
-        self.parse(&fragment[if bom { 3 } else { 0 }..], &mut batch.programmes)
+        // Parse in place, then drop what was parsed (no copy of the fragment).
+        let mut unparsed = std::mem::take(&mut self.unparsed);
+        let mut fragment = &unparsed[..cut];
+        if std::mem::take(&mut self.first_fragment) {
+            fragment = fragment.strip_prefix(b"\xef\xbb\xbf").unwrap_or(fragment);
+        }
+        let parsed = self.machine.parse_split(fragment, &mut batch.programmes);
+        unparsed.drain(..cut);
+        self.unparsed = unparsed;
+        parsed
+    }
+}
+
+impl Machine {
+    /// Parse `text`, split at programme boundaries across threads when it is
+    /// large. Each piece starts from a clean state, which is what the serial
+    /// parse has after a </programme>; if a piece does not end clean (a
+    /// malformed feed left a title open across a programme), the whole text
+    /// is parsed serially instead, so the output never differs.
+    /// Pieces split right after an ASCII '>', so each is decoded on its own
+    /// thread with the same result as decoding the whole.
+    fn parse_split(&mut self, text: &[u8], out: &mut Vec<Programme>) -> Result<(), String> {
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(MAX_THREADS);
+        let pieces = split_at_programme_ends(text, threads);
+        if pieces.len() < 2 {
+            return self.parse_bytes(text, out);
+        }
+        let first = self.clone();
+        let results: Vec<(Machine, Result<Vec<Programme>, String>)> = std::thread::scope(|s| {
+            let handles: Vec<_> = pieces
+                .iter()
+                .enumerate()
+                .map(|(i, piece)| {
+                    let mut m = if i == 0 {
+                        first.clone()
+                    } else {
+                        Machine::default()
+                    };
+                    s.spawn(move || {
+                        let mut progs = Vec::new();
+                        let r = m.parse_bytes(piece, &mut progs).map(|()| progs);
+                        (m, r)
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("xmltv worker panicked"))
+                .collect()
+        });
+        let clean = results[..results.len() - 1]
+            .iter()
+            .all(|(m, r)| r.is_err() || m.is_clean());
+        if !clean {
+            return self.parse_bytes(text, out);
+        }
+        let mut end = Machine::default();
+        for (m, r) in results {
+            out.extend(r?);
+            end = m;
+        }
+        *self = end;
+        Ok(())
+    }
+
+    // The strict check is the fast path; lossy only for a feed with bad bytes.
+    fn parse_bytes(&mut self, bytes: &[u8], out: &mut Vec<Programme>) -> Result<(), String> {
+        match std::str::from_utf8(bytes) {
+            Ok(text) => self.parse(text, out),
+            Err(_) => self.parse(&String::from_utf8_lossy(bytes), out),
+        }
+    }
+
+    fn is_clean(&self) -> bool {
+        self.cur.is_none() && !self.in_title && !self.in_desc
     }
 
     fn parse(&mut self, fragment: &str, out: &mut Vec<Programme>) -> Result<(), String> {
@@ -213,31 +305,32 @@ impl Parser {
     fn open(&mut self, e: &BytesStart) -> Result<(), String> {
         let name = e.name();
         let programme = name.as_ref() == "programme";
-        // Every attribute is unescaped, as sax did, so a bad entity anywhere fails.
-        let mut attrs: Vec<(String, String)> = Vec::new();
+        // Every attribute is unescaped, as sax did, so a bad entity anywhere
+        // fails. Only the three a programme uses are kept, and a repeated one
+        // overwrites the earlier, as in sax's attribute object.
+        let (mut start, mut stop, mut channel) = (None, None, None);
         for a in e.attributes().with_checks(false) {
             let a = a.map_err(|e| format!("xmltv_parse:{e}"))?;
             let value = unescape(&a.value).map_err(|e| format!("xmltv_parse:{e}"))?;
             if programme {
-                attrs.push((a.key.as_ref().to_owned(), value.into_owned()));
+                let slot = match a.key.as_ref() {
+                    "start" => &mut start,
+                    "stop" => &mut stop,
+                    "channel" => &mut channel,
+                    _ => continue,
+                };
+                *slot = Some(value.into_owned());
             }
         }
-        // A repeated attribute overwrote the earlier one in sax's attribute object.
-        let attr = |key: &str| {
-            attrs
-                .iter()
-                .rev()
-                .find(|(k, _)| k == key)
-                .map(|(_, v)| v.as_str())
-        };
         match name.as_ref() {
             "programme" => {
                 self.cur = match (
-                    attr("start").and_then(xmltv_time_to_iso),
-                    attr("stop").and_then(xmltv_time_to_iso),
+                    start.as_deref().and_then(xmltv_time_to_iso),
+                    stop.as_deref().and_then(xmltv_time_to_iso),
                 ) {
                     (Some(start_utc), Some(stop_utc)) => Some(Programme {
-                        channel_id: attr("channel")
+                        channel_id: channel
+                            .as_deref()
                             .map(normalize_epg_channel_id)
                             .unwrap_or_default(),
                         start_utc,
@@ -297,6 +390,26 @@ fn push_ref(node: &mut String, r: &BytesRef) -> Result<(), String> {
     Ok(())
 }
 
+/// `text` cut into up to `n` pieces of similar size, each ending just after a
+/// `</programme>` (the last takes the rest).
+fn split_at_programme_ends(text: &[u8], n: usize) -> Vec<&[u8]> {
+    let mut pieces = Vec::with_capacity(n);
+    let mut start = 0;
+    for k in 1..n {
+        let target = (text.len() * k / n).max(start);
+        match memchr::memmem::find(&text[target..], b"</programme>") {
+            Some(i) => {
+                let end = target + i + 12;
+                pieces.push(&text[start..end]);
+                start = end;
+            }
+            None => break,
+        }
+    }
+    pieces.push(&text[start..]);
+    pieces
+}
+
 /// Emit every complete <channel> block in `buf`, then drop all but a trailing
 /// partial one (or a short carry for a tag split across chunks).
 fn sniff_channels(buf: &mut Vec<u8>, out: &mut Vec<ChannelDef>) {
@@ -318,7 +431,9 @@ fn sniff_channels(buf: &mut Vec<u8>, out: &mut Vec<ChannelDef>) {
         last_end = m.get(0).unwrap().end();
     }
     buf.drain(..last_end);
-    match memchr::memmem::rfind(buf, b"<channel") {
+    // The last "<channel", found with the forward (SIMD) searcher: the reverse
+    // one scanned every pushed chunk of the programme section, which has none.
+    match memchr::memmem::find_iter(buf, b"<channel").last() {
         None => {
             let keep = buf.len().saturating_sub(16);
             buf.drain(..keep);
@@ -384,17 +499,37 @@ pub fn xmltv_time_to_iso(s: &str) -> Option<String> {
         days * 86_400 + num(8..10) * 3600 + num(10..12) * 60 + num(12..14) - sign * offset_min * 60;
     let (y, m, d) = civil_from_days(secs.div_euclid(86_400));
     let t = secs.rem_euclid(86_400);
-    let year = if (0..=9999).contains(&y) {
-        format!("{y:04}")
+    // Digits written directly: format! was a tenth of the parse.
+    let mut out = String::with_capacity(27);
+    if (0..=9999).contains(&y) {
+        push_digits(&mut out, y, 4);
     } else {
-        format!("{}{:06}", if y < 0 { '-' } else { '+' }, y.abs())
-    };
-    Some(format!(
-        "{year}-{m:02}-{d:02}T{:02}:{:02}:{:02}.000Z",
-        t / 3600,
-        t % 3600 / 60,
-        t % 60
-    ))
+        out.push(if y < 0 { '-' } else { '+' });
+        push_digits(&mut out, y.abs(), 6);
+    }
+    for (sep, value) in [
+        ('-', m),
+        ('-', d),
+        ('T', t / 3600),
+        (':', t % 3600 / 60),
+        (':', t % 60),
+    ] {
+        out.push(sep);
+        push_digits(&mut out, value, 2);
+    }
+    out.push_str(".000Z");
+    Some(out)
+}
+
+/// `value` zero-padded to `width` digits (wider values keep every digit).
+fn push_digits(out: &mut String, value: i64, width: u32) {
+    let digits = value.checked_ilog10().unwrap_or(0) + 1;
+    for _ in digits..width {
+        out.push('0');
+    }
+    for i in (0..digits).rev() {
+        out.push(char::from(b'0' + (value / 10_i64.pow(i) % 10) as u8));
+    }
 }
 
 // Howard Hinnant's civil-date algorithms (proleptic Gregorian, day 0 = 1970-01-01).
@@ -530,6 +665,89 @@ mod tests {
         );
     }
 
+    fn big_feed(n: usize, break_at: Option<usize>) -> String {
+        let mut s = String::from("<tv>");
+        for i in 0..n {
+            let title = if Some(i) == break_at {
+                // A title left open across the programme end: state carries
+                // over, and the next programme's bare </title> closes it.
+                "<title>open".to_string()
+            } else if break_at.is_some_and(|b| i == b + 1) {
+                "carry</title>".to_string()
+            } else {
+                format!("<title>Show {i} &amp; more</title>")
+            };
+            s.push_str(&format!(
+                "<programme channel=\"ch{}.us\" start=\"20261016{:02}0000 +0000\" stop=\"20261016{:02}3000 +0000\">{title}<desc>  Episode\n {i}  </desc></programme>\n",
+                i % 97,
+                i % 24,
+                i % 24
+            ));
+        }
+        s.push_str("</tv>");
+        s
+    }
+
+    fn serial(text: &str) -> Result<Vec<Programme>, String> {
+        let mut out = Vec::new();
+        Machine::default().parse(text, &mut out).map(|()| out)
+    }
+
+    fn split(text: &str) -> Result<Vec<Programme>, String> {
+        let mut out = Vec::new();
+        Machine::default()
+            .parse_split(text.as_bytes(), &mut out)
+            .map(|()| out)
+    }
+
+    #[test]
+    fn parallel_parse_matches_serial() {
+        let feed = big_feed(40_000, None);
+        assert!(split_at_programme_ends(feed.as_bytes(), 4).len() == 4);
+        assert_eq!(split(&feed).unwrap(), serial(&feed).unwrap());
+        // A piece that ends mid-title falls back to the serial parse: put the
+        // open title at each programme near the first split, check the naive
+        // per-piece parse really differs at least once, and that the split
+        // parse never does.
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(MAX_THREADS);
+        let first_piece = memchr::memmem::find_iter(
+            split_at_programme_ends(feed.as_bytes(), threads)[0],
+            b"</programme>",
+        )
+        .count();
+        let mut naive_differed = false;
+        for k in first_piece.saturating_sub(3)..first_piece + 3 {
+            let broken = big_feed(40_000, Some(k));
+            let naive: Vec<Programme> = split_at_programme_ends(broken.as_bytes(), threads)
+                .iter()
+                .flat_map(|p| serial(std::str::from_utf8(p).unwrap()).unwrap())
+                .collect();
+            naive_differed |= naive != serial(&broken).unwrap();
+            assert_eq!(
+                split(&broken).unwrap(),
+                serial(&broken).unwrap(),
+                "open title at {k}"
+            );
+        }
+        assert!(
+            threads < 2 || naive_differed,
+            "no case exercised the serial fallback"
+        );
+        // An error in a later piece still fails the whole parse.
+        let bad = big_feed(40_000, None).replacen("Show 30000 &amp;", "Show 30000 &", 1);
+        assert!(split(&bad).is_err() && serial(&bad).is_err());
+    }
+
+    #[test]
+    fn large_feed_through_push_matches_one_serial_parse() {
+        let feed = big_feed(150_000, None);
+        assert!(feed.len() > PARALLEL_BATCH);
+        let (progs, _) = run(feed.as_bytes(), 64 * 1024);
+        assert_eq!(progs, serial(&feed).unwrap());
+    }
+
     #[test]
     fn times_follow_date_utc() {
         let t = |s| xmltv_time_to_iso(s);
@@ -557,8 +775,56 @@ mod tests {
             t("00991016000000 +0000").as_deref(),
             Some("1999-10-16T00:00:00.000Z")
         );
+        assert_eq!(
+            t("99991231230000 -0200").as_deref(),
+            Some("+010000-01-01T01:00:00.000Z")
+        );
+        assert_eq!(
+            t("20260101000000 +0001").as_deref(),
+            Some("2025-12-31T23:59:00.000Z")
+        );
         assert_eq!(t("20261016123000"), None);
         assert_eq!(t("2026101612300 +0000"), None);
         assert_eq!(t("20261016123000 0000"), None);
+    }
+}
+
+/// Release-mode timing on a real feed, kept out of the normal run:
+/// `XMLTV_BENCH=<feed> cargo test --release -p emerald-contracts-napi --lib xmltv_bench -- --ignored --nocapture`
+#[cfg(test)]
+mod bench {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    #[ignore]
+    fn xmltv_bench() {
+        let path = std::env::var("XMLTV_BENCH").expect("XMLTV_BENCH=<feed path>");
+        let bytes = std::fs::read(&path).unwrap();
+        for _ in 0..3 {
+            let (mut parse, mut json) = (Duration::ZERO, Duration::ZERO);
+            let (mut progs, mut chans, mut json_bytes) = (0, 0, 0);
+            let mut p = Parser::new(std::env::var("XMLTV_BENCH_NO_SNIFF").is_err());
+            let mut account = |b: Batch, parse_t: Duration| {
+                parse += parse_t;
+                progs += b.programmes.len();
+                chans += b.channels.len();
+                let t = Instant::now();
+                json_bytes += serde_json::to_string(&b).unwrap().len();
+                json += t.elapsed();
+            };
+            for c in bytes.chunks(64 * 1024) {
+                let t = Instant::now();
+                let b = p.push(c).unwrap();
+                account(b, t.elapsed());
+            }
+            let t = Instant::now();
+            let b = p.finish().unwrap();
+            account(b, t.elapsed());
+            eprintln!(
+                "{path}: parse {parse:.2?} json {json:.2?} | {progs} programmes {chans} channels {} MB json",
+                json_bytes / 1_000_000
+            );
+        }
     }
 }
