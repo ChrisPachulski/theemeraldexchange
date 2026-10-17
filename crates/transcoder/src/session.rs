@@ -191,6 +191,10 @@ struct Session {
     /// the segment/keyframe grid, so coalescing compares this one: an
     /// identical off-grid resume grant must match its own session.
     requested_start_secs: u64,
+    /// First segment of each child a crash respawn appended to the playlist.
+    /// Their timestamps restart, so the synthesized VOD manifest marks each
+    /// with #EXT-X-DISCONTINUITY. A seek clears the dir and this list.
+    crash_junctions: Vec<u64>,
     /// First segment number (`-start_number`) of the CURRENT ffmpeg child.
     /// 0 for the initial spawn; each respawn advances it past the furthest
     /// segment already written so numbering stays monotonic for the session's
@@ -642,6 +646,42 @@ fn effective_restart_count(prev: u32, ran_for: Duration) -> u32 {
 /// Pure so the math is unit-testable without a real crash.
 fn crash_resume_secs(spawn_secs: u64, prev_number: u64, next_number: u64) -> u64 {
     spawn_secs + next_number.saturating_sub(prev_number) * u64::from(crate::args::HLS_SEGMENT_SECS)
+}
+
+/// Where a crash respawn resumes: `(start_number argument, first new segment)`.
+/// What the dead child finished is the timeline the new child continues, and
+/// a player behind the encoder frontier still needs it, so it stays and the
+/// new child appends (`append_list`, which also writes the seam's
+/// #EXT-X-DISCONTINUITY). ffmpeg lists a segment only once it is complete, so
+/// any newer segment file is half-written and is removed. An appending ffmpeg
+/// numbers from `-start_number` plus the segments it parsed (checked against
+/// ffmpeg 7.1), so the argument is the first listed segment.
+async fn crash_resume(dir: &PathBuf, prev_number: u64, id: &str) -> (u64, u64) {
+    let listed: Vec<u64> = tokio::fs::read_to_string(dir.join("index.m3u8"))
+        .await
+        .unwrap_or_default()
+        .lines()
+        .filter_map(segment_index)
+        .collect();
+    let (start_arg, next) = match listed.first() {
+        Some(&first) => (first, first + listed.len() as u64),
+        None => (prev_number, prev_number),
+    };
+    if let Ok(mut rd) = tokio::fs::read_dir(dir).await {
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let name = entry.file_name();
+            let Some(idx) = name.to_str().and_then(segment_index) else {
+                continue;
+            };
+            if idx >= next
+                && let Err(e) = tokio::fs::remove_file(entry.path()).await
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(session = %id, file = ?name, error = %e, "failed to remove half-written segment");
+            }
+        }
+    }
+    (start_arg, next)
 }
 
 /// Shared, cheap-to-clone manager (Arc'd map + config).
@@ -1384,6 +1424,7 @@ impl SessionManager {
             last_seen: now,
             start_secs: eff_start,
             requested_start_secs: opts.start_secs,
+            crash_junctions: Vec::new(),
             start_number: eff_start_number,
             restarts: 0,
             ctl: ctl_tx,
@@ -1517,7 +1558,7 @@ impl SessionManager {
     pub async fn vod_manifest(&self, id: &str) -> Option<String> {
         // Snapshot what synthesis needs, then drop the map lock — the copy path
         // touches the keyframe cache (disk IO) and must not hold it across that.
-        let (reencodes, fmp4, duration_opt, start_secs, input_path) = {
+        let (reencodes, fmp4, duration_opt, start_secs, input_path, junctions) = {
             let guard = self.sessions.lock().await;
             let s = guard.get(id)?;
             let fmp4 = matches!(
@@ -1533,14 +1574,17 @@ impl SessionManager {
                 s.duration_secs.filter(|d| *d > 0),
                 s.start_secs,
                 s.input_path.clone(),
+                s.crash_junctions.clone(),
             )
         };
         let duration = duration_opt? as f64;
+        let mark =
+            |m: Option<String>| m.map(|m| crate::vod_manifest::mark_discontinuities(m, &junctions));
 
         if reencodes {
             // RE-ENCODE: `-force_key_frames` makes segments uniform, so the list
             // is derivable from the duration alone.
-            return crate::vod_manifest::synthesize(duration, start_secs, fmp4);
+            return mark(crate::vod_manifest::synthesize(duration, start_secs, fmp4));
         }
 
         // COPY-remux: segments are cut at the SOURCE's own (irregular) keyframes,
@@ -1553,7 +1597,9 @@ impl SessionManager {
         // episode on detail open), using the seconds the user spends on the detail
         // page so the cache is hot by the time Play is pressed.
         match crate::keyframes::load(&self.cache_root, std::path::Path::new(&input_path)).await {
-            Some(kf) => crate::vod_manifest::synthesize_copy(&kf, duration, start_secs, fmp4),
+            Some(kf) => mark(crate::vod_manifest::synthesize_copy(
+                &kf, duration, start_secs, fmp4,
+            )),
             None => {
                 self.spawn_keyframe_warm(input_path);
                 None
@@ -2124,13 +2170,20 @@ impl SessionManager {
                 s.start_number,
             )
         };
-        // Derive the furthest-written segment BEFORE clearing the dir.
-        let next_number = max_segment_index(&dir)
-            .await
-            .map_or(prev_number, |m| m.saturating_add(1).max(prev_number));
-        let spawn_secs = match mode {
-            RespawnMode::Seek => start_secs,
-            RespawnMode::Crash => crash_resume_secs(start_secs, prev_number, next_number),
+        let crash = matches!(mode, RespawnMode::Crash);
+        let (start_arg, next_number, spawn_secs) = if crash {
+            let (start_arg, next) = crash_resume(&dir, prev_number, id).await;
+            (
+                start_arg,
+                next,
+                crash_resume_secs(start_secs, prev_number, next),
+            )
+        } else {
+            // Derive the furthest-written segment BEFORE clearing the dir.
+            let next = max_segment_index(&dir)
+                .await
+                .map_or(prev_number, |m| m.saturating_add(1).max(prev_number));
+            (next, next, start_secs)
         };
         {
             let mut guard = self.sessions.lock().await;
@@ -2139,16 +2192,25 @@ impl SessionManager {
             };
             s.start_secs = spawn_secs;
             s.start_number = next_number;
+            if crash {
+                s.crash_junctions.push(next_number);
+            } else {
+                s.crash_junctions.clear();
+            }
         }
-        // Clear the main pipeline's outputs so the fresh ffmpeg writes against a
-        // clean playlist. Without this, `append_list` re-writes index.m3u8
-        // referencing new segments while the player may still hold the old list
-        // — stale media on every restart. (Numbering continuity is preserved by
-        // `-start_number` above, not by keeping old files around.) A SELECTIVE
-        // clear (not a whole-dir wipe) so the one-shot sidecar assets
-        // subtitles.vtt / thumb_* / audio_* — which only start() produces and a
-        // respawn never regenerates — survive the restart.
-        clear_pipeline_outputs(&dir, id).await;
+        // A seek starts another timeline: clear the main pipeline's outputs so
+        // the fresh ffmpeg writes against a clean playlist. Without this,
+        // `append_list` re-writes index.m3u8 referencing new segments while the
+        // player may still hold the old list — stale media on every restart.
+        // (Numbering continuity is preserved by `-start_number` above, not by
+        // keeping old files around.) A SELECTIVE clear (not a whole-dir wipe)
+        // so the one-shot sidecar assets subtitles.vtt / thumb_* / audio_* —
+        // which only start() produces and a respawn never regenerates —
+        // survive the restart. A crash continues the same timeline, so it
+        // appends instead (see crash_resume).
+        if !crash {
+            clear_pipeline_outputs(&dir, id).await;
+        }
         if let Err(e) = tokio::fs::create_dir_all(&dir).await {
             tracing::warn!(session = %id, error = %e, "failed to recreate session dir for respawn");
             return Respawn::Failed;
@@ -2165,7 +2227,7 @@ impl SessionManager {
                 source_avg_kbps,
                 client_max_kbps,
                 &media_kind,
-                next_number,
+                start_arg,
             )
             .await
         {
@@ -3016,6 +3078,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn crash_respawn_keeps_finished_segments_and_marks_the_seam() {
+        // 2026-10-16 review item 16: crash recovery deleted every segment and
+        // resumed at the encoder frontier, so a player behind it 404'd (native)
+        // or jumped minutes ahead (web). Finished segments are the same
+        // timeline and stay; only the unlisted, half-written newest one goes.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
+        let dir = mgr
+            .manifest_path(&id)
+            .await
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        wait_for(|| dir.join("args.txt").exists()).await;
+        std::fs::remove_file(dir.join("args.txt")).unwrap();
+        let mut listed = String::from("#EXTM3U\n");
+        for i in 10..16u64 {
+            std::fs::write(dir.join(format!("seg_{i:05}.ts")), b"seg").unwrap();
+            if i < 15 {
+                listed.push_str(&format!("#EXTINF:2.0,\nseg_{i:05}.ts\n"));
+            }
+        }
+        std::fs::write(dir.join("index.m3u8"), listed).unwrap();
+
+        let Respawn::Ok(mut child) = mgr.respawn(&id, RespawnMode::Crash).await else {
+            panic!("crash respawn failed")
+        };
+        for i in 10..15 {
+            assert!(
+                dir.join(format!("seg_{i:05}.ts")).exists(),
+                "finished segment {i} must survive"
+            );
+        }
+        assert!(
+            !dir.join("seg_00015.ts").exists(),
+            "the half-written segment is re-encoded"
+        );
+        let args = wait_for_args(&dir.join("args.txt"), |a| {
+            a.iter().any(|s| s == "-start_number")
+        })
+        .await
+        .join("\n");
+        // An appending ffmpeg numbers from -start_number plus parsed segments: 10 + 5.
+        assert!(args.contains("-start_number\n10\n"), "{args}");
+        assert!(args.contains("append_list"), "{args}");
+        assert_eq!(mgr.sessions.lock().await[&id].crash_junctions, vec![15]);
+        kill_child(&mut child, &id).await;
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
     async fn duplicate_grant_at_an_off_grid_offset_coalesces() {
         // 2026-10-16 review item 15: the session stored the offset rounded to
         // the segment grid (125 -> 124) and compared it with the requested
@@ -3286,6 +3401,7 @@ mod tests {
                : > \"{flag}\"\n\
                printf 'seg' > \"$d/seg_00000.ts\"\n\
                printf 'seg' > \"$d/seg_00001.ts\"\n\
+               printf '#EXTM3U\\n#EXTINF:2.0,\\nseg_00000.ts\\n#EXTINF:2.0,\\nseg_00001.ts\\n' > \"$last\"\n\
                exit 1\n\
              fi\n\
              printf '%s\\n' \"$@\" > \"$d/args.txt\"\n\
@@ -3338,10 +3454,7 @@ mod tests {
         // respawn records its argv. Wait for a COMPLETE argv (both markers
         // present) — `> args.txt` truncates before the shell flushes content,
         // so a bare `|_| true` could read an empty/partial file and flake.
-        let args = wait_for_args(&dir.join("args.txt"), |a| {
-            a.iter().any(|s| s == "-ss") && a.iter().any(|s| s == "-start_number")
-        })
-        .await;
+        let args = wait_for_args(&dir.join("args.txt"), |a| a.iter().any(|s| s == "-ss")).await;
         let ss = args
             .iter()
             .position(|s| s == "-ss")
@@ -3353,11 +3466,16 @@ mod tests {
             resume_secs.to_string(),
             "2 segments × seglen past offset 0: {args:?}"
         );
-        let sn = args
-            .iter()
-            .position(|s| s == "-start_number")
-            .expect("crash respawn must continue segment numbering");
-        assert_eq!(args[sn + 1], "2", "numbering continues after seg_00001");
+        // The respawn appends to the finished list: ffmpeg numbers from
+        // -start_number (the first listed segment, 0, so omitted) plus the two
+        // segments it parsed, i.e. continues at seg_00002.
+        assert!(args.iter().any(|s| s.contains("append_list")), "{args:?}");
+        assert!(!args.iter().any(|s| s == "-start_number"), "{args:?}");
+        assert_eq!(mgr.sessions.lock().await[&id].start_number, 2);
+        assert!(
+            dir.join("seg_00001.ts").exists(),
+            "finished segments survive the crash"
+        );
 
         // The session reports the resumed position, not the stale offset.
         assert_eq!(mgr.list().await[0].start_secs, resume_secs);
