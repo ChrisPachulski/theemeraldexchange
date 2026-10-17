@@ -286,9 +286,14 @@ def _logodds(m: sparse.csr_matrix, pos: np.ndarray, neg: np.ndarray) -> tuple[np
     cn = np.asarray(m[neg].sum(axis=0)).ravel()
     n_p, n_n = float(len(pos)), float(len(neg))
 
+    # An empty class has no evidence, so its rate is the prior itself: the
+    # catalog share. Sizing the prior to an empty class made it 0 and the
+    # log-odds infinite (every score null for a household with no dislikes).
+    def rate(c, n):
+        return (c + LOGODDS_PRIOR * n * share) / ((1 + LOGODDS_PRIOR) * n) if n > 0 else share
+
     def lo(cp_, n_p_, cn_, n_n_):
-        rate_p = (cp_ + LOGODDS_PRIOR * n_p_ * share) / ((1 + LOGODDS_PRIOR) * max(n_p_, 1.0))
-        rate_n = (cn_ + LOGODDS_PRIOR * n_n_ * share) / ((1 + LOGODDS_PRIOR) * max(n_n_, 1.0))
+        rate_p, rate_n = rate(cp_, n_p_), rate(cn_, n_n_)
         evidence = cp_ + cn_
         with np.errstate(divide="ignore", invalid="ignore"):
             raw = np.log(rate_p / rate_n)
