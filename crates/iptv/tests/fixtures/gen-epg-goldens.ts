@@ -75,6 +75,39 @@ for (current = 0; current < scenario.syncs.length; current++) {
     channels: db.raw.prepare('SELECT stream_id, epg_resolved_id FROM channels ORDER BY stream_id').all(),
   })
 }
+
+// 3. The read API on the synced DB (S3): grid, search, now/next and one
+//    channel's window, with one feed-check override so the effective-EPG join
+//    is exercised. The Rust api tests replay the same calls on the same DB.
+const { epgGrid, epgSearch, epgNow, epgChannelWindow } = await import('../../../../server/services/iptvEpgQuery.js')
+db.raw.prepare(`INSERT INTO channel_feed_checks (stream_id, verdict, listed_epg_id, actual_epg_id, checked_at)
+  VALUES (200163566, 'mislabeled', 'showtime.us', 'cinemaxclassics.us', ?)`).run(scenario.now)
+const W = { from: '2026-10-15T02:00:00.000Z', to: '2026-10-15T06:00:00.000Z' }
+const DAY = { from: '2026-10-14T00:00:00.000Z', to: '2026-10-16T00:00:00.000Z' }
+const gridCases = [
+  { window: W, opts: {} },
+  { window: W, opts: { hasEpgOnly: true } },
+  { window: W, opts: { categoryIds: [1], hasEpgOnly: true, limit: 5 } },
+  { window: W, opts: { categoryId: 1, q: 'cmt' } },
+  { window: DAY, opts: { q: 'US:', hasEpgOnly: true } },
+  { window: W, opts: { categoryIds: [2] } },
+]
+const searchCases = [
+  { window: DAY, opts: { q: 'news' } },
+  { window: DAY, opts: { q: 'ten' } },
+  { window: W, opts: { q: 'provider' } },
+  { window: DAY, opts: { q: 'son of', limit: 1 } },
+  { window: DAY, opts: { q: 'e', categoryIds: [1], limit: 3 } },
+  { window: W, opts: { q: 'news', categoryIds: [2] } },
+]
+const streamIds = (db.raw.prepare('SELECT stream_id FROM channels ORDER BY stream_id').all() as Array<{ stream_id: number }>)
+  .map((r) => r.stream_id)
+const api = {
+  grid: gridCases.map((c) => ({ ...c, rows: epgGrid(db, c.window.from, c.window.to, c.opts) })),
+  search: searchCases.map((c) => ({ ...c, result: epgSearch(db, c.window.from, c.window.to, c.opts) })),
+  now: { ids: [...streamIds, 999999], rows: epgNow(db, [...streamIds, 999999], new Date(scenario.now)) },
+  channel: [200163566, 30800, 100, 9].map((id) => ({ id, rows: epgChannelWindow(db, id, DAY.from, DAY.to) })),
+}
 db.close()
 server.close()
 
@@ -105,5 +138,5 @@ const resolved = {
   normalized: Object.fromEntries([...names].sort().map((n) => [n, resolve.normalizeChannelName(n)])),
 }
 
-fs.writeFileSync(path.join(here, 'epg-goldens.json'), JSON.stringify({ syncs, resolved }, null, 1) + '\n')
+fs.writeFileSync(path.join(here, 'epg-goldens.json'), JSON.stringify({ syncs, resolved, api }, null, 1) + '\n')
 console.log('wrote', path.join(here, 'epg-goldens.json'))

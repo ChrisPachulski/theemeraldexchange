@@ -17,8 +17,11 @@ name = "iptv"
 path = "src/lib.rs"
 
 [dependencies]
-# ssrf_guard + the schema_migrations migrator.
+# ssrf_guard, the schema_migrations migrator and verify_principal.
 media-core = { path = "../media-core" }
+# Stream tokens and internal principals.
+emerald-contracts = { path = "../emerald-contracts" }
+ulid.workspace = true
 axum = { version = "0.8", features = ["json", "query", "macros"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
@@ -40,4 +43,5 @@ regex.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
 sha2.workspace = true

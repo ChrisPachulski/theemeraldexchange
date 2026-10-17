@@ -78,7 +78,7 @@ pub fn parse_account_info(payload: &Value) -> AccountInfo {
 // ---- lenient coercions (num / numOrNull / str / safeEpoch* in xtream.ts) ----
 
 /// JS `Number(s)` for the strings panels send: trimmed, empty is 0.
-fn parse_js_number(s: &str) -> f64 {
+pub(crate) fn parse_js_number(s: &str) -> f64 {
     let t = s.trim();
     if t.is_empty() {
         0.0

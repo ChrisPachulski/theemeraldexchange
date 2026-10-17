@@ -1,5 +1,4 @@
-//! Catalog sync (`syncOnce` in iptvSync.ts; the EPG half is `epg::refresh`)
-//! and the admin sync-job table (iptvSyncJobs.ts).
+//! Catalog sync (`syncOnce` in iptvSync.ts; the EPG half is `epg::refresh`).
 //!
 //! One run fetches categories and the three catalog lists, expands every series
 //! 4-wide, then writes everything in ONE transaction: upsert, delete what this
@@ -18,10 +17,7 @@ use sqlx::SqlitePool;
 use crate::config::Config;
 use crate::xtream::{self, Client, Creds, Kind, iso};
 
-const MAX_REMEMBERED_JOBS: usize = 20;
-
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SyncStats {
     pub channels: usize,
     pub vod: usize,
@@ -34,42 +30,16 @@ pub struct SyncStats {
     pub finished_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SyncResult {
     Busy { busy: bool },
     Done(SyncStats),
-}
-
-#[derive(Clone, Copy, Debug, Serialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum JobState {
-    Running,
-    Done,
-    /// Another sync was already running, so this one never started.
-    Rejected,
-    Error,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SyncJob {
-    pub id: String,
-    pub state: JobState,
-    pub started_at: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub finished_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<SyncResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
 }
 
 pub struct CatalogSync {
     pub pool: SqlitePool,
     config: Arc<Config>,
     running: AtomicBool,
-    jobs: Mutex<Vec<SyncJob>>,
 }
 
 struct Release<'a>(&'a AtomicBool);
@@ -85,7 +55,6 @@ impl CatalogSync {
             pool,
             config,
             running: AtomicBool::new(false),
-            jobs: Mutex::new(Vec::new()),
         })
     }
 
@@ -279,69 +248,6 @@ impl CatalogSync {
             finished_at: String::new(),
         })
     }
-
-    /// Start a background sync and return its job id at once (admin POST
-    /// /admin/sync answers 202 with it and the panel polls).
-    pub fn start_job(self: &Arc<Self>) -> String {
-        let id = uuid::Uuid::new_v4().to_string();
-        remember(
-            &mut self.jobs.lock().unwrap(),
-            SyncJob {
-                id: id.clone(),
-                state: JobState::Running,
-                started_at: iso(Utc::now()),
-                finished_at: None,
-                result: None,
-                error: None,
-            },
-        );
-        let this = self.clone();
-        let job_id = id.clone();
-        tokio::spawn(async move {
-            let outcome = this.sync_once().await;
-            let mut jobs = this.jobs.lock().unwrap();
-            let Some(job) = jobs.iter_mut().find(|j| j.id == job_id) else {
-                return;
-            };
-            job.finished_at = Some(iso(Utc::now()));
-            match outcome {
-                Ok(r) => {
-                    job.state = if matches!(r, SyncResult::Busy { .. }) {
-                        JobState::Rejected
-                    } else {
-                        JobState::Done
-                    };
-                    job.result = Some(r);
-                }
-                Err(e) => {
-                    job.state = JobState::Error;
-                    job.error = Some(e);
-                }
-            }
-        });
-        id
-    }
-
-    pub fn job(&self, id: &str) -> Option<SyncJob> {
-        self.jobs
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|j| j.id == id)
-            .cloned()
-    }
-}
-
-/// Keep at most 20 jobs by evicting the oldest finished one. A running job is
-/// never evicted (the poller would 404 mid-run); if all are running, nothing
-/// goes until they settle.
-fn remember(jobs: &mut Vec<SyncJob>, job: SyncJob) {
-    jobs.push(job);
-    if jobs.len() > MAX_REMEMBERED_JOBS
-        && let Some(i) = jobs.iter().position(|j| j.state != JobState::Running)
-    {
-        jobs.remove(i);
-    }
 }
 
 pub async fn get_state(
@@ -494,7 +400,7 @@ ON CONFLICT(iptv_kind, iptv_id) DO UPDATE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testpanel::Panel;
+    use crate::testpanel::{Panel, Scenario, json_fixture};
     use serde_json::json;
 
     /// The iptvSync.test.ts fixture catalog.
@@ -734,57 +640,17 @@ mod tests {
         assert_eq!(value, "error:xtream_credentials_missing");
     }
 
-    fn json_fixture(name: &str) -> serde_json::Value {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures")
-            .join(name);
-        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
-    }
-
     /// The scenario in tests/fixtures/epg-sync-scenario.json (panel catalog,
     /// provider XMLTV, a plain and a gzipped external feed, two syncs) leaves
     /// epg_programs and epg_resolved_id exactly as the TS sync did
     /// (epg-goldens.json, from gen-epg-goldens.ts).
     #[tokio::test]
     async fn a_full_mock_sync_matches_the_ts_goldens() {
-        let scenario = json_fixture("epg-sync-scenario.json");
         let golden = json_fixture("epg-goldens.json");
-        let dir = tempfile::tempdir().unwrap();
-        let pool = crate::db::open(dir.path().join("iptv.db").to_str().unwrap())
-            .await
-            .unwrap();
-        let panel = Panel::start().await;
-        panel.set("get_live_categories", scenario["live_categories"].clone());
-        panel.set("get_live_streams", scenario["live_streams"].clone());
-        let paths: Vec<&str> = scenario["external_paths"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|p| p.as_str().unwrap())
-            .collect();
-        let urls: Vec<String> = paths.iter().map(|p| panel.url(p)).collect();
-        let config = crate::config::test_config(&[
-            ("XTREAM_HOST", &panel.base),
-            ("XTREAM_USERNAME", "u"),
-            ("XTREAM_PASSWORD", "p"),
-            ("IPTV_EXTERNAL_EPG_URLS", &urls.join(",")),
-        ]);
-        let sync = CatalogSync::new(pool, Arc::new(config));
-        let now: DateTime<Utc> = scenario["now"].as_str().unwrap().parse().unwrap();
-        for (i, step) in scenario["syncs"].as_array().unwrap().iter().enumerate() {
-            panel.set_feed("/xmltv.php", step["provider_xml"].as_str().unwrap());
-            for path in &paths {
-                let xml = step["external"][*path].as_str().unwrap();
-                if path.ends_with(".gz") {
-                    let mut e =
-                        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-                    std::io::Write::write_all(&mut e, xml.as_bytes()).unwrap();
-                    panel.set_feed(path, e.finish().unwrap());
-                } else {
-                    panel.set_feed(path, xml);
-                }
-            }
-            let stats = done(sync.sync_at(now).await.unwrap());
+        let scenario = Scenario::start().await;
+        let sync = &scenario.sync;
+        for i in 0..scenario.steps() {
+            let stats = done(scenario.run_step(i).await);
             let want = &golden["syncs"][i];
             assert_eq!(
                 stats.epg as u64,
@@ -809,73 +675,5 @@ mod tests {
                 assert_eq!(got, want[key], "sync {i} {key}");
             }
         }
-    }
-
-    async fn settle(sync: &CatalogSync, id: &str) -> SyncJob {
-        for _ in 0..200 {
-            let j = sync.job(id).unwrap();
-            if j.state != JobState::Running {
-                return j;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        panic!("job {id} never settled");
-    }
-
-    #[tokio::test]
-    async fn jobs_report_done_rejected_and_error() {
-        let (panel, sync, _dir) = setup().await;
-        let first = sync.start_job();
-        let second = sync.start_job();
-        let (a, b) = (settle(&sync, &first).await, settle(&sync, &second).await);
-        assert_eq!((a.state, b.state), (JobState::Done, JobState::Rejected));
-        let body = serde_json::to_value(&a).unwrap();
-        assert_eq!(body["result"]["channels"], 1);
-        assert!(body["result"]["durationMs"].is_i64() && body["finishedAt"].is_string());
-        assert_eq!(
-            serde_json::to_value(&b).unwrap()["result"],
-            json!({"busy": true})
-        );
-
-        panel.set("get_series", json!("oops"));
-        let failed = settle(&sync, &sync.start_job()).await;
-        assert_eq!(
-            (failed.state, failed.error.as_deref()),
-            (JobState::Error, Some("xtream.get_series_not_a_list"))
-        );
-        assert!(sync.job("nope").is_none());
-    }
-
-    #[test]
-    fn job_table_evicts_the_oldest_finished_job_never_a_running_one() {
-        let job = |id: usize, state| SyncJob {
-            id: id.to_string(),
-            state,
-            started_at: String::new(),
-            finished_at: None,
-            result: None,
-            error: None,
-        };
-        let mut jobs = Vec::new();
-        remember(&mut jobs, job(0, JobState::Running));
-        for i in 1..=21 {
-            remember(&mut jobs, job(i, JobState::Done));
-        }
-        assert_eq!(jobs.len(), 20);
-        let ids: Vec<&str> = jobs.iter().map(|j| j.id.as_str()).collect();
-        assert_eq!(ids[0], "0", "the running job survives the cap");
-        assert!(
-            !ids.contains(&"1") && !ids.contains(&"2"),
-            "the oldest finished jobs went instead"
-        );
-
-        let mut all_running: Vec<SyncJob> = (0..21).map(|i| job(i, JobState::Running)).collect();
-        all_running.pop();
-        remember(&mut all_running, job(99, JobState::Running));
-        assert_eq!(
-            all_running.len(),
-            21,
-            "nothing is evicted while every job is running"
-        );
     }
 }

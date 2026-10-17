@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use iptv::{build_router, config::Config, db, scheduler, sync::CatalogSync};
+use iptv::{api, config::Config, db, scheduler, sync::CatalogSync};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -21,6 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config =
         Arc::new(Config::from_env().inspect_err(|e| tracing::error!("iptv config error: {e}"))?);
     let pool = db::open(&config.iptv_db_path).await?;
+    let state = api::AppState::new(pool.clone(), config.clone());
     let sync = CatalogSync::new(pool, config.clone());
 
     let _jobs = if config.sync_enabled() {
@@ -37,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = std::net::SocketAddr::new(ip, config.port);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("iptv listening on http://{addr}");
-    axum::serve(listener, build_router())
+    axum::serve(listener, api::router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())

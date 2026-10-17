@@ -12,6 +12,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::Value;
 
 use crate::config::{Config, test_config};
+use crate::sync::{CatalogSync, SyncResult};
 use crate::xtream::{Client, Creds};
 
 #[derive(Clone)]
@@ -138,5 +139,81 @@ impl Panel {
     }
     pub fn client(&self) -> Client {
         Client::new(Creds::from_config(&self.config()).unwrap(), 5_000).unwrap()
+    }
+}
+
+/// tests/fixtures/<name> as JSON.
+pub fn json_fixture(name: &str) -> Value {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name);
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// The epg-sync-scenario.json run that gen-epg-goldens.ts replays on the TS
+/// stack: a panel serving its catalog, and a sync wired to it and its feeds.
+pub struct Scenario {
+    pub panel: Panel,
+    pub sync: Arc<CatalogSync>,
+    json: Value,
+    _dir: tempfile::TempDir,
+}
+
+impl Scenario {
+    pub async fn start() -> Self {
+        let json = json_fixture("epg-sync-scenario.json");
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::db::open(dir.path().join("iptv.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let panel = Panel::start().await;
+        panel.set("get_live_categories", json["live_categories"].clone());
+        panel.set("get_live_streams", json["live_streams"].clone());
+        let urls: Vec<String> = Self::paths(&json).map(|p| panel.url(p)).collect();
+        let config = test_config(&[
+            ("XTREAM_HOST", &panel.base),
+            ("XTREAM_USERNAME", "u"),
+            ("XTREAM_PASSWORD", "p"),
+            ("IPTV_EXTERNAL_EPG_URLS", &urls.join(",")),
+        ]);
+        let sync = CatalogSync::new(pool, Arc::new(config));
+        Scenario {
+            panel,
+            sync,
+            json,
+            _dir: dir,
+        }
+    }
+
+    fn paths(json: &Value) -> impl Iterator<Item = &str> {
+        json["external_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap())
+    }
+
+    pub fn steps(&self) -> usize {
+        self.json["syncs"].as_array().unwrap().len()
+    }
+
+    /// Serve step `i`'s feeds (ext-b gzipped) and sync at the scenario's clock.
+    pub async fn run_step(&self, i: usize) -> SyncResult {
+        let step = &self.json["syncs"][i];
+        self.panel
+            .set_feed("/xmltv.php", step["provider_xml"].as_str().unwrap());
+        for path in Self::paths(&self.json) {
+            let xml = step["external"][path].as_str().unwrap();
+            if path.ends_with(".gz") {
+                let mut e =
+                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                std::io::Write::write_all(&mut e, xml.as_bytes()).unwrap();
+                self.panel.set_feed(path, e.finish().unwrap());
+            } else {
+                self.panel.set_feed(path, xml);
+            }
+        }
+        let now = self.json["now"].as_str().unwrap().parse().unwrap();
+        self.sync.sync_at(now).await.unwrap()
     }
 }

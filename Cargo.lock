@@ -1316,6 +1316,7 @@ dependencies = [
  "axum",
  "chrono",
  "croner",
+ "emerald-contracts",
  "flate2",
  "media-core",
  "memchr",
@@ -1330,8 +1331,10 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
+ "ulid",
  "uuid",
 ]
 

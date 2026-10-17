@@ -3815,5 +3815,2015 @@
    "worldfishingnetwork": "worldfishingnetwork",
    "yesnetwork": "yesnetwork"
   }
+ },
+ "api": {
+  "grid": [
+   {
+    "window": {
+     "from": "2026-10-15T02:00:00.000Z",
+     "to": "2026-10-15T06:00:00.000Z"
+    },
+    "opts": {},
+    "rows": [
+     {
+      "stream_id": 1,
+      "num": 1,
+      "name": "UK: CMT",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.uk",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.uk",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "UK Hits",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 2,
+      "num": 2,
+      "name": "US: NBC 2 Orlando (WESH)",
+      "stream_icon": null,
+      "epg_channel_id": "wesh-ld.us_locals1",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "wesh-ld.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "WESH 2 News",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 3,
+      "num": 3,
+      "name": "US NBC 2 (WESH) Orlando (H)",
+      "stream_icon": null,
+      "epg_channel_id": "wesh-ld.us_locals1",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "wesh-ld.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "WESH 2 News",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 4,
+      "num": 4,
+      "name": "US: FOX 7 Miami (WSVN)",
+      "stream_icon": null,
+      "epg_channel_id": "wsvn-dt.us_locals1",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "wsvn-dt.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "7 News",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 7,
+      "num": 7,
+      "name": "US: Al Jazeera Arabic",
+      "stream_icon": null,
+      "epg_channel_id": "aljazeera.arabic.net",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "aljazeera.arabic.net",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T03:30:00.000Z",
+        "title": "Provider",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 8,
+      "num": 8,
+      "name": "US: HGTV West",
+      "stream_icon": null,
+      "epg_channel_id": "hgtvwest.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "hgtvwest.us",
+        "start_utc": "2026-10-15T05:00:00.000Z",
+        "stop_utc": "2026-10-15T06:00:00.000Z",
+        "title": "House Hunters",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 9,
+      "num": 9,
+      "name": "CINEBOX: ACTION",
+      "stream_icon": null,
+      "epg_channel_id": null,
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": []
+     },
+     {
+      "stream_id": 10,
+      "num": 10,
+      "name": "US: Oxygen (West)",
+      "stream_icon": null,
+      "epg_channel_id": "oxygenwest.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "oxygenwest.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "Snapped West",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 11,
+      "num": 11,
+      "name": "US: X",
+      "stream_icon": null,
+      "epg_channel_id": "x.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "x.us",
+        "start_utc": "2026-10-15T03:30:00.000Z",
+        "stop_utc": "2026-10-15T05:30:00.000Z",
+        "title": "Rescheduled movie",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 12,
+      "num": 12,
+      "name": "US: Starz Encore Suspense",
+      "stream_icon": null,
+      "epg_channel_id": "starzencoresuspense.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "starzencoresuspense.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:26:00.000Z",
+        "title": "Unknown",
+        "description": "When five men awake in a locked warehouse, none of them can remember his identity."
+       }
+      ]
+     },
+     {
+      "stream_id": 13,
+      "num": 13,
+      "name": "US: Outdoor Channel",
+      "stream_icon": null,
+      "epg_channel_id": "outdoorchannel.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "outdoorchannel.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T03:30:00.000Z",
+        "title": "Guns & Ammo TV",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 14,
+      "num": 14,
+      "name": "US: DISNEY JR EAST HD",
+      "stream_icon": null,
+      "epg_channel_id": "disneyjunior.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "disneyjunior.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "Bluey",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 15,
+      "num": 15,
+      "name": "CA: Disney Junior",
+      "stream_icon": null,
+      "epg_channel_id": null,
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": []
+     },
+     {
+      "stream_id": 100,
+      "num": 100,
+      "name": "US: ESPN",
+      "stream_icon": null,
+      "epg_channel_id": "external.espn",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "external.espn",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "Current external game",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 200,
+      "num": 200,
+      "name": "US: CNN",
+      "stream_icon": null,
+      "epg_channel_id": "cnn.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cnn.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CNN Newsroom",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 5866,
+      "num": 5866,
+      "name": "US Showtime West (S)",
+      "stream_icon": null,
+      "epg_channel_id": "showtimewest.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "showtimewest.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T05:00:00.000Z",
+        "title": "Real West",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 30800,
+      "num": 30800,
+      "name": "US CMT (S)",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CMT Music",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 36206,
+      "num": 36206,
+      "name": "US CMT (A)",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CMT Music",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 67730,
+      "num": 67730,
+      "name": "US CMT (East) (H)",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CMT Music",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 200163548,
+      "num": 200163548,
+      "name": "US: Cinemax Classics",
+      "stream_icon": null,
+      "epg_channel_id": "cinemaxclassics.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T01:56:00.000Z",
+        "stop_utc": "2026-10-15T03:32:00.000Z",
+        "title": "Just Friends",
+        "description": null
+       },
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T03:32:00.000Z",
+        "stop_utc": "2026-10-15T04:58:00.000Z",
+        "title": "Son of Godzilla",
+        "description": null
+       },
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T04:58:00.000Z",
+        "stop_utc": "2026-10-15T06:45:00.000Z",
+        "title": "The Usual Suspects",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 200163566,
+      "num": 200163566,
+      "name": "US: Showtime",
+      "stream_icon": null,
+      "epg_channel_id": "cinemaxclassics.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T01:56:00.000Z",
+        "stop_utc": "2026-10-15T03:32:00.000Z",
+        "title": "Just Friends",
+        "description": null
+       },
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T03:32:00.000Z",
+        "stop_utc": "2026-10-15T04:58:00.000Z",
+        "title": "Son of Godzilla",
+        "description": null
+       },
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T04:58:00.000Z",
+        "stop_utc": "2026-10-15T06:45:00.000Z",
+        "title": "The Usual Suspects",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 200168129,
+      "num": 200168129,
+      "name": "US: FOX 13 Memphis (WHBQ)",
+      "stream_icon": null,
+      "epg_channel_id": null,
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": []
+     },
+     {
+      "stream_id": 200168199,
+      "num": 200168199,
+      "name": "US: ABC 3 Mobile (WEAR)",
+      "stream_icon": null,
+      "epg_channel_id": null,
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": []
+     },
+     {
+      "stream_id": 200168354,
+      "num": 200168354,
+      "name": "US: NBC 11 Minneapolis (KARE)",
+      "stream_icon": null,
+      "epg_channel_id": "nbckare.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": []
+     },
+     {
+      "stream_id": 200168388,
+      "num": 200168388,
+      "name": "US: FOX 13 Seattle (KCPQ)",
+      "stream_icon": null,
+      "epg_channel_id": null,
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": []
+     },
+     {
+      "stream_id": 200168495,
+      "num": 200168495,
+      "name": "US: MY 38 Boston (WSBK)",
+      "stream_icon": null,
+      "epg_channel_id": null,
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": []
+     },
+     {
+      "stream_id": 400124927,
+      "num": 400124927,
+      "name": "US: SHOWTIME WEST",
+      "stream_icon": null,
+      "epg_channel_id": "showtimewest.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "showtimewest.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T05:00:00.000Z",
+        "title": "Real West",
+        "description": null
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "window": {
+     "from": "2026-10-15T02:00:00.000Z",
+     "to": "2026-10-15T06:00:00.000Z"
+    },
+    "opts": {
+     "hasEpgOnly": true
+    },
+    "rows": [
+     {
+      "stream_id": 1,
+      "num": 1,
+      "name": "UK: CMT",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.uk",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.uk",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "UK Hits",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 2,
+      "num": 2,
+      "name": "US: NBC 2 Orlando (WESH)",
+      "stream_icon": null,
+      "epg_channel_id": "wesh-ld.us_locals1",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "wesh-ld.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "WESH 2 News",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 3,
+      "num": 3,
+      "name": "US NBC 2 (WESH) Orlando (H)",
+      "stream_icon": null,
+      "epg_channel_id": "wesh-ld.us_locals1",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "wesh-ld.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "WESH 2 News",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 4,
+      "num": 4,
+      "name": "US: FOX 7 Miami (WSVN)",
+      "stream_icon": null,
+      "epg_channel_id": "wsvn-dt.us_locals1",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "wsvn-dt.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "7 News",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 7,
+      "num": 7,
+      "name": "US: Al Jazeera Arabic",
+      "stream_icon": null,
+      "epg_channel_id": "aljazeera.arabic.net",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "aljazeera.arabic.net",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T03:30:00.000Z",
+        "title": "Provider",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 8,
+      "num": 8,
+      "name": "US: HGTV West",
+      "stream_icon": null,
+      "epg_channel_id": "hgtvwest.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "hgtvwest.us",
+        "start_utc": "2026-10-15T05:00:00.000Z",
+        "stop_utc": "2026-10-15T06:00:00.000Z",
+        "title": "House Hunters",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 10,
+      "num": 10,
+      "name": "US: Oxygen (West)",
+      "stream_icon": null,
+      "epg_channel_id": "oxygenwest.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "oxygenwest.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "Snapped West",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 11,
+      "num": 11,
+      "name": "US: X",
+      "stream_icon": null,
+      "epg_channel_id": "x.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "x.us",
+        "start_utc": "2026-10-15T03:30:00.000Z",
+        "stop_utc": "2026-10-15T05:30:00.000Z",
+        "title": "Rescheduled movie",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 12,
+      "num": 12,
+      "name": "US: Starz Encore Suspense",
+      "stream_icon": null,
+      "epg_channel_id": "starzencoresuspense.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "starzencoresuspense.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:26:00.000Z",
+        "title": "Unknown",
+        "description": "When five men awake in a locked warehouse, none of them can remember his identity."
+       }
+      ]
+     },
+     {
+      "stream_id": 13,
+      "num": 13,
+      "name": "US: Outdoor Channel",
+      "stream_icon": null,
+      "epg_channel_id": "outdoorchannel.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "outdoorchannel.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T03:30:00.000Z",
+        "title": "Guns & Ammo TV",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 14,
+      "num": 14,
+      "name": "US: DISNEY JR EAST HD",
+      "stream_icon": null,
+      "epg_channel_id": "disneyjunior.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "disneyjunior.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "Bluey",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 100,
+      "num": 100,
+      "name": "US: ESPN",
+      "stream_icon": null,
+      "epg_channel_id": "external.espn",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "external.espn",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "Current external game",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 200,
+      "num": 200,
+      "name": "US: CNN",
+      "stream_icon": null,
+      "epg_channel_id": "cnn.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cnn.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CNN Newsroom",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 5866,
+      "num": 5866,
+      "name": "US Showtime West (S)",
+      "stream_icon": null,
+      "epg_channel_id": "showtimewest.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "showtimewest.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T05:00:00.000Z",
+        "title": "Real West",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 30800,
+      "num": 30800,
+      "name": "US CMT (S)",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CMT Music",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 36206,
+      "num": 36206,
+      "name": "US CMT (A)",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CMT Music",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 67730,
+      "num": 67730,
+      "name": "US CMT (East) (H)",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CMT Music",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 200163548,
+      "num": 200163548,
+      "name": "US: Cinemax Classics",
+      "stream_icon": null,
+      "epg_channel_id": "cinemaxclassics.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T01:56:00.000Z",
+        "stop_utc": "2026-10-15T03:32:00.000Z",
+        "title": "Just Friends",
+        "description": null
+       },
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T03:32:00.000Z",
+        "stop_utc": "2026-10-15T04:58:00.000Z",
+        "title": "Son of Godzilla",
+        "description": null
+       },
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T04:58:00.000Z",
+        "stop_utc": "2026-10-15T06:45:00.000Z",
+        "title": "The Usual Suspects",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 200163566,
+      "num": 200163566,
+      "name": "US: Showtime",
+      "stream_icon": null,
+      "epg_channel_id": "cinemaxclassics.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T01:56:00.000Z",
+        "stop_utc": "2026-10-15T03:32:00.000Z",
+        "title": "Just Friends",
+        "description": null
+       },
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T03:32:00.000Z",
+        "stop_utc": "2026-10-15T04:58:00.000Z",
+        "title": "Son of Godzilla",
+        "description": null
+       },
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T04:58:00.000Z",
+        "stop_utc": "2026-10-15T06:45:00.000Z",
+        "title": "The Usual Suspects",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 400124927,
+      "num": 400124927,
+      "name": "US: SHOWTIME WEST",
+      "stream_icon": null,
+      "epg_channel_id": "showtimewest.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "showtimewest.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T05:00:00.000Z",
+        "title": "Real West",
+        "description": null
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "window": {
+     "from": "2026-10-15T02:00:00.000Z",
+     "to": "2026-10-15T06:00:00.000Z"
+    },
+    "opts": {
+     "categoryIds": [
+      1
+     ],
+     "hasEpgOnly": true,
+     "limit": 5
+    },
+    "rows": [
+     {
+      "stream_id": 1,
+      "num": 1,
+      "name": "UK: CMT",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.uk",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.uk",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "UK Hits",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 2,
+      "num": 2,
+      "name": "US: NBC 2 Orlando (WESH)",
+      "stream_icon": null,
+      "epg_channel_id": "wesh-ld.us_locals1",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "wesh-ld.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "WESH 2 News",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 3,
+      "num": 3,
+      "name": "US NBC 2 (WESH) Orlando (H)",
+      "stream_icon": null,
+      "epg_channel_id": "wesh-ld.us_locals1",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "wesh-ld.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "WESH 2 News",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 4,
+      "num": 4,
+      "name": "US: FOX 7 Miami (WSVN)",
+      "stream_icon": null,
+      "epg_channel_id": "wsvn-dt.us_locals1",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "wsvn-dt.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "7 News",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 7,
+      "num": 7,
+      "name": "US: Al Jazeera Arabic",
+      "stream_icon": null,
+      "epg_channel_id": "aljazeera.arabic.net",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "aljazeera.arabic.net",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T03:30:00.000Z",
+        "title": "Provider",
+        "description": null
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "window": {
+     "from": "2026-10-15T02:00:00.000Z",
+     "to": "2026-10-15T06:00:00.000Z"
+    },
+    "opts": {
+     "categoryId": 1,
+     "q": "cmt"
+    },
+    "rows": [
+     {
+      "stream_id": 1,
+      "num": 1,
+      "name": "UK: CMT",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.uk",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.uk",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "UK Hits",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 30800,
+      "num": 30800,
+      "name": "US CMT (S)",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CMT Music",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 36206,
+      "num": 36206,
+      "name": "US CMT (A)",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CMT Music",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 67730,
+      "num": 67730,
+      "name": "US CMT (East) (H)",
+      "stream_icon": null,
+      "epg_channel_id": "cmt.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cmt.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CMT Music",
+        "description": null
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "window": {
+     "from": "2026-10-14T00:00:00.000Z",
+     "to": "2026-10-16T00:00:00.000Z"
+    },
+    "opts": {
+     "q": "US:",
+     "hasEpgOnly": true
+    },
+    "rows": [
+     {
+      "stream_id": 2,
+      "num": 2,
+      "name": "US: NBC 2 Orlando (WESH)",
+      "stream_icon": null,
+      "epg_channel_id": "wesh-ld.us_locals1",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "wesh-ld.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "WESH 2 News",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 4,
+      "num": 4,
+      "name": "US: FOX 7 Miami (WSVN)",
+      "stream_icon": null,
+      "epg_channel_id": "wsvn-dt.us_locals1",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "wsvn-dt.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "7 News",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 7,
+      "num": 7,
+      "name": "US: Al Jazeera Arabic",
+      "stream_icon": null,
+      "epg_channel_id": "aljazeera.arabic.net",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "aljazeera.arabic.net",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T03:30:00.000Z",
+        "title": "Provider",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 8,
+      "num": 8,
+      "name": "US: HGTV West",
+      "stream_icon": null,
+      "epg_channel_id": "hgtvwest.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "hgtvwest.us",
+        "start_utc": "2026-10-15T05:00:00.000Z",
+        "stop_utc": "2026-10-15T06:00:00.000Z",
+        "title": "House Hunters",
+        "description": null
+       },
+       {
+        "channel_id": "hgtvwest.us",
+        "start_utc": "2026-10-15T06:10:00.000Z",
+        "stop_utc": "2026-10-15T07:00:00.000Z",
+        "title": "Love It or List It",
+        "description": "Moved ten minutes"
+       }
+      ]
+     },
+     {
+      "stream_id": 10,
+      "num": 10,
+      "name": "US: Oxygen (West)",
+      "stream_icon": null,
+      "epg_channel_id": "oxygenwest.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "oxygenwest.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "Snapped West",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 11,
+      "num": 11,
+      "name": "US: X",
+      "stream_icon": null,
+      "epg_channel_id": "x.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "x.us",
+        "start_utc": "2026-10-15T03:30:00.000Z",
+        "stop_utc": "2026-10-15T05:30:00.000Z",
+        "title": "Rescheduled movie",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 12,
+      "num": 12,
+      "name": "US: Starz Encore Suspense",
+      "stream_icon": null,
+      "epg_channel_id": "starzencoresuspense.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "starzencoresuspense.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:26:00.000Z",
+        "title": "Unknown",
+        "description": "When five men awake in a locked warehouse, none of them can remember his identity."
+       }
+      ]
+     },
+     {
+      "stream_id": 13,
+      "num": 13,
+      "name": "US: Outdoor Channel",
+      "stream_icon": null,
+      "epg_channel_id": "outdoorchannel.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "outdoorchannel.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T03:30:00.000Z",
+        "title": "Guns & Ammo TV",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 14,
+      "num": 14,
+      "name": "US: DISNEY JR EAST HD",
+      "stream_icon": null,
+      "epg_channel_id": "disneyjunior.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "disneyjunior.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "Bluey",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 100,
+      "num": 100,
+      "name": "US: ESPN",
+      "stream_icon": null,
+      "epg_channel_id": "external.espn",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "external.espn",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "Current external game",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 200,
+      "num": 200,
+      "name": "US: CNN",
+      "stream_icon": null,
+      "epg_channel_id": "cnn.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cnn.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CNN Newsroom",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 200163548,
+      "num": 200163548,
+      "name": "US: Cinemax Classics",
+      "stream_icon": null,
+      "epg_channel_id": "cinemaxclassics.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T01:56:00.000Z",
+        "stop_utc": "2026-10-15T03:32:00.000Z",
+        "title": "Just Friends",
+        "description": null
+       },
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T03:32:00.000Z",
+        "stop_utc": "2026-10-15T04:58:00.000Z",
+        "title": "Son of Godzilla",
+        "description": null
+       },
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T04:58:00.000Z",
+        "stop_utc": "2026-10-15T06:45:00.000Z",
+        "title": "The Usual Suspects",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 200163566,
+      "num": 200163566,
+      "name": "US: Showtime",
+      "stream_icon": null,
+      "epg_channel_id": "cinemaxclassics.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T01:56:00.000Z",
+        "stop_utc": "2026-10-15T03:32:00.000Z",
+        "title": "Just Friends",
+        "description": null
+       },
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T03:32:00.000Z",
+        "stop_utc": "2026-10-15T04:58:00.000Z",
+        "title": "Son of Godzilla",
+        "description": null
+       },
+       {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T04:58:00.000Z",
+        "stop_utc": "2026-10-15T06:45:00.000Z",
+        "title": "The Usual Suspects",
+        "description": null
+       }
+      ]
+     },
+     {
+      "stream_id": 400124927,
+      "num": 400124927,
+      "name": "US: SHOWTIME WEST",
+      "stream_icon": null,
+      "epg_channel_id": "showtimewest.us",
+      "tv_archive": 0,
+      "tv_archive_duration": null,
+      "programmes": [
+       {
+        "channel_id": "showtimewest.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T05:00:00.000Z",
+        "title": "Real West",
+        "description": null
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "window": {
+     "from": "2026-10-15T02:00:00.000Z",
+     "to": "2026-10-15T06:00:00.000Z"
+    },
+    "opts": {
+     "categoryIds": [
+      2
+     ]
+    },
+    "rows": []
+   }
+  ],
+  "search": [
+   {
+    "window": {
+     "from": "2026-10-14T00:00:00.000Z",
+     "to": "2026-10-16T00:00:00.000Z"
+    },
+    "opts": {
+     "q": "news"
+    },
+    "result": {
+     "total": 4,
+     "hits": [
+      {
+       "streamId": 2,
+       "channelName": "US: NBC 2 Orlando (WESH)",
+       "categoryId": 1,
+       "programIndex": 0,
+       "programme": {
+        "channel_id": "wesh-ld.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "WESH 2 News",
+        "description": null
+       }
+      },
+      {
+       "streamId": 3,
+       "channelName": "US NBC 2 (WESH) Orlando (H)",
+       "categoryId": 1,
+       "programIndex": 0,
+       "programme": {
+        "channel_id": "wesh-ld.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "WESH 2 News",
+        "description": null
+       }
+      },
+      {
+       "streamId": 4,
+       "channelName": "US: FOX 7 Miami (WSVN)",
+       "categoryId": 1,
+       "programIndex": 0,
+       "programme": {
+        "channel_id": "wsvn-dt.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "7 News",
+        "description": null
+       }
+      },
+      {
+       "streamId": 200,
+       "channelName": "US: CNN",
+       "categoryId": 1,
+       "programIndex": 0,
+       "programme": {
+        "channel_id": "cnn.us",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "CNN Newsroom",
+        "description": null
+       }
+      }
+     ]
+    }
+   },
+   {
+    "window": {
+     "from": "2026-10-14T00:00:00.000Z",
+     "to": "2026-10-16T00:00:00.000Z"
+    },
+    "opts": {
+     "q": "ten"
+    },
+    "result": {
+     "total": 1,
+     "hits": [
+      {
+       "streamId": 8,
+       "channelName": "US: HGTV West",
+       "categoryId": 1,
+       "programIndex": 1,
+       "programme": {
+        "channel_id": "hgtvwest.us",
+        "start_utc": "2026-10-15T06:10:00.000Z",
+        "stop_utc": "2026-10-15T07:00:00.000Z",
+        "title": "Love It or List It",
+        "description": "Moved ten minutes"
+       }
+      }
+     ]
+    }
+   },
+   {
+    "window": {
+     "from": "2026-10-15T02:00:00.000Z",
+     "to": "2026-10-15T06:00:00.000Z"
+    },
+    "opts": {
+     "q": "provider"
+    },
+    "result": {
+     "total": 1,
+     "hits": [
+      {
+       "streamId": 7,
+       "channelName": "US: Al Jazeera Arabic",
+       "categoryId": 1,
+       "programIndex": 0,
+       "programme": {
+        "channel_id": "aljazeera.arabic.net",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T03:30:00.000Z",
+        "title": "Provider",
+        "description": null
+       }
+      }
+     ]
+    }
+   },
+   {
+    "window": {
+     "from": "2026-10-14T00:00:00.000Z",
+     "to": "2026-10-16T00:00:00.000Z"
+    },
+    "opts": {
+     "q": "son of",
+     "limit": 1
+    },
+    "result": {
+     "total": 2,
+     "hits": [
+      {
+       "streamId": 200163548,
+       "channelName": "US: Cinemax Classics",
+       "categoryId": 1,
+       "programIndex": 1,
+       "programme": {
+        "channel_id": "cinemaxclassics.us",
+        "start_utc": "2026-10-15T03:32:00.000Z",
+        "stop_utc": "2026-10-15T04:58:00.000Z",
+        "title": "Son of Godzilla",
+        "description": null
+       }
+      }
+     ]
+    }
+   },
+   {
+    "window": {
+     "from": "2026-10-14T00:00:00.000Z",
+     "to": "2026-10-16T00:00:00.000Z"
+    },
+    "opts": {
+     "q": "e",
+     "categoryIds": [
+      1
+     ],
+     "limit": 3
+    },
+    "result": {
+     "total": 18,
+     "hits": [
+      {
+       "streamId": 2,
+       "channelName": "US: NBC 2 Orlando (WESH)",
+       "categoryId": 1,
+       "programIndex": 0,
+       "programme": {
+        "channel_id": "wesh-ld.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "WESH 2 News",
+        "description": null
+       }
+      },
+      {
+       "streamId": 3,
+       "channelName": "US NBC 2 (WESH) Orlando (H)",
+       "categoryId": 1,
+       "programIndex": 0,
+       "programme": {
+        "channel_id": "wesh-ld.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "WESH 2 News",
+        "description": null
+       }
+      },
+      {
+       "streamId": 4,
+       "channelName": "US: FOX 7 Miami (WSVN)",
+       "categoryId": 1,
+       "programIndex": 0,
+       "programme": {
+        "channel_id": "wsvn-dt.us_locals1",
+        "start_utc": "2026-10-15T03:00:00.000Z",
+        "stop_utc": "2026-10-15T04:00:00.000Z",
+        "title": "7 News",
+        "description": null
+       }
+      }
+     ]
+    }
+   },
+   {
+    "window": {
+     "from": "2026-10-15T02:00:00.000Z",
+     "to": "2026-10-15T06:00:00.000Z"
+    },
+    "opts": {
+     "q": "news",
+     "categoryIds": [
+      2
+     ]
+    },
+    "result": {
+     "total": 0,
+     "hits": []
+    }
+   }
+  ],
+  "now": {
+   "ids": [
+    1,
+    2,
+    3,
+    4,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    100,
+    200,
+    5866,
+    30800,
+    36206,
+    67730,
+    200163548,
+    200163566,
+    200168129,
+    200168199,
+    200168354,
+    200168388,
+    200168495,
+    400124927,
+    999999
+   ],
+   "rows": [
+    {
+     "channel_stream_id": 1,
+     "name": "UK: CMT",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "cmt.uk",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "UK Hits",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 2,
+     "name": "US: NBC 2 Orlando (WESH)",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "wesh-ld.us_locals1",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "WESH 2 News",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 3,
+     "name": "US NBC 2 (WESH) Orlando (H)",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "wesh-ld.us_locals1",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "WESH 2 News",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 4,
+     "name": "US: FOX 7 Miami (WSVN)",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "wsvn-dt.us_locals1",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "7 News",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 7,
+     "name": "US: Al Jazeera Arabic",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "aljazeera.arabic.net",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T03:30:00.000Z",
+      "title": "Provider",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 8,
+     "name": "US: HGTV West",
+     "stream_icon": null,
+     "current": null,
+     "next": {
+      "channel_id": "hgtvwest.us",
+      "start_utc": "2026-10-15T05:00:00.000Z",
+      "stop_utc": "2026-10-15T06:00:00.000Z",
+      "title": "House Hunters",
+      "description": null
+     }
+    },
+    {
+     "channel_stream_id": 9,
+     "name": "CINEBOX: ACTION",
+     "stream_icon": null,
+     "current": null,
+     "next": null
+    },
+    {
+     "channel_stream_id": 10,
+     "name": "US: Oxygen (West)",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "oxygenwest.us",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "Snapped West",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 11,
+     "name": "US: X",
+     "stream_icon": null,
+     "current": null,
+     "next": {
+      "channel_id": "x.us",
+      "start_utc": "2026-10-15T03:30:00.000Z",
+      "stop_utc": "2026-10-15T05:30:00.000Z",
+      "title": "Rescheduled movie",
+      "description": null
+     }
+    },
+    {
+     "channel_stream_id": 12,
+     "name": "US: Starz Encore Suspense",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "starzencoresuspense.us",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:26:00.000Z",
+      "title": "Unknown",
+      "description": "When five men awake in a locked warehouse, none of them can remember his identity."
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 13,
+     "name": "US: Outdoor Channel",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "outdoorchannel.us",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T03:30:00.000Z",
+      "title": "Guns & Ammo TV",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 14,
+     "name": "US: DISNEY JR EAST HD",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "disneyjunior.us",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "Bluey",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 15,
+     "name": "CA: Disney Junior",
+     "stream_icon": null,
+     "current": null,
+     "next": null
+    },
+    {
+     "channel_stream_id": 100,
+     "name": "US: ESPN",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "external.espn",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "Current external game",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 200,
+     "name": "US: CNN",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "cnn.us",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "CNN Newsroom",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 5866,
+     "name": "US Showtime West (S)",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "showtimewest.us",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T05:00:00.000Z",
+      "title": "Real West",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 30800,
+     "name": "US CMT (S)",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "cmt.us",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "CMT Music",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 36206,
+     "name": "US CMT (A)",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "cmt.us",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "CMT Music",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 67730,
+     "name": "US CMT (East) (H)",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "cmt.us",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "CMT Music",
+      "description": null
+     },
+     "next": null
+    },
+    {
+     "channel_stream_id": 200163548,
+     "name": "US: Cinemax Classics",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "cinemaxclassics.us",
+      "start_utc": "2026-10-15T01:56:00.000Z",
+      "stop_utc": "2026-10-15T03:32:00.000Z",
+      "title": "Just Friends",
+      "description": null
+     },
+     "next": {
+      "channel_id": "cinemaxclassics.us",
+      "start_utc": "2026-10-15T03:32:00.000Z",
+      "stop_utc": "2026-10-15T04:58:00.000Z",
+      "title": "Son of Godzilla",
+      "description": null
+     }
+    },
+    {
+     "channel_stream_id": 200163566,
+     "name": "US: Showtime",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "cinemaxclassics.us",
+      "start_utc": "2026-10-15T01:56:00.000Z",
+      "stop_utc": "2026-10-15T03:32:00.000Z",
+      "title": "Just Friends",
+      "description": null
+     },
+     "next": {
+      "channel_id": "cinemaxclassics.us",
+      "start_utc": "2026-10-15T03:32:00.000Z",
+      "stop_utc": "2026-10-15T04:58:00.000Z",
+      "title": "Son of Godzilla",
+      "description": null
+     }
+    },
+    {
+     "channel_stream_id": 200168129,
+     "name": "US: FOX 13 Memphis (WHBQ)",
+     "stream_icon": null,
+     "current": null,
+     "next": null
+    },
+    {
+     "channel_stream_id": 200168199,
+     "name": "US: ABC 3 Mobile (WEAR)",
+     "stream_icon": null,
+     "current": null,
+     "next": null
+    },
+    {
+     "channel_stream_id": 200168354,
+     "name": "US: NBC 11 Minneapolis (KARE)",
+     "stream_icon": null,
+     "current": null,
+     "next": {
+      "channel_id": "nbckare.us",
+      "start_utc": "2026-10-16T11:00:00.000Z",
+      "stop_utc": "2026-10-16T12:00:00.000Z",
+      "title": "KARE 11 Sunrise",
+      "description": null
+     }
+    },
+    {
+     "channel_stream_id": 200168388,
+     "name": "US: FOX 13 Seattle (KCPQ)",
+     "stream_icon": null,
+     "current": null,
+     "next": null
+    },
+    {
+     "channel_stream_id": 200168495,
+     "name": "US: MY 38 Boston (WSBK)",
+     "stream_icon": null,
+     "current": null,
+     "next": null
+    },
+    {
+     "channel_stream_id": 400124927,
+     "name": "US: SHOWTIME WEST",
+     "stream_icon": null,
+     "current": {
+      "channel_id": "showtimewest.us",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T05:00:00.000Z",
+      "title": "Real West",
+      "description": null
+     },
+     "next": null
+    }
+   ]
+  },
+  "channel": [
+   {
+    "id": 200163566,
+    "rows": [
+     {
+      "channel_id": "cinemaxclassics.us",
+      "start_utc": "2026-10-15T01:56:00.000Z",
+      "stop_utc": "2026-10-15T03:32:00.000Z",
+      "title": "Just Friends",
+      "description": null
+     },
+     {
+      "channel_id": "cinemaxclassics.us",
+      "start_utc": "2026-10-15T03:32:00.000Z",
+      "stop_utc": "2026-10-15T04:58:00.000Z",
+      "title": "Son of Godzilla",
+      "description": null
+     },
+     {
+      "channel_id": "cinemaxclassics.us",
+      "start_utc": "2026-10-15T04:58:00.000Z",
+      "stop_utc": "2026-10-15T06:45:00.000Z",
+      "title": "The Usual Suspects",
+      "description": null
+     }
+    ]
+   },
+   {
+    "id": 30800,
+    "rows": [
+     {
+      "channel_id": "cmt.us",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "CMT Music",
+      "description": null
+     }
+    ]
+   },
+   {
+    "id": 100,
+    "rows": [
+     {
+      "channel_id": "external.espn",
+      "start_utc": "2026-10-15T03:00:00.000Z",
+      "stop_utc": "2026-10-15T04:00:00.000Z",
+      "title": "Current external game",
+      "description": null
+     }
+    ]
+   },
+   {
+    "id": 9,
+    "rows": []
+   }
+  ]
  }
 }

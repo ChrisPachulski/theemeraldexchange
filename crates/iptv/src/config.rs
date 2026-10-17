@@ -3,6 +3,8 @@
 //! raw (an empty value is kept), `opt()` ones treat empty as unset, and a
 //! positive-int typo fails the boot instead of becoming NaN.
 
+pub use media_core::config::PrincipalMode;
+
 /// Secrets shorter than this, or a known placeholder, refuse a production boot
 /// (mirrors `server/services/secrets.ts`).
 const SECRET_MIN_LEN: usize = 32;
@@ -50,7 +52,6 @@ pub struct Config {
     pub iptv_manifest_fetch_timeout_ms: u64,
     pub iptv_manifest_max_bytes: u64,
     pub iptv_sync_cron: String,
-    pub iptv_recommender_export_secret: Option<String>,
     pub iptv_remux_tmp_dir: String,
     pub iptv_reencode_preset: String,
     pub iptv_reencode_threads: u64,
@@ -60,7 +61,14 @@ pub struct Config {
     pub dvr_dir: String,
     pub stream_token_secret: String,
     pub internal_principal_secret: Option<String>,
+    /// Internal-principal posture, shared with media-core and the transcoder
+    /// (`MEDIA_INTERNAL_PRINCIPAL_MODE`, compose defaults it to enforce).
+    pub principal_mode: PrincipalMode,
     pub allowed_origins: Vec<String>,
+    /// `USE_LOCAL_RECOMMENDER=1`: a qualifying watch is posted as `watched`.
+    pub use_local_recommender: bool,
+    pub recommender_url: String,
+    pub recommender_event_secret: Option<String>,
 }
 
 impl Config {
@@ -100,6 +108,13 @@ impl Config {
                 check_secret("INTERNAL_PRINCIPAL_SECRET", s)?;
             }
         }
+        let principal_mode =
+            PrincipalMode::parse(&get("MEDIA_INTERNAL_PRINCIPAL_MODE").unwrap_or_default())?;
+        if principal_mode == PrincipalMode::Enforce && internal_principal_secret.is_none() {
+            return Err(
+                "principal_mode=enforce requires INTERNAL_PRINCIPAL_SECRET to be set".into(),
+            );
+        }
         if internal_principal_secret.as_deref() == Some(stream_token_secret.as_str()) {
             return Err(
                 "STREAM_TOKEN_SECRET and INTERNAL_PRINCIPAL_SECRET must be distinct".into(),
@@ -136,7 +151,6 @@ impl Config {
             iptv_manifest_fetch_timeout_ms: pos("IPTV_MANIFEST_FETCH_TIMEOUT_MS", 10_000)?,
             iptv_manifest_max_bytes: pos("IPTV_MANIFEST_MAX_BYTES", 2 * 1024 * 1024)?,
             iptv_sync_cron: raw("IPTV_SYNC_CRON", "0 */6 * * *"),
-            iptv_recommender_export_secret: opt("IPTV_RECOMMENDER_EXPORT_SECRET"),
             iptv_remux_tmp_dir: raw("IPTV_REMUX_TMP_DIR", "/tmp/iptv-remux"),
             iptv_reencode_preset: raw("IPTV_REENCODE_PRESET", "veryfast"),
             iptv_reencode_threads: pos("IPTV_REENCODE_THREADS", 2)?,
@@ -146,6 +160,7 @@ impl Config {
             dvr_dir: raw("DVR_DIR", "./data/recordings"),
             stream_token_secret,
             internal_principal_secret,
+            principal_mode,
             allowed_origins: get("ALLOWED_ORIGINS")
                 .map(|v| {
                     v.split(',')
@@ -155,6 +170,15 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default(),
+            use_local_recommender: get("USE_LOCAL_RECOMMENDER").as_deref() == Some("1"),
+            recommender_url: opt("RECOMMENDER_URL").unwrap_or_else(|| {
+                if is_prod {
+                    "http://recommender:8000".into()
+                } else {
+                    "http://localhost:8000".into()
+                }
+            }),
+            recommender_event_secret: opt("RECOMMENDER_EVENT_SECRET"),
         })
     }
 
