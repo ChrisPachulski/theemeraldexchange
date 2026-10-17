@@ -45,6 +45,12 @@ const NATIVE_BOOTSTRAP_PATHS = [
   '/api/auth/device/poll',
   '/api/auth/apple',
   '/api/auth/google',
+  // 2026-10-16 review item 10: web-claimed pairing and native WorkOS sign-in
+  // are cookieless token-mint paths too, and 403'd bad_origin.
+  '/api/auth/device/link/start',
+  '/api/auth/device/link/poll',
+  '/api/auth/workos/native/start',
+  '/api/auth/workos/native',
 ] as const
 
 afterEach(() => {

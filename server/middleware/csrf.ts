@@ -60,6 +60,13 @@ const NATIVE_BOOTSTRAP_PATHS = new Set([
   '/api/auth/device/poll',
   '/api/auth/apple',
   '/api/auth/google',
+  // Web-claimed pairing (routes/deviceLink.ts) and native WorkOS sign-in: the
+  // same cookieless pre-token traffic. /device/link/claim is cookie-authed and
+  // stays gated.
+  '/api/auth/device/link/start',
+  '/api/auth/device/link/poll',
+  '/api/auth/workos/native/start',
+  '/api/auth/workos/native',
 ])
 
 function isNativeBootstrap(c: Parameters<MiddlewareHandler>[0]): boolean {
