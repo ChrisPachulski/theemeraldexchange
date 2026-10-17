@@ -45,19 +45,22 @@ pub struct AppState {
     pub config: Arc<Config>,
     http: reqwest::Client,
     search_limit: Arc<RateLimiter>,
+    /// Concurrency slots, raw live leases, dead-feed memory, the panel probe.
+    pub streams: Arc<crate::streams::Streams>,
 }
 
 impl AppState {
     pub fn new(pool: SqlitePool, config: Arc<Config>) -> Self {
         AppState {
             pool,
-            config,
             http: reqwest::Client::builder()
                 .timeout(MIRROR_TIMEOUT)
                 .build()
                 .expect("reqwest client builds"),
             // A read, not an indexer budget: a literal 10 req/s per caller.
             search_limit: Arc::new(RateLimiter::new(10, Duration::from_secs(1))),
+            streams: Arc::new(crate::streams::Streams::new(&config)),
+            config,
         }
     }
 }
@@ -93,6 +96,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/internal/members/{sub}", delete(internal_erase_member))
         .route("/internal/availability", post(internal_availability))
+        .merge(crate::streams::routes())
         .layer(middleware::from_fn_with_state(
             state.clone(),
             principal_layer,
@@ -106,7 +110,7 @@ pub fn router(state: AppState) -> Router {
 // ---- responses ---------------------------------------------------------------
 
 type ApiResult = Result<Response, ApiError>;
-type Claims = Option<Extension<InternalClaims>>;
+pub(crate) type Claims = Option<Extension<InternalClaims>>;
 
 /// An error status and its JSON body (`{"error": ...}` unless noted).
 struct ApiError(StatusCode, Value);
@@ -227,10 +231,10 @@ fn require_admin(state: &AppState, claims: &Claims) -> Result<(), ApiError> {
 
 // ---- JS coercions (the TS routes parse with Number()/new Date()) ----------------
 
-type Params = Query<Vec<(String, String)>>;
+pub(crate) type Params = Query<Vec<(String, String)>>;
 
 /// First value of a query key, like Hono's `c.req.query(key)`.
-fn param<'a>(q: &'a [(String, String)], key: &str) -> Option<&'a str> {
+pub(crate) fn param<'a>(q: &'a [(String, String)], key: &str) -> Option<&'a str> {
     q.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
 }
 
@@ -282,7 +286,7 @@ fn js_slice(s: &str, n: usize) -> &str {
 
 /// `new Date(s)` for the forms clients send: RFC 3339 (any offset), a zoneless
 /// date-time (taken as UTC, the container's zone) or a bare date.
-fn js_date(s: &str) -> Option<DateTime<Utc>> {
+pub(crate) fn js_date(s: &str) -> Option<DateTime<Utc>> {
     let s = s.trim();
     if let Ok(d) = DateTime::parse_from_rfc3339(s) {
         return Some(d.with_timezone(&Utc));

@@ -11,10 +11,13 @@ use sqlx::SqlitePool;
 /// The id a channel joins EPG on: its listing (the name-resolved id, else the
 /// raw tvg-id), unless a feed check proved the stream carries another channel
 /// (effectiveEpgSql in iptvFeedChecks.ts).
-const EFFECTIVE_EPG: &str = "COALESCE((SELECT f.actual_epg_id FROM channel_feed_checks f \
+pub(crate) const EFFECTIVE_EPG: &str = "COALESCE((SELECT f.actual_epg_id FROM channel_feed_checks f \
      WHERE f.stream_id = channels.stream_id AND f.verdict = 'mislabeled' \
        AND f.listed_epg_id = NULLIF(COALESCE(channels.epg_resolved_id, channels.epg_channel_id), '')), \
      NULLIF(COALESCE(channels.epg_resolved_id, channels.epg_channel_id), ''))";
+/// The listing alone (listedEpgSql in iptvFeedChecks.ts).
+pub(crate) const LISTED_EPG: &str =
+    "NULLIF(COALESCE(channels.epg_resolved_id, channels.epg_channel_id), '')";
 
 const GRID_LIMIT_MAX: i64 = 60_000;
 const SEARCH_LIMIT_MAX: i64 = 500;

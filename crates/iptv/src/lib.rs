@@ -5,12 +5,17 @@
 
 pub mod api;
 pub mod catalog;
+pub mod concurrency;
 pub mod config;
 pub mod db;
+pub mod egress;
 pub mod epg;
 pub mod epg_resolve;
+pub mod hls;
 pub mod playlist;
 pub mod scheduler;
+pub mod siblings;
+pub mod streams;
 pub mod sync;
 pub mod xmltv;
 pub mod xtream;

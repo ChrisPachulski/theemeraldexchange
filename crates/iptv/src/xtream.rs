@@ -480,32 +480,96 @@ impl Client {
 /// carry the URL: a panel URL holds the provider password.
 pub async fn send_guarded(
     http: &reqwest::Client,
-    mut url: Url,
+    url: Url,
     label: &str,
 ) -> Result<reqwest::Response, String> {
+    fetch_guarded(http, url, None, false)
+        .await
+        .map_err(|e| match e {
+            FetchError::Blocked(e) => format!("{label}_blocked: {e}"),
+            FetchError::Failed(e) => format!("{label}_failed: {e}"),
+            FetchError::BadRedirect => format!("{label}_bad_redirect"),
+            FetchError::TooManyRedirects => format!("{label}_too_many_redirects"),
+        })
+}
+
+#[derive(Debug)]
+pub enum FetchError {
+    /// The SSRF guard refused a hop.
+    Blocked(String),
+    /// A transport error (the message never carries the URL).
+    Failed(String),
+    BadRedirect,
+    TooManyRedirects,
+}
+
+impl FetchError {
+    /// The TS SsrfBlockedError cases (a refused hop or a redirect loop).
+    pub fn is_blocked(&self) -> bool {
+        matches!(self, FetchError::Blocked(_) | FetchError::TooManyRedirects)
+    }
+}
+
+/// GET with redirects driven by hand: every redirect hop goes through
+/// [`guard`], and so does the first unless it is the operator-trusted panel
+/// (`guard_first` false: guardedFetchTrustedOrigin; true: guardedFetch).
+/// `range` is forwarded as the Range header. The response's `url()` is the
+/// URL that answered, after any redirects.
+pub async fn fetch_guarded(
+    http: &reqwest::Client,
+    mut url: Url,
+    range: Option<&str>,
+    guard_first: bool,
+) -> Result<reqwest::Response, FetchError> {
     for hop in 0..=ssrf_guard::MAX_REDIRECTS {
-        if hop > 0 {
-            ssrf_guard::guard_url(&url)
-                .await
-                .map_err(|e| format!("{label}_blocked: {e}"))?;
+        if hop > 0 || guard_first {
+            guard(&url).await.map_err(FetchError::Blocked)?;
         }
-        let res = http
-            .get(url.clone())
+        let mut req = http.get(url.clone());
+        if let Some(r) = range {
+            req = req.header(reqwest::header::RANGE, r);
+        }
+        let res = req
             .send()
             .await
-            .map_err(|e| format!("{label}_failed: {}", e.without_url()))?;
+            .map_err(|e| FetchError::Failed(e.without_url().to_string()))?;
         if res.status().is_redirection()
             && let Some(loc) = res
                 .headers()
                 .get(reqwest::header::LOCATION)
                 .and_then(|v| v.to_str().ok())
         {
-            url = url.join(loc).map_err(|_| format!("{label}_bad_redirect"))?;
+            url = url.join(loc).map_err(|_| FetchError::BadRedirect)?;
             continue;
         }
         return Ok(res);
     }
-    Err(format!("{label}_too_many_redirects"))
+    Err(FetchError::TooManyRedirects)
+}
+
+/// The SSRF guard for every upstream hop that is not the trusted panel:
+/// http(s) only, no private/internal host, and a name must resolve public.
+pub async fn guard(url: &Url) -> Result<(), String> {
+    #[cfg(test)]
+    if url.host_str() == Some("127.0.0.1")
+        && url
+            .port()
+            .is_some_and(|p| TEST_PUBLIC_PORTS.lock().unwrap().contains(&p))
+    {
+        return Ok(());
+    }
+    ssrf_guard::guard_url(url).await
+}
+
+/// Loopback ports tests treat as public hosts (a fake CDN), so redirect and
+/// rewrite paths run against local servers. Never compiled into the binary.
+#[cfg(test)]
+static TEST_PUBLIC_PORTS: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+pub(crate) fn test_public(base: &str) {
+    let port = Url::parse(base).unwrap().port().unwrap();
+    TEST_PUBLIC_PORTS.lock().unwrap().push(port);
 }
 
 #[cfg(test)]
