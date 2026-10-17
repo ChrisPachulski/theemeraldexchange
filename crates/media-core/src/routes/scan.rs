@@ -151,6 +151,8 @@ pub(super) async fn trigger_scan(
             }
         }
 
+        crate::run_extra_passes(&bg, "manual").await;
+
         set_scan_state(&bg.db, "finished_at", &chrono::Utc::now().to_rfc3339()).await;
         set_scan_state(&bg.db, "state", "idle").await;
         bg.scanning.store(false, Ordering::SeqCst);
@@ -226,6 +228,46 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert!(idle, "scan/status never returned idle");
+    }
+
+    #[tokio::test]
+    async fn manual_scan_runs_the_same_passes_as_the_scheduled_one() {
+        // 2026-10-16 review item 20: POST /scan ran the video and music passes
+        // only, so photos, audiobooks and YouTube waited for the next
+        // scheduled scan.
+        let mut state = test_state().await;
+        let photos = tempfile::tempdir().unwrap();
+        std::fs::write(photos.path().join("beach.jpg"), b"jpeg").unwrap();
+        let mut config = (*state.config).clone();
+        config.photo_roots = vec![photos.path().to_path_buf()];
+        state.config = std::sync::Arc::new(config);
+        let app = crate::build_router(state.clone());
+        let resp = app
+            .clone()
+            .oneshot(req("POST", "/api/media/scan"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        let mut indexed = 0i64;
+        for _ in 0..200 {
+            let st = body_json(
+                app.clone()
+                    .oneshot(req("GET", "/api/media/scan/status"))
+                    .await
+                    .unwrap(),
+            )
+            .await;
+            indexed = sqlx::query_scalar("SELECT COUNT(*) FROM photos")
+                .fetch_one(&state.db.pool)
+                .await
+                .unwrap();
+            if st["state"] == "idle" && st["finished_at"].is_string() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(indexed, 1, "the manual scan indexes photos too");
     }
 
     #[tokio::test]
