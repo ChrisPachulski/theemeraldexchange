@@ -187,6 +187,10 @@ struct Session {
     started_at: u64,
     last_seen: u64,
     start_secs: u64,
+    /// The offset the grant asked for. `start_secs` is that offset snapped to
+    /// the segment/keyframe grid, so coalescing compares this one: an
+    /// identical off-grid resume grant must match its own session.
+    requested_start_secs: u64,
     /// First segment number (`-start_number`) of the CURRENT ffmpeg child.
     /// 0 for the initial spawn; each respawn advances it past the furthest
     /// segment already written so numbering stays monotonic for the session's
@@ -1111,7 +1115,7 @@ impl SessionManager {
                 && s.input_path == opts.input_path
                 && now.saturating_sub(s.last_seen) <= IDLE_TIMEOUT.as_secs();
             same_title.then(|| {
-                let same_playback = s.start_secs == opts.start_secs
+                let same_playback = s.requested_start_secs == opts.start_secs
                     && s.plan == opts.plan
                     && s.client_max_kbps == opts.client_max_kbps;
                 (id.clone(), same_playback)
@@ -1379,6 +1383,7 @@ impl SessionManager {
             started_at: now,
             last_seen: now,
             start_secs: eff_start,
+            requested_start_secs: opts.start_secs,
             start_number: eff_start_number,
             restarts: 0,
             ctl: ctl_tx,
@@ -3008,6 +3013,28 @@ mod tests {
         mgr.stop(&b).await;
         wait_for(|| !process_alive(pid_b)).await;
         assert!(mgr.is_empty().await);
+    }
+
+    #[tokio::test]
+    async fn duplicate_grant_at_an_off_grid_offset_coalesces() {
+        // 2026-10-16 review item 15: the session stored the offset rounded to
+        // the segment grid (125 -> 124) and compared it with the requested
+        // one, so an identical resume grant read as a new offset and stopped
+        // the live session instead of reusing it.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let resume = || StartOpts {
+            start_secs: 125,
+            ..encode_opts_id("/lib/a.mkv", 7)
+        };
+        let a = mgr.start(resume()).await.unwrap();
+        let b = mgr.start(resume()).await.unwrap();
+        assert_eq!(
+            a, b,
+            "an identical off-grid resume grant must reuse the session"
+        );
+        assert_eq!(mgr.len().await, 1);
+        mgr.stop(&a).await;
     }
 
     #[tokio::test]
