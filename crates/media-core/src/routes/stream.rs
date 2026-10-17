@@ -285,6 +285,7 @@ impl TranscodeHandoff<'_> {
                 "aac_max_channels": self.caps.aac_max_channels,
                 "hls_fmp4_hevc": self.caps.hls_fmp4_hevc,
                 "alt_audio": self.caps.alt_audio,
+                "native_hls": self.caps.native_hls,
                 "dolby_vision": self.caps.dolby_vision,
             },
             "media_kind": self.kind,
@@ -935,6 +936,40 @@ mod tests {
         assert_eq!(body["force_transcode"], true);
         assert_eq!(body["start_secs"], 42);
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn stream_handoff_forwards_native_hls() {
+        // 2026-10-16 review item 21: grant_body dropped native_hls, so the
+        // transcoder never muxed the alternate audio tracks for AVPlayer.
+        for (query, want_cap) in [("&native_hls=true", true), ("", false)] {
+            let grant = json!({
+                "directPlay": false,
+                "transcode": true,
+                "sessionId": "sess-native",
+                "manifestUrl": "/api/transcode/session/sess-native/index.m3u8",
+                "heartbeatUrl": "/api/transcode/session/sess-native/heartbeat",
+            });
+            let seen = Arc::new(tokio::sync::Mutex::new(None));
+            let (base, handle) =
+                spawn_mock_transcoder_capture(grant, StatusCode::OK, seen.clone()).await;
+            let state = test_state_with_transcoder(&base).await;
+            let file_id = seed_media_file(&state, "/lib/dual-audio.mkv").await;
+            let movie_id = seed_movie_for_file(&state, file_id).await;
+            let resp = crate::build_router(state)
+                .oneshot(req(
+                    "GET",
+                    format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1{query}"
+                    ),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let body = seen.lock().await.clone().expect("transcoder grant body");
+            assert_eq!(body["caps"]["native_hls"], want_cap, "query {query:?}");
+            handle.abort();
+        }
     }
 
     #[tokio::test]
