@@ -1526,7 +1526,9 @@ impl SessionManager {
         else {
             return false;
         };
-        let frontier = max_segment_index(&dir).await.map_or(first, |m| m.max(first));
+        let frontier = max_segment_index(&dir)
+            .await
+            .map_or(first, |m| m.max(first));
         if index >= first && index <= frontier + BACKFILL_AHEAD_SEGMENTS {
             return false;
         }
