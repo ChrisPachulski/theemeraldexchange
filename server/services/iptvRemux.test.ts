@@ -35,6 +35,7 @@ import {
   channelNeedsReencode,
   channelIsDeadFeed,
   TS_STORM_LINES,
+  SEGMENT_STALL_MS,
   _clearDeadFeedMemoryForTests,
   _clearDrainingForTests,
   _clearAuxUpstreamsForTests,
@@ -213,6 +214,53 @@ describe('iptv remux session', () => {
     first.emit('exit', null, 'SIGKILL')
     expect(listRemuxSessions().map((x) => x.sessionId)).not.toContain(s.sessionId)
     expect(spawnMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('ONE timestamp jump over an hour relaunches in place; a sub-hour jump does not (prod 2026-10-03)', () => {
+    // A single >150h provider jump never reached the storm count, yet ffmpeg wrote
+    // no further segments and the player starved after its cushion.
+    const first = fakeProcess()
+    const second = fakeProcess()
+    spawnMock.mockReturnValueOnce(first).mockReturnValueOnce(second)
+    const s = startRemuxSession({ streamId: '63', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })!
+    first.stderr.emit('data', Buffer.from('Output #0, hls, to \'/tmp/x/index.m3u8\':\n'))
+    vi.useFakeTimers({ now: Date.now() + 25_000, toFake: ['Date'] })
+    first.stderr.emit('data', Buffer.from('[vist#0:0/h264 @ 0x1] timestamp discontinuity (stream id=256): 300000000, new offset= -300000000\n'))
+    expect(first.kill).not.toHaveBeenCalled()
+    first.stderr.emit('data', Buffer.from('[vist#0:0/h264 @ 0x1] timestamp discontinuity (stream id=256): -551098765432, new offset= 551098765432\n'))
+    expect(first.kill).toHaveBeenCalledWith('SIGKILL')
+    first.emit('exit', null, 'SIGKILL')
+    expect(channelIsDeadFeed('63')).toBe(false)
+    expect(listRemuxSessions().map((x) => x.sessionId)).toEqual([s.sessionId])
+    const args = spawnMock.mock.calls[1][1] as string[]
+    expect(args[args.indexOf('-hls_flags') + 1]).toBe('delete_segments+append_list+omit_endlist+discont_start')
+    vi.useRealTimers()
+  })
+
+  it('a muxer that stops cutting segments is relaunched in place after SEGMENT_STALL_MS', () => {
+    vi.useFakeTimers()
+    const first = fakeProcess()
+    const second = fakeProcess()
+    spawnMock.mockReturnValueOnce(first).mockReturnValueOnce(second)
+    const s = startRemuxSession({ streamId: '64', sub: 'plex:test', upstreamUrl: 'https://x/y.ts' })!
+    first.stderr.emit('data', Buffer.from('Output #0, hls, to \'/tmp/x/index.m3u8\':\n'))
+    vi.advanceTimersByTime(20_000)
+    // Steady segments keep pushing the watchdog back.
+    for (let i = 1; i <= 5; i++) {
+      first.stderr.emit('data', Buffer.from(`[hls @ 0x1] Opening 'seg_0000${i}.ts' for writing\n`))
+      vi.advanceTimersByTime(SEGMENT_STALL_MS - 1_000)
+    }
+    expect(first.kill).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1_000)
+    expect(first.kill).toHaveBeenCalledWith('SIGKILL')
+    first.emit('exit', null, 'SIGKILL')
+    expect(listRemuxSessions().map((x) => x.sessionId)).toEqual([s.sessionId])
+    expect(spawnMock).toHaveBeenCalledTimes(2)
+    // A child that exits on its own disarms its watchdog: no stray kill later.
+    stopRemuxSession(s.sessionId)
+    vi.advanceTimersByTime(60_000)
+    expect(first.kill).toHaveBeenCalledTimes(1)
+    vi.useRealTimers()
   })
 
   it('a copy session whose INPUT video IS H.264 leaves the channel on the copy path', () => {

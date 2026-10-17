@@ -799,6 +799,10 @@ async fn session_segment(
         )
             .into_response();
     };
+    // A client pulling assets is alive even when it cannot heartbeat: an iOS
+    // offline download (AVAssetDownloadTask) keeps fetching segments while the
+    // app is suspended, and without this the 30s idle reap killed it mid-title.
+    state.sessions.heartbeat(&id).await;
 
     // Native players walk a COMPLETE VOD playlist (see `session_manifest`) whose
     // tail segments may not be encoded yet — the on-demand encoder is producing
@@ -1781,6 +1785,64 @@ mod tests {
             .unwrap();
         let v: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(v["error"], "transcoder_busy");
+    }
+
+    #[tokio::test]
+    async fn segment_fetch_counts_as_a_heartbeat() {
+        // An iOS offline download keeps pulling segments while the app is
+        // suspended and cannot POST heartbeats; serving it must keep the session
+        // out of the 30s idle reap.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        );
+        let resp = router(state.clone())
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(grant_body(&h264_file())))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let session_id = v["sessionId"].as_str().unwrap().to_string();
+        let seg = state
+            .sessions
+            .asset_path(&session_id, "seg_00000.ts")
+            .await
+            .unwrap();
+        for _ in 0..1000 {
+            if seg.exists() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+
+        state.sessions.age_for_test(&session_id, 100).await;
+        let stale = state.sessions.list().await[0].last_seen;
+        let resp = router(state.clone())
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/api/transcode/session/{session_id}/seg_00000.ts"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(state.sessions.list().await[0].last_seen >= stale + 100);
+        state.sessions.stop(&session_id).await;
     }
 
     #[tokio::test]
