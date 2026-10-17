@@ -121,9 +121,11 @@ export async function fetchAndRewriteHlsPlaylist(opts: {
       // finite-asset TTL. Mirror the grant's playback-duration TTL.
       ttlSecs: env.IPTV_ONDEMAND_TOKEN_TTL_SECS,
     })
+  // Relative URIs resolve against where the playlist was actually served
+  // from: the provider 30x's panel URLs to its CDN.
   const rewritten = rewriteManifest(
     text,
-    opts.upstreamUrl,
+    upstream.url || opts.upstreamUrl,
     sign,
     '/api/iptv/stream/segment',
     opts.owner,
