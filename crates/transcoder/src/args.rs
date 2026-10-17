@@ -646,7 +646,12 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
                 let upload = match encoder {
                     HwEncoder::Vaapi => Some("format=nv12,hwupload"),
                     HwEncoder::Qsv => Some("format=nv12,hwupload=extra_hw_frames=64"),
-                    _ => None,
+                    // Any other encoder keeps the source's pixel format: a 10-bit
+                    // or 4:2:2 source became H.264 High 10 / High 4:2:2, which
+                    // browsers and AVPlayer cannot decode. The tone-map chain
+                    // already ends in yuv420p.
+                    _ if vf.as_deref().is_some_and(|f| f.ends_with("format=yuv420p")) => None,
+                    _ => Some("format=yuv420p"),
                 };
                 if let Some(up) = upload {
                     vf = Some(match vf {
@@ -1302,8 +1307,8 @@ mod tests {
         // AAC re-encode is forced to stereo (-ac 2) so the browser MSE path can
         // append it — a multichannel append fails ("audio SourceBuffer error").
         assert!(j.contains("-c:a aac -ac 2 -b:a 192k"), "{j}");
-        // No -vf when nothing in the filtergraph.
-        assert!(!j.contains("-vf"), "{j}");
+        // Only the 8-bit 4:2:0 conversion when nothing else is in the filtergraph.
+        assert!(j.contains("-vf format=yuv420p "), "{j}");
     }
 
     #[test]
@@ -1484,6 +1489,27 @@ mod tests {
         assert!(j.contains("format=yuv420p"), "{j}");
     }
 
+    // 2026-10-16 review item 25: a 10-bit SDR source on the CPU path became
+    // H.264 High 10 (libx264 keeps the input pixel format).
+    #[test]
+    fn cpu_encode_outputs_8bit_420() {
+        let plan = transcode(
+            VideoOp::EncodeH264 {
+                scale_to_height: None,
+                tone_map: false,
+                burn_subtitle_index: None,
+                source_height: None,
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        let a = ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, HwEncoder::Cpu);
+        assert_eq!(
+            a[a.iter().position(|s| s == "-vf").expect("-vf") + 1],
+            "format=yuv420p"
+        );
+    }
+
     #[test]
     fn tone_map_and_scale_compose_in_order() {
         let plan = transcode(
@@ -1555,7 +1581,7 @@ mod tests {
         let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
         assert_eq!(
             args[vf_idx + 1],
-            "subtitles='/lib/it'\\''s.mkv':si=1",
+            "subtitles='/lib/it'\\''s.mkv':si=1,format=yuv420p",
             "quote must close-escape-reopen inside the quoted filename"
         );
     }
@@ -1586,10 +1612,11 @@ mod tests {
         );
         let vf_idx = args.iter().position(|s| s == "-vf").expect("missing -vf");
         let vf = &args[vf_idx + 1];
-        // One filter, comma/brackets inside the quotes (only the quote is escaped).
+        // One filter (plus the 4:2:0 tail), comma/brackets inside the quotes
+        // (only the quote is escaped).
         assert_eq!(
             vf,
-            "subtitles='/lib/Movie (2020), [Dir]'\\''s Cut/s.mkv':si=2"
+            "subtitles='/lib/Movie (2020), [Dir]'\\''s Cut/s.mkv':si=2,format=yuv420p"
         );
         assert!(
             vf.contains("(2020), [Dir]"),
