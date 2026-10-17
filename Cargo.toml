@@ -6,6 +6,7 @@ members = [
   "crates/emerald-contracts-pyo3",
   "crates/media-core",
   "crates/transcoder",
+  "crates/iptv",
 ]
 # ytresolve (our native Rust YouTube extractor) now lives in its own repo:
 #   https://github.com/ChrisPachulski/rust-yt-extractor
