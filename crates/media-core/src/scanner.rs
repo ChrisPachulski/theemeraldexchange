@@ -581,17 +581,20 @@ async fn prune_missing_files(
 }
 
 /// Remove watch-state rows whose `(media_kind, media_id)` no longer resolves to
-/// an existing movie/episode (orphans left by title deletion, or pre-existing
-/// forged rows). Returns the number of rows removed. The relationship is
-/// polymorphic (media_kind ∈ {movie, episode}), so a SQL foreign key cannot
-/// enforce it (§7-8); this GC — wired into the end of every scan pass — is how
-/// orphans are reaped.
+/// an existing item of that kind (orphans left by title deletion, or
+/// pre-existing forged rows). Returns the number of rows removed. The
+/// relationship is polymorphic (every kind the 0015 CHECK allows), so a SQL
+/// foreign key cannot enforce it (§7-8); this GC — wired into the end of every
+/// scan pass — is how orphans are reaped.
 pub async fn gc_orphan_watch_state(db: &Db) -> Result<u64, sqlx::Error> {
     let res = sqlx::query(
         "DELETE FROM media_watch_state \
-         WHERE (media_kind = 'movie'   AND media_id NOT IN (SELECT id FROM movies)) \
-            OR (media_kind = 'episode' AND media_id NOT IN (SELECT id FROM episodes)) \
-            OR media_kind NOT IN ('movie', 'episode')",
+         WHERE (media_kind = 'movie'           AND media_id NOT IN (SELECT id FROM movies)) \
+            OR (media_kind = 'episode'         AND media_id NOT IN (SELECT id FROM episodes)) \
+            OR (media_kind = 'track'           AND media_id NOT IN (SELECT id FROM tracks)) \
+            OR (media_kind = 'audiobook'       AND media_id NOT IN (SELECT id FROM audiobooks)) \
+            OR (media_kind = 'podcast_episode' AND media_id NOT IN (SELECT id FROM podcast_episodes)) \
+            OR (media_kind = 'video'           AND media_id NOT IN (SELECT id FROM youtube_videos))",
     )
     .execute(&db.pool)
     .await?;
@@ -5280,6 +5283,77 @@ mod tests {
             "the skipped root is surfaced as an error"
         );
         assert_eq!(count(&db, "tracks").await, 1, "the track survives");
+    }
+}
+
+#[cfg(test)]
+mod watch_state_gc_tests {
+    use super::*;
+
+    // 2026-10-16 review item 7: the GC deleted every row whose kind was not
+    // movie/episode, so each scan erased music, audiobook, podcast and YouTube
+    // progress that migrations 0007/0015 allow.
+    #[tokio::test]
+    async fn gc_keeps_live_rows_of_every_kind_and_drops_orphans() {
+        let db = Db::connect_memory().await.unwrap();
+        for (i, path) in ["/m/a.flac", "/m/b.m4b", "/m/c.mp4"].iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO media_files (id, path, size_bytes, mtime, audio_tracks_json, subtitle_tracks_json, scanned_at) \
+                 VALUES (?, ?, 1, 't', '[]', '[]', 't')",
+            )
+            .bind(i as i64 + 1)
+            .bind(path)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO artists (id, name) VALUES (1, 'A'); \
+             INSERT INTO albums (id, artist_id, title) VALUES (1, 1, 'B'); \
+             INSERT INTO tracks (id, album_id, media_file_id, title) VALUES (10, 1, 1, 'T'); \
+             INSERT INTO audiobooks (id, media_file_id, author, title) VALUES (20, 2, 'X', 'Y'); \
+             INSERT INTO podcasts (id, feed_url, title, added_at) VALUES (1, 'https://f', 'P', 't'); \
+             INSERT INTO podcast_episodes (id, podcast_id, guid, title, audio_url) VALUES (30, 1, 'g', 'E', 'https://a'); \
+             INSERT INTO youtube_videos (id, media_file_id, channel, channel_dir, title) VALUES (40, 3, 'C', 'c', 'V');",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let rows = [
+            ("track", 10),
+            ("audiobook", 20),
+            ("podcast_episode", 30),
+            ("video", 40),
+            ("track", 99),
+        ];
+        for (kind, id) in rows {
+            sqlx::query("INSERT INTO media_watch_state (sub, media_kind, media_id, position_secs, watched_at) VALUES ('plex:1', ?, ?, 5, 't')")
+                .bind(kind)
+                .bind(id)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            gc_orphan_watch_state(&db).await.unwrap(),
+            1,
+            "only the orphan track row goes"
+        );
+        let left: Vec<(String, i64)> =
+            sqlx::query_as("SELECT media_kind, media_id FROM media_watch_state ORDER BY media_id")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            left,
+            vec![
+                ("track".into(), 10),
+                ("audiobook".into(), 20),
+                ("podcast_episode".into(), 30),
+                ("video".into(), 40)
+            ]
+        );
     }
 }
 
