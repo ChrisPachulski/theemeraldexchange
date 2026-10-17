@@ -1262,11 +1262,25 @@ async fn upsert_movie(
 
     match existing {
         Some(id) => {
+            // A renamed file arrives as a new media_files row; follow it once the
+            // old path is gone, or pruning that path cascade-deletes the movie.
+            // A second rip of a film whose first file is still there leaves it be.
+            let current: Option<String> = sqlx::query_scalar(
+                "SELECT f.path FROM movies m JOIN media_files f ON f.id = m.file_id WHERE m.id = ?",
+            )
+            .bind(id)
+            .fetch_optional(&db.pool)
+            .await?;
+            let follow = match current {
+                Some(path) => !tokio::fs::try_exists(&path).await.unwrap_or(true),
+                None => true,
+            };
             sqlx::query(
                 "UPDATE movies SET title = ?, year = ?, tmdb_id = COALESCE(?, tmdb_id), \
                  imdb_id = COALESCE(?, imdb_id), overview = COALESCE(?, overview), \
                  poster_path = COALESCE(?, poster_path), \
-                 content_rating = COALESCE(?, content_rating) WHERE id = ?",
+                 content_rating = COALESCE(?, content_rating), \
+                 file_id = CASE WHEN ? THEN ? ELSE file_id END WHERE id = ?",
             )
             .bind(final_title)
             .bind(final_year)
@@ -1275,6 +1289,8 @@ async fn upsert_movie(
             .bind(&overview)
             .bind(&poster_path)
             .bind(&content_rating)
+            .bind(follow)
+            .bind(file_id)
             .bind(id)
             .execute(&db.pool)
             .await?;
@@ -5283,6 +5299,96 @@ mod tests {
             "the skipped root is surfaced as an error"
         );
         assert_eq!(count(&db, "tracks").await, 1, "the track survives");
+    }
+}
+
+#[cfg(test)]
+mod movie_rename_tests {
+    use super::*;
+
+    async fn file_row(db: &Db, path: &std::path::Path) -> i64 {
+        sqlx::query(
+            "INSERT INTO media_files (path, size_bytes, mtime, audio_tracks_json, subtitle_tracks_json, scanned_at) \
+             VALUES (?, 1, 't', '[]', '[]', 't')",
+        )
+        .bind(path.to_str().unwrap())
+        .execute(&db.pool)
+        .await
+        .unwrap()
+        .last_insert_rowid()
+    }
+
+    fn heat() -> TmdbMatch {
+        TmdbMatch {
+            tmdb_id: 949,
+            title: "Heat".into(),
+            year: Some(1995),
+            imdb_id: None,
+            tvdb_id: None,
+            overview: None,
+            poster_path: None,
+            content_rating: None,
+        }
+    }
+
+    async fn movie_file(db: &Db) -> Option<i64> {
+        sqlx::query_scalar("SELECT file_id FROM movies WHERE tmdb_id = 949")
+            .fetch_optional(&db.pool)
+            .await
+            .unwrap()
+    }
+
+    // 2026-10-16 review item 8: the matched UPDATE never moved file_id, so the
+    // prune of the old path cascade-deleted the movie and its watch state.
+    #[tokio::test]
+    async fn renaming_a_matched_movie_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (old, new) = (
+            dir.path().join("Heat.1995.mkv"),
+            dir.path().join("Heat (1995).mkv"),
+        );
+        std::fs::write(&old, b"x").unwrap();
+        let db = Db::connect_memory().await.unwrap();
+        let f1 = file_row(&db, &old).await;
+        upsert_movie(&db, "Heat", Some(1995), f1, "t", Some(&heat()))
+            .await
+            .unwrap();
+
+        std::fs::rename(&old, &new).unwrap();
+        let f2 = file_row(&db, &new).await;
+        upsert_movie(&db, "Heat", Some(1995), f2, "t", Some(&heat()))
+            .await
+            .unwrap();
+        prune_missing_files(&db, &[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            movie_file(&db).await,
+            Some(f2),
+            "the movie follows its file"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_rip_does_not_steal_the_movie() {
+        let dir = tempfile::tempdir().unwrap();
+        let (hd, uhd) = (
+            dir.path().join("Heat.1080p.mkv"),
+            dir.path().join("Heat.2160p.mkv"),
+        );
+        std::fs::write(&hd, b"x").unwrap();
+        std::fs::write(&uhd, b"x").unwrap();
+        let db = Db::connect_memory().await.unwrap();
+        let f1 = file_row(&db, &hd).await;
+        let f2 = file_row(&db, &uhd).await;
+        upsert_movie(&db, "Heat", Some(1995), f1, "t", Some(&heat()))
+            .await
+            .unwrap();
+        upsert_movie(&db, "Heat", Some(1995), f2, "t", Some(&heat()))
+            .await
+            .unwrap();
+        assert_eq!(movie_file(&db).await, Some(f1));
     }
 }
 
