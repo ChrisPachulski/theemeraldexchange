@@ -224,6 +224,7 @@ def load_user_context(
     req: ScoreRequest,
     *,
     persist_library: bool = False,
+    stored_engagement: bool = True,
 ) -> UserContext:
     """Build a UserContext for this scoring request.
 
@@ -233,6 +234,10 @@ def load_user_context(
         the recommender's library_items / household_rejections tables.
       * per-user feedback + recently_shown: always from the recommender DB,
         since the recommender owns those tables.
+
+    ``stored_engagement`` (default True): False keeps the stored clicked/
+    added/watched rows out of an inline-feedback request; offline eval needs
+    its holdout untouched by live engagement.
 
     ``persist_library`` (default False): when True and a request library is
     supplied, the library is upserted into ``library_items`` so the DB
@@ -306,7 +311,8 @@ def load_user_context(
         engagement_likes = {
             r["tmdb_id"]
             for r in fb_rows
-            if r["signal"] in ENGAGEMENT_FEEDBACK_SIGNALS
+            if stored_engagement
+            and r["signal"] in ENGAGEMENT_FEEDBACK_SIGNALS
             and r["tmdb_id"] not in explicit_negatives
         }
         liked_ids = inline_likes | engagement_likes
