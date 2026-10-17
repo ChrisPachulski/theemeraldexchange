@@ -728,6 +728,10 @@ pub struct SessionManager {
     /// 20k-episode library the gentle warmer reaches new episodes only after
     /// hours/days, so a first play serves ffmpeg's still-growing EVENT playlist.
     hot_dirs: Arc<Mutex<std::collections::VecDeque<PathBuf>>>,
+    /// Abort handles of each session's detached sidecar passes (subtitles,
+    /// trick-play thumbs, alt audio). stop() aborts them: dropping a task's
+    /// future drops its Child, and kill_on_drop kills the ffmpeg.
+    sidecar_tasks: Arc<std::sync::Mutex<HashMap<SessionId, Vec<tokio::task::AbortHandle>>>>,
 }
 
 impl SessionManager {
@@ -752,6 +756,7 @@ impl SessionManager {
             cache_root,
             warming: Arc::new(Mutex::new(std::collections::HashSet::new())),
             hot_dirs: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            sidecar_tasks: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -1082,7 +1087,7 @@ impl SessionManager {
         };
         let id = session_id.to_string();
         let stderr = child.stderr.take();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             if let Some(stderr) = stderr {
                 use tokio::io::{AsyncBufReadExt, BufReader};
                 let mut lines = BufReader::new(stderr).lines();
@@ -1117,6 +1122,7 @@ impl SessionManager {
                 }
             }
         });
+        self.track_sidecar(session_id, task);
     }
 
     /// Identity key for grant coalescing: a new grant matching a live session's
@@ -1394,7 +1400,8 @@ impl SessionManager {
                 &opts.media_kind,
                 eff_start_number,
             )
-            .await?;
+            .await
+            .inspect_err(|_| self.abort_sidecars(&session_id))?;
 
         // Alternate-audio renditions for an `alt_audio` (hls.js) client: ONE
         // detached pass segments every extra track, seeked to the same `eff`
@@ -1508,7 +1515,27 @@ impl SessionManager {
 
     /// Stop and remove a session: SIGTERM, then SIGKILL after a grace period,
     /// then remove the tmpdir. Idempotent. Mirrors `stopRemuxSession`.
+    fn track_sidecar(&self, session_id: &str, task: tokio::task::JoinHandle<()>) {
+        let mut tasks = self.sidecar_tasks.lock().unwrap_or_else(|e| e.into_inner());
+        tasks
+            .entry(session_id.to_string())
+            .or_default()
+            .push(task.abort_handle());
+    }
+
+    fn abort_sidecars(&self, session_id: &str) {
+        let tasks = self
+            .sidecar_tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(session_id);
+        for task in tasks.into_iter().flatten() {
+            task.abort();
+        }
+    }
+
     pub async fn stop(&self, id: &str) {
+        self.abort_sidecars(id);
         let removed = self.sessions.lock().await.remove(id);
         let Some(s) = removed else { return };
         // Ask the supervisor (sole Child owner) to kill the real ffmpeg and
@@ -1742,7 +1769,7 @@ impl SessionManager {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
         let id = session_id.to_string();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut child = match spawn_retrying_etxtbsy(&mut cmd).await {
                 Ok(child) => child,
                 Err(e) => {
@@ -1773,6 +1800,7 @@ impl SessionManager {
                 }
             }
         });
+        self.track_sidecar(session_id, task);
     }
 
     /// Kick a detached, one-shot ffmpeg pass per EXTRA audio track (best-effort;
@@ -1818,7 +1846,7 @@ impl SessionManager {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
         let id = session_id.to_string();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut child = match spawn_retrying_etxtbsy(&mut cmd).await {
                 Ok(child) => child,
                 Err(e) => {
@@ -1844,6 +1872,7 @@ impl SessionManager {
                 }
             }
         });
+        self.track_sidecar(session_id, task);
     }
 
     /// The alternate-audio MASTER for an `alt_audio` (hls.js) session (see
@@ -3083,6 +3112,53 @@ mod tests {
         mgr.stop(&b).await;
         wait_for(|| !process_alive(pid_b)).await;
         assert!(mgr.is_empty().await);
+    }
+
+    #[tokio::test]
+    async fn stop_kills_a_running_sidecar_job() {
+        // 2026-10-16 review item 18: detached sidecar passes (subtitles, thumbs,
+        // alt audio) ran on tasks stop() never reached, so they kept demuxing
+        // the source after the session was gone.
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = tmp.path().join("ffmpeg_slow_sidecar.sh");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\n\
+             for a in \"$@\"; do last=\"$a\"; done\n\
+             d=$(dirname \"$last\")\n\
+             mkdir -p \"$d\"\n\
+             case \"$last\" in *subtitles.vtt.partial)\n\
+               echo $$ > \"$d/sidecar.pid\"; exec sleep 30;; esac\n\
+             printf '#EXTM3U\\n' > \"$last\"\n\
+             sleep 30\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mgr = manager_with_stub(&tmp, stub);
+        let mut o = opts("/lib/a.mkv");
+        o.subtitle = Some(SidecarSubtitle {
+            source_index: 2,
+            language: None,
+            forced: false,
+        });
+        let id = mgr.start(o).await.unwrap();
+        let dir = mgr
+            .manifest_path(&id)
+            .await
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let pid_file = dir.join("sidecar.pid");
+        wait_for(|| std::fs::read_to_string(&pid_file).is_ok_and(|p| !p.trim().is_empty())).await;
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+
+        mgr.stop(&id).await;
+        wait_for(|| !process_alive(pid)).await;
     }
 
     #[tokio::test]
