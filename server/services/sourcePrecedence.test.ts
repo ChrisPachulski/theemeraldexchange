@@ -15,6 +15,11 @@ vi.mock('./upstream.js', () => ({
   LAN_TIMEOUT_MS: 15000,
 }))
 vi.mock('../env.js', () => ({ env: envState }))
+// The IPTV probe goes through the guarded fetch; route it to the same stub.
+vi.mock('./ssrfGuard.js', async () => {
+  const upstream = await import('./upstream.js')
+  return { guardedFetchTrustedOrigin: (url: string) => upstream.fetchWithTimeout(url, {}, 0, 'iptv') }
+})
 
 import { resolveSourcePrecedence, _clearIptvProbeCacheForTests } from './sourcePrecedence.js'
 import { fetchWithTimeout } from './upstream.js'
