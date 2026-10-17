@@ -3690,13 +3690,9 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
         let id = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
-        let dir = mgr
-            .manifest_path(&id)
-            .await
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_path_buf();
+        let manifest = mgr.manifest_path(&id).await.unwrap();
+        wait_for(|| manifest.exists()).await;
+        let dir = manifest.parent().unwrap().to_path_buf();
         assert!(mgr.seek(&id, 125).await);
         let args = wait_for_args(&dir.join("args.txt"), |a| {
             a.iter().any(|s| s == "-start_number")
