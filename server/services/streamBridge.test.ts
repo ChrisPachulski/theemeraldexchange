@@ -1,10 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { Readable } from 'node:stream'
-import { gzipSync } from 'node:zlib'
 import {
   nodeReadableToWebStream,
   webStreamToNodeReadable,
-  gunzipNodeStream,
 } from './streamBridge.js'
 
 // Drain a Web ReadableStream<Uint8Array> into a single Buffer.
@@ -50,16 +48,6 @@ describe('streamBridge.webStreamToNodeReadable', () => {
     expect(node).toBeInstanceOf(Readable)
     const out = await readNode(node)
     expect([...out]).toEqual([1, 2, 3, 4, 5, 6])
-  })
-})
-
-describe('streamBridge.gunzipNodeStream', () => {
-  it('decompresses a gzipped Node stream back to the original bytes', async () => {
-    const original = '<tv><channel/></tv>'
-    const gzipped = gzipSync(Buffer.from(original))
-    const node = Readable.from([gzipped])
-    const out = await readNode(gunzipNodeStream(node))
-    expect(out.toString()).toBe(original)
   })
 })
 

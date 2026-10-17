@@ -9,7 +9,6 @@
 // named, audited, and unit-tested. No runtime behaviour lives here.
 
 import { Readable } from 'node:stream'
-import { createGunzip } from 'node:zlib'
 
 // `toWeb` returns Node's `ReadableStream`; the Fetch `Response` constructor
 // expects the global/DOM `ReadableStream`. Behaviour-neutral type bridge.
@@ -21,10 +20,4 @@ export function nodeReadableToWebStream(stream: Readable): ReadableStream {
 // DOM `ReadableStream<Uint8Array>`. Behaviour-neutral type bridge.
 export function webStreamToNodeReadable(body: ReadableStream<Uint8Array>): Readable {
   return Readable.fromWeb(body as unknown as ReadableStream<Uint8Array>)
-}
-
-// `pipe` is typed to return the generic `Writable` shape of the gunzip
-// transform; consumers need it as a `Readable`. Behaviour-neutral type bridge.
-export function gunzipNodeStream(stream: Readable): Readable {
-  return stream.pipe(createGunzip()) as unknown as Readable
 }
