@@ -1414,6 +1414,7 @@ dependencies = [
  "axum",
  "chrono",
  "emerald-contracts",
+ "http-body",
  "kamadak-exif",
  "quick-xml 0.41.0",
  "regex",
