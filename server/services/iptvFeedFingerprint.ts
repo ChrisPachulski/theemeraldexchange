@@ -12,6 +12,7 @@
 // ~0.98+ per frame at the right time offset even across different encodes; a
 // different programme scores ~0.3 (measured on prod feeds, 2026-10-09).
 
+import { FFMPEG_PROXIED_PROTOCOLS } from './ffmpegEgress.js'
 export const FP_W = 32
 export const FP_H = 18
 export const FP_FPS = 5
@@ -36,12 +37,13 @@ function outputArgs(): string[] {
 }
 
 /** ffmpeg argv: `seconds` of a live upstream feed → fingerprint frames on stdout.
- *  Same input hardening as the live remux (protocol whitelist, read timeout, the
- *  User-Agent the provider accepts). */
-export function liveCaptureArgs(upstreamUrl: string, seconds: number, userAgent: string): string[] {
+ *  Same input hardening as the live remux (protocol whitelist, egress proxy,
+ *  read timeout, the User-Agent the provider accepts). */
+export function liveCaptureArgs(upstreamUrl: string, seconds: number, userAgent: string, proxyArgs: string[]): string[] {
   return [
     '-hide_banner', '-loglevel', 'error', '-nostdin',
-    '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
+    '-protocol_whitelist', FFMPEG_PROXIED_PROTOCOLS,
+    ...proxyArgs,
     '-fflags', '+discardcorrupt',
     '-probesize', '10M', '-analyzeduration', '10M',
     '-rw_timeout', '15000000',

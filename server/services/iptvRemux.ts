@@ -1,3 +1,4 @@
+import { FFMPEG_PROXIED_PROTOCOLS, ffmpegProxyArgs } from './ffmpegEgress.js'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -492,6 +493,11 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
     return null
   }
 
+  // SSRF containment: ffmpeg dials through the egress proxy (ffmpegEgress.ts).
+  // Not listening yet (the first moment after boot) reads like a busy upstream.
+  const proxyArgs = ffmpegProxyArgs()
+  if (!proxyArgs) return null
+
   const sessionId = `remux:${opts.streamId}:${safeIdPart(opts.sub)}:${Date.now()}`
   const dir = path.join(env.IPTV_REMUX_TMP_DIR, sessionId.replace(/[:/]/g, '_'))
   fs.mkdirSync(dir, { recursive: true })
@@ -526,8 +532,10 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
     '-nostdin',
     // Constrain ffmpeg to the protocols a real upstream stream needs so
     // neither the '-i' input nor a nested manifest can reach
-    // file:/concat:/etc. Pairs with assertHttpUpstream() above.
-    '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
+    // file:/concat:/etc. Pairs with assertHttpUpstream() above. Every network
+    // hop, redirects included, goes through the egress proxy.
+    '-protocol_whitelist', `file,${FFMPEG_PROXIED_PROTOCOLS}`,
+    ...proxyArgs,
     // +igndts is the load-bearing one: this provider's MPEG-TS carries badly
     // broken decode timestamps (observed dts ≫ pts, multi-billion-tick jumps
     // mid-stream). +genpts alone only fills in MISSING pts; it does nothing for

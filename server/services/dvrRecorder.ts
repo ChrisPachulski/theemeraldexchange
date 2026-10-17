@@ -23,6 +23,7 @@ import {
   type DvrRecording,
 } from './dvrRecordings.js'
 import { createLogger } from './logger.js'
+import { FFMPEG_PROXIED_PROTOCOLS, ffmpegProxyArgs } from './ffmpegEgress.js'
 
 const log = createLogger('dvr')
 
@@ -44,14 +45,17 @@ export function buildRecordArgs(
   upstreamUrl: string,
   filePath: string,
   durationSecs: number,
+  proxyArgs: string[],
 ): string[] {
   return [
     '-hide_banner',
     '-nostdin',
     // Constrain ffmpeg to the protocols a real upstream stream needs (the
-    // provider 301s https→http), blocking file:/pipe:/concat: steering.
+    // provider 301s https→http), blocking file:/pipe:/concat: steering. Every
+    // network hop, redirects included, goes through the egress proxy.
     '-protocol_whitelist',
-    'http,https,tcp,tls',
+    FFMPEG_PROXIED_PROTOCOLS,
+    ...proxyArgs,
     '-i',
     upstreamUrl,
     // Hard duration bound; the scheduler also SIGTERMs at stop time as a backstop.
@@ -209,6 +213,10 @@ export class FfmpegRecorder implements Recorder {
         return null
       }
     }
+    // SSRF containment: ffmpeg dials through the egress proxy; not listening
+    // yet (the first moment after boot) defers like a busy upstream.
+    const proxyArgs = ffmpegProxyArgs()
+    if (!proxyArgs) return null
     // Reserve the slot BEFORE dialing: register the recording as a live upstream
     // connection so it's visible in /api/iptv/sessions and counted by
     // upstreamInUse for the next dial. Synthetic sub (`dvr:<id>`) so it never
@@ -236,7 +244,7 @@ export class FfmpegRecorder implements Recorder {
     fs.mkdirSync(this.dir, { recursive: true })
     const filePath = this.filePathFor(rec.id)
     const durationSecs = Math.max(1, (Date.parse(rec.stop_utc) - this.nowMs()) / 1000)
-    const args = buildRecordArgs(liveUrl(rec.channel_stream_id), filePath, durationSecs)
+    const args = buildRecordArgs(liveUrl(rec.channel_stream_id), filePath, durationSecs, proxyArgs)
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] })
 
     proc.stderr?.on('data', (chunk: Buffer) => {

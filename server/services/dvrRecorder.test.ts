@@ -43,7 +43,7 @@ class FakeChild extends EventEmitter {
 
 describe('buildRecordArgs', () => {
   it('copies the live stream to mpegts bounded by a floored -t', () => {
-    const args = buildRecordArgs('https://x/live/u/p/42.ts', '/rec/r.ts', 1800.7)
+    const args = buildRecordArgs('https://x/live/u/p/42.ts', '/rec/r.ts', 1800.7, ['-http_proxy', 'http://127.0.0.1:9'])
     expect(args[args.indexOf('-i') + 1]).toBe('https://x/live/u/p/42.ts')
     expect(args[args.indexOf('-c') + 1]).toBe('copy')
     expect(args[args.indexOf('-f') + 1]).toBe('mpegts')
@@ -51,16 +51,22 @@ describe('buildRecordArgs', () => {
     expect(args[args.length - 1]).toBe('/rec/r.ts')
   })
   it('floors a tiny/zero duration up to at least 1s', () => {
-    const a = buildRecordArgs('u', 'f', 0)
+    const a = buildRecordArgs('u', 'f', 0, ['-http_proxy', 'http://127.0.0.1:9'])
     expect(a[a.indexOf('-t') + 1]).toBe('1')
   })
   it('does not whitelist file:/pipe: protocols (SSRF containment)', () => {
     const wl = (() => {
-      const a = buildRecordArgs('https://x/42.ts', '/f.ts', 60)
+      const a = buildRecordArgs('https://x/42.ts', '/f.ts', 60, ['-http_proxy', 'http://127.0.0.1:9'])
       return a[a.indexOf('-protocol_whitelist') + 1]
     })()
     expect(wl).not.toContain('file')
     expect(wl).not.toContain('pipe')
+  })
+  // 2026-10-16 review item 14: ffmpeg followed provider redirects anywhere.
+  it('dials through the egress proxy', () => {
+    const a = buildRecordArgs('https://x/42.ts', '/f.ts', 60, ['-http_proxy', 'http://127.0.0.1:9'])
+    expect(a[a.indexOf('-http_proxy') + 1]).toBe('http://127.0.0.1:9')
+    expect(a.indexOf('-http_proxy')).toBeLessThan(a.indexOf('-i'))
   })
 })
 
