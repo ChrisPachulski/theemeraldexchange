@@ -66,19 +66,30 @@ export interface XmltvChannelDef {
  * one partial <channel> block buffered, capped at 1MB for a block that never
  * closes. Without it name-based EPG matching degrades to exact-tvg only (~820
  * channels instead of ~12k).
+ *
+ * `keepChannels` runs once, when the first programmes arrive (the channel
+ * section is done), and returns the channel ids worth keeping; the parser then
+ * skips every other channel's programmes. Rows parsed before that call still
+ * reach onProgramme, so onProgramme keeps its own check.
  */
 export async function streamXmltv(
   input: Readable,
   onProgramme: (row: EpgProgrammeRow) => void,
   signal?: AbortSignal,
   onChannelDef?: (def: XmltvChannelDef) => void,
+  keepChannels?: () => Iterable<string>,
 ): Promise<void> {
   if (signal?.aborted) throw abortReason(signal)
   const parser = new contracts.XmltvParser(Boolean(onChannelDef))
+  let keepAsked = !keepChannels
   // Defs first: iptvEpgExternal resolves against the defs seen by the first programme.
   const emit = (json: string): void => {
     const batch = JSON.parse(json) as { programmes: EpgProgrammeRow[]; channels: XmltvChannelDef[] }
     for (const def of batch.channels) onChannelDef?.(def)
+    if (!keepAsked && batch.programmes.length > 0) {
+      keepAsked = true
+      parser.keepChannels([...(keepChannels as () => Iterable<string>)()])
+    }
     for (const row of batch.programmes) onProgramme(row)
   }
   // Abort rejects at once: destroying a stalled source can wait forever.
