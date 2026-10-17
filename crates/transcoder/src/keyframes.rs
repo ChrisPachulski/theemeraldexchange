@@ -110,6 +110,17 @@ async fn write_atomic(cache_root: &Path, dest: &Path, bytes: &[u8]) {
     }
 }
 
+/// Run a probe to completion within `limit`; `None` on timeout or spawn
+/// failure. `kill_on_drop` makes a timeout kill the child: dropping the
+/// `output()` future alone leaves ffprobe running (and holding its file).
+pub(crate) async fn output_within(
+    cmd: &mut Command,
+    limit: Duration,
+) -> Option<std::process::Output> {
+    cmd.kill_on_drop(true);
+    tokio::time::timeout(limit, cmd.output()).await.ok()?.ok()
+}
+
 /// Extract video keyframe PTS (seconds, ascending) via a full-file packet demux.
 /// `ffprobe ... -show_entries packet=pts_time,flags` emits one CSV line per
 /// video packet (`<pts>,<flags>`); a keyframe's flags begin with `K`. Bounded by
@@ -130,6 +141,8 @@ async fn probe(ffmpeg_bin: &str, path: &Path) -> Option<Vec<f64>> {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::null());
 
+    // A timeout drops the output() future; kill_on_drop then kills ffprobe.
+    cmd.kill_on_drop(true);
     let output = match tokio::time::timeout(PROBE_TIMEOUT, cmd.output()).await {
         Ok(Ok(o)) if o.status.success() => o,
         Ok(Ok(o)) => {
@@ -199,6 +212,40 @@ pub(crate) async fn seed_for_test(cache_root: &Path, path: &Path, keyframes: Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 2026-10-16 review item 17: timeout(cmd.output()) dropped the future on
+    // timeout but left the ffprobe running (no kill_on_drop).
+    #[tokio::test]
+    async fn a_timed_out_probe_is_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let pid_file = dir.path().join("pid");
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(format!("echo $$ > {}; exec sleep 30", pid_file.display()));
+        assert!(
+            output_within(&mut cmd, Duration::from_millis(300))
+                .await
+                .is_none()
+        );
+        let pid = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let alive = || {
+            std::process::Command::new("kill")
+                .args(["-0", &pid])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        };
+        for _ in 0..50 {
+            if !alive() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("timed-out probe {pid} is still running");
+    }
 
     #[test]
     fn parses_only_keyframe_packets_in_decode_order() {

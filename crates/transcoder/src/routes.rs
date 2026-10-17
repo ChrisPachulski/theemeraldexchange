@@ -384,8 +384,8 @@ async fn probe_dolby_vision(ffmpeg_bin: &str, path: &str) -> bool {
     ]);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::null());
-    let output = match tokio::time::timeout(Duration::from_secs(10), cmd.output()).await {
-        Ok(Ok(o)) if o.status.success() => o,
+    let output = match crate::keyframes::output_within(&mut cmd, Duration::from_secs(10)).await {
+        Some(o) if o.status.success() => o,
         _ => return false,
     };
     let text = String::from_utf8_lossy(&output.stdout);
