@@ -384,8 +384,8 @@ async fn probe_dolby_vision(ffmpeg_bin: &str, path: &str) -> bool {
     ]);
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::null());
-    let output = match tokio::time::timeout(Duration::from_secs(10), cmd.output()).await {
-        Ok(Ok(o)) if o.status.success() => o,
+    let output = match crate::keyframes::output_within(&mut cmd, Duration::from_secs(10)).await {
+        Some(o) if o.status.success() => o,
         _ => return false,
     };
     let text = String::from_utf8_lossy(&output.stdout);
@@ -816,6 +816,15 @@ async fn session_segment(
     // rendition assets (audio_{n}.m3u8 + its segments) race their own detached
     // pass the same way, so they get the same brief wait — for hls.js too,
     // whose alt_audio master can name a rendition its pass hasn't written yet.
+    // A native request for a segment the running encoder will never write (a
+    // scrub back past the resume point, or a jump far ahead) re-encodes from
+    // there first; the wait below then picks it up.
+    if is_native_hls_client(&headers)
+        && let Some(index) = segment_index(&segment)
+        && !tokio::fs::try_exists(&path).await.unwrap_or(false)
+    {
+        state.sessions.backfill(&id, index).await;
+    }
     if ((is_native_hls_client(&headers)
         && (segment_index(&segment).is_some() || segment == SIDECAR_SUBTITLE_NAME))
         || crate::session::is_audio_rendition_asset(&segment))

@@ -365,13 +365,19 @@ ssh "${NAS_USER}@${NAS_HOST}" "test -f ${APPDATA}/.dockerignore || echo '[deploy
 # media-core (uid 10002) and recommender (uid 10001) services then cannot write
 # their sqlite DBs under cap_drop: ALL + read_only and crash-loop. Pre-chowning
 # the host dirs makes the first boot writable without granting the containers
-# any extra capability. The backend's /app/data is owned by root inside its own
-# image, so it needs no chown here.
+# any extra capability. The backend runs as uid 10001 too (Dockerfile USER
+# emerald), so its data dir gets the same treatment, non-recursively: only the
+# dir itself must be writable, and operator backups inside it keep their owner.
+# The transcoder (uid 10003) creates per-session subdirs in its scratch dir,
+# which takes the scratch convention (1777, world-writable + sticky).
+scratch_dir=$(env_value TRANSCODER_SCRATCH_HOST_PATH || printf '%s' "${APPDATA}/transcoder-scratch")
 echo "→ Pre-creating + chowning sidecar DB volumes (fresh-volume crash-loop guard)"
 ssh "${NAS_USER}@${NAS_HOST}" "\
-  mkdir -p ${APPDATA}/data ${APPDATA}/recommender-db ${APPDATA}/recommender-db/hf-cache ${APPDATA}/media-core-db && \
+  mkdir -p ${APPDATA}/data ${APPDATA}/recommender-db ${APPDATA}/recommender-db/hf-cache ${APPDATA}/media-core-db '${scratch_dir}' && \
+  chown 10001:10001 ${APPDATA}/data && \
   chown -R 10001:10001 ${APPDATA}/recommender-db && \
-  chown -R 10002:10002 ${APPDATA}/media-core-db"
+  chown -R 10002:10002 ${APPDATA}/media-core-db && \
+  chmod 1777 '${scratch_dir}'"
 
 # Snapshot every currently-deployed image as :rollback-${ROLLBACK_TS} BEFORE
 # the build overwrites :latest, so an unhealthy deploy can be reverted (see

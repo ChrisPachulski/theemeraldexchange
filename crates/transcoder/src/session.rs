@@ -187,6 +187,19 @@ struct Session {
     started_at: u64,
     last_seen: u64,
     start_secs: u64,
+    /// The offset the grant asked for. `start_secs` is that offset snapped to
+    /// the segment/keyframe grid, so coalescing compares this one: an
+    /// identical off-grid resume grant must match its own session.
+    requested_start_secs: u64,
+    /// First segment of each child a crash respawn appended to the playlist.
+    /// Their timestamps restart, so the synthesized VOD manifest marks each
+    /// with #EXT-X-DISCONTINUITY. A seek clears the dir and this list.
+    crash_junctions: Vec<u64>,
+    /// Whether this session's segments sit on the native manifest's absolute
+    /// grid (see [`SessionManager::grid_start`]). A copy-remux started without
+    /// a keyframe map is numbered from its resume point, so it keeps serving
+    /// its on-disk playlist even after the cache warms.
+    on_grid: bool,
     /// First segment number (`-start_number`) of the CURRENT ffmpeg child.
     /// 0 for the initial spawn; each respawn advances it past the furthest
     /// segment already written so numbering stays monotonic for the session's
@@ -636,8 +649,49 @@ fn effective_restart_count(prev: u32, ran_for: Duration) -> u32 {
 /// crashed child was spawned at (`spawn_secs`, its baked `-ss`) plus the
 /// segments it wrote (`next_number - prev_number`) times the segment length.
 /// Pure so the math is unit-testable without a real crash.
+/// How far past the encoder's frontier a native segment request may be before
+/// it is a jump to backfill rather than a wait (5 minutes of 2 s segments):
+/// deep AVPlayer prefetch on a slow CPU encode must not re-seek the session.
+const BACKFILL_AHEAD_SEGMENTS: u64 = 150;
+
 fn crash_resume_secs(spawn_secs: u64, prev_number: u64, next_number: u64) -> u64 {
     spawn_secs + next_number.saturating_sub(prev_number) * u64::from(crate::args::HLS_SEGMENT_SECS)
+}
+
+/// Where a crash respawn resumes: `(start_number argument, first new segment)`.
+/// What the dead child finished is the timeline the new child continues, and
+/// a player behind the encoder frontier still needs it, so it stays and the
+/// new child appends (`append_list`, which also writes the seam's
+/// #EXT-X-DISCONTINUITY). ffmpeg lists a segment only once it is complete, so
+/// any newer segment file is half-written and is removed. An appending ffmpeg
+/// numbers from `-start_number` plus the segments it parsed (checked against
+/// ffmpeg 7.1), so the argument is the first listed segment.
+async fn crash_resume(dir: &PathBuf, prev_number: u64, id: &str) -> (u64, u64) {
+    let listed: Vec<u64> = tokio::fs::read_to_string(dir.join("index.m3u8"))
+        .await
+        .unwrap_or_default()
+        .lines()
+        .filter_map(segment_index)
+        .collect();
+    let (start_arg, next) = match listed.first() {
+        Some(&first) => (first, first + listed.len() as u64),
+        None => (prev_number, prev_number),
+    };
+    if let Ok(mut rd) = tokio::fs::read_dir(dir).await {
+        while let Ok(Some(entry)) = rd.next_entry().await {
+            let name = entry.file_name();
+            let Some(idx) = name.to_str().and_then(segment_index) else {
+                continue;
+            };
+            if idx >= next
+                && let Err(e) = tokio::fs::remove_file(entry.path()).await
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(session = %id, file = ?name, error = %e, "failed to remove half-written segment");
+            }
+        }
+    }
+    (start_arg, next)
 }
 
 /// Shared, cheap-to-clone manager (Arc'd map + config).
@@ -684,6 +738,13 @@ pub struct SessionManager {
     /// 20k-episode library the gentle warmer reaches new episodes only after
     /// hours/days, so a first play serves ffmpeg's still-growing EVENT playlist.
     hot_dirs: Arc<Mutex<std::collections::VecDeque<PathBuf>>>,
+    /// Abort handles of each session's detached sidecar passes (subtitles,
+    /// trick-play thumbs, alt audio). stop() aborts them: dropping a task's
+    /// future drops its Child, and kill_on_drop kills the ffmpeg.
+    sidecar_tasks: Arc<std::sync::Mutex<HashMap<SessionId, Vec<tokio::task::AbortHandle>>>>,
+    /// Sessions with a backfill seek in flight: AVPlayer asks for several
+    /// segments at once, and each must not start its own respawn.
+    backfilling: Arc<Mutex<std::collections::HashSet<SessionId>>>,
 }
 
 impl SessionManager {
@@ -708,6 +769,8 @@ impl SessionManager {
             cache_root,
             warming: Arc::new(Mutex::new(std::collections::HashSet::new())),
             hot_dirs: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            sidecar_tasks: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            backfilling: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }
     }
 
@@ -1038,7 +1101,7 @@ impl SessionManager {
         };
         let id = session_id.to_string();
         let stderr = child.stderr.take();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             if let Some(stderr) = stderr {
                 use tokio::io::{AsyncBufReadExt, BufReader};
                 let mut lines = BufReader::new(stderr).lines();
@@ -1073,6 +1136,7 @@ impl SessionManager {
                 }
             }
         });
+        self.track_sidecar(session_id, task);
     }
 
     /// Identity key for grant coalescing: a new grant matching a live session's
@@ -1111,7 +1175,7 @@ impl SessionManager {
                 && s.input_path == opts.input_path
                 && now.saturating_sub(s.last_seen) <= IDLE_TIMEOUT.as_secs();
             same_title.then(|| {
-                let same_playback = s.start_secs == opts.start_secs
+                let same_playback = s.requested_start_secs == opts.start_secs
                     && s.plan == opts.plan
                     && s.client_max_kbps == opts.client_max_kbps;
                 (id.clone(), same_playback)
@@ -1279,62 +1343,17 @@ impl SessionManager {
             self.spawn_audio_renditions(&session_id, &opts.input_path, &dir, extra_audio);
         }
 
-        // Native full-timeline VOD alignment: a session writes its first segment at
-        // the ABSOLUTE grid index so the synthesized [0,total] manifest references
-        // on-disk files one-for-one and AVPlayer's scrubber shows true position /
-        // full duration. `#EXT-X-START` (in the manifest) carries the resume point.
-        //
-        // RE-ENCODE: `-force_key_frames` puts cuts on a clean grid, so quantize the
-        // seek DOWN to the segment grid and number it `⌊start/seg⌋`; playback is at
-        // most one segment early — imperceptible.
-        //
-        // COPY-remux: segments are cut at the source's RAGGED keyframes. The same
-        // `vod_manifest::copy_resume_base` the manifest uses maps the offset to
-        // (start_idx, base) on the full-title cut grid; we spawn `-ss base` +
-        // `-start_number start_idx` so the suffix segments land at their absolute
-        // slots. Requires a keyframe-cache HIT and a known duration (the manifest
-        // path needs both too); on a MISS / unknown duration we fall back to raw
-        // `-ss` + start_number 0, exactly matching the manifest's MISS→on-disk
-        // (EVENT) fallback, so the two stay consistent — the next play after the
-        // cache warms gets the full-timeline scrubber.
-        let seg = u64::from(crate::args::HLS_SEGMENT_SECS);
-        let (eff_start, eff_start_number) = if opts.start_secs == 0 {
-            (0, 0)
-        } else if opts.plan.reencodes_video() {
-            let n = opts.start_secs / seg;
-            (n * seg, n)
-        } else {
-            // COPY-remux resume: align to the full-title keyframe grid iff we can
-            // (cache hit + known duration). Mirrors `vod_manifest`'s copy branch.
-            let duration = opts.duration_secs.filter(|d| *d > 0).map(|d| d as f64);
-            match duration {
-                Some(total) => match crate::keyframes::load(
-                    &self.cache_root,
-                    std::path::Path::new(&opts.input_path),
-                )
-                .await
-                {
-                    Some(kf) if !kf.is_empty() => {
-                        let (start_idx, base) =
-                            crate::vod_manifest::copy_resume_base(&kf, total, opts.start_secs);
-                        // `-ss eff` + `-start_number start_idx`. session.start_secs is
-                        // set to `eff` below, and the manifest re-derives (start_idx,
-                        // base) from it via the SAME helper, so the two must agree.
-                        // `base` is a fractional keyframe PTS; storing it truncated
-                        // (`base as u64`) would re-derive a SMALLER index (the helper
-                        // picks the largest bound <= start_secs), so use CEIL — it
-                        // sits in [base, next_bound) and round-trips to the same
-                        // start_idx. ffmpeg's `-ss` before `-i` snaps to the keyframe
-                        // at/before `eff`, i.e. `base`, so the on-disk suffix still
-                        // starts exactly at `base`.
-                        let eff = base.ceil() as u64;
-                        (eff, start_idx)
-                    }
-                    _ => (opts.start_secs, 0),
-                },
-                None => (opts.start_secs, 0),
-            }
-        };
+        // Native full-timeline VOD alignment (see `grid_start`); off the grid,
+        // a raw `-ss` + start_number 0 matching the on-disk (EVENT) fallback.
+        let grid = self
+            .grid_start(
+                &opts.plan,
+                &opts.input_path,
+                opts.duration_secs,
+                opts.start_secs,
+            )
+            .await;
+        let (eff_start, eff_start_number) = grid.unwrap_or((opts.start_secs, 0));
 
         let child = self
             .spawn_child(
@@ -1350,7 +1369,8 @@ impl SessionManager {
                 &opts.media_kind,
                 eff_start_number,
             )
-            .await?;
+            .await
+            .inspect_err(|_| self.abort_sidecars(&session_id))?;
 
         // Alternate-audio renditions for an `alt_audio` (hls.js) client: ONE
         // detached pass segments every extra track, seeked to the same `eff`
@@ -1379,6 +1399,9 @@ impl SessionManager {
             started_at: now,
             last_seen: now,
             start_secs: eff_start,
+            requested_start_secs: opts.start_secs,
+            crash_junctions: Vec::new(),
+            on_grid: grid.is_some(),
             start_number: eff_start_number,
             restarts: 0,
             ctl: ctl_tx,
@@ -1438,6 +1461,105 @@ impl SessionManager {
     /// new one writes into the dir (the old map-side `child.take()` found
     /// `None` in steady state and left the first ffmpeg racing the second).
     /// Returns `false` for an unknown session or a failed respawn.
+    /// Where playback from `start_secs` begins on the native VOD manifest's
+    /// ABSOLUTE segment grid: `(spawn secs, first segment number)`, so the
+    /// synthesized [0,total] manifest references on-disk files one-for-one and
+    /// AVPlayer's scrubber shows true position / full duration (`#EXT-X-START`
+    /// carries the resume point).
+    ///
+    /// RE-ENCODE: `-force_key_frames` puts cuts on a clean grid, so quantize the
+    /// seek DOWN to the segment grid and number it `⌊start/seg⌋`; playback is at
+    /// most one segment early — imperceptible.
+    ///
+    /// COPY-remux: segments are cut at the source's RAGGED keyframes. The same
+    /// `vod_manifest::copy_resume_base` the manifest uses maps the offset to
+    /// (start_idx, base) on the full-title cut grid; we spawn `-ss base` +
+    /// `-start_number start_idx` so the suffix segments land at their absolute
+    /// slots. `base` is a fractional keyframe PTS; stored truncated it would
+    /// re-derive a SMALLER index (the helper picks the largest bound <= start),
+    /// so use CEIL — it sits in [base, next_bound) and round-trips to the same
+    /// start_idx. ffmpeg's `-ss` before `-i` snaps to the keyframe at/before
+    /// `eff`, i.e. `base`, so the on-disk suffix still starts exactly at `base`.
+    /// Needs a keyframe-cache HIT and a known duration (the manifest path needs
+    /// both too); otherwise `None`: there is no grid, and the caller numbers
+    /// freely against the on-disk (EVENT) playlist.
+    async fn grid_start(
+        &self,
+        plan: &TranscodePlan,
+        input: &str,
+        duration_secs: Option<i64>,
+        start_secs: u64,
+    ) -> Option<(u64, u64)> {
+        if start_secs == 0 {
+            return Some((0, 0));
+        }
+        if plan.reencodes_video() {
+            let n = start_secs / u64::from(crate::args::HLS_SEGMENT_SECS);
+            return Some((n * u64::from(crate::args::HLS_SEGMENT_SECS), n));
+        }
+        let total = duration_secs.filter(|d| *d > 0)? as f64;
+        let kf = crate::keyframes::load(&self.cache_root, std::path::Path::new(input))
+            .await
+            .filter(|kf| !kf.is_empty())?;
+        let (start_idx, base) = crate::vod_manifest::copy_resume_base(&kf, total, start_secs);
+        Some((base.ceil() as u64, start_idx))
+    }
+
+    /// Produce a segment a native client asks for that the running encoder will
+    /// never write: one before its first segment (a scrub back past the resume
+    /// point) or far past its frontier (a jump ahead). The synthesized manifest
+    /// lists the whole title, so these are legitimate requests; re-encode from
+    /// that segment via [`seek`](Self::seek). Returns whether a backfill started.
+    pub async fn backfill(&self, id: &str, index: u64) -> bool {
+        let Some((dir, first, plan, input, duration)) =
+            self.sessions.lock().await.get(id).and_then(|s| {
+                s.on_grid.then(|| {
+                    (
+                        s.dir.clone(),
+                        s.start_number,
+                        s.plan.clone(),
+                        s.input_path.clone(),
+                        s.duration_secs,
+                    )
+                })
+            })
+        else {
+            return false;
+        };
+        let frontier = max_segment_index(&dir)
+            .await
+            .map_or(first, |m| m.max(first));
+        if index >= first && index <= frontier + BACKFILL_AHEAD_SEGMENTS {
+            return false;
+        }
+        let secs = if plan.reencodes_video() {
+            index * u64::from(crate::args::HLS_SEGMENT_SECS)
+        } else {
+            let total = match duration.filter(|d| *d > 0) {
+                Some(d) => d as f64,
+                None => return false,
+            };
+            let Some(kf) =
+                crate::keyframes::load(&self.cache_root, std::path::Path::new(&input)).await
+            else {
+                return false;
+            };
+            // Floor: grid_start maps it to this segment's bound or the one
+            // before, so the requested segment is produced either way.
+            match crate::vod_manifest::copy_segment_start(&kf, total, index) {
+                Some(start) => start as u64,
+                None => return false,
+            }
+        };
+        if !self.backfilling.lock().await.insert(id.to_string()) {
+            return false; // another request's backfill is already re-encoding
+        }
+        tracing::info!(session = %id, segment = index, secs, "backfilling a segment off the encoder's range");
+        let started = self.seek(id, secs).await;
+        self.backfilling.lock().await.remove(id);
+        started
+    }
+
     pub async fn seek(&self, id: &str, to_secs: u64) -> bool {
         let ctl = {
             let mut guard = self.sessions.lock().await;
@@ -1460,9 +1582,29 @@ impl SessionManager {
         )
     }
 
+    fn track_sidecar(&self, session_id: &str, task: tokio::task::JoinHandle<()>) {
+        let mut tasks = self.sidecar_tasks.lock().unwrap_or_else(|e| e.into_inner());
+        tasks
+            .entry(session_id.to_string())
+            .or_default()
+            .push(task.abort_handle());
+    }
+
+    fn abort_sidecars(&self, session_id: &str) {
+        let tasks = self
+            .sidecar_tasks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(session_id);
+        for task in tasks.into_iter().flatten() {
+            task.abort();
+        }
+    }
+
     /// Stop and remove a session: SIGTERM, then SIGKILL after a grace period,
     /// then remove the tmpdir. Idempotent. Mirrors `stopRemuxSession`.
     pub async fn stop(&self, id: &str) {
+        self.abort_sidecars(id);
         let removed = self.sessions.lock().await.remove(id);
         let Some(s) = removed else { return };
         // Ask the supervisor (sole Child owner) to kill the real ffmpeg and
@@ -1520,7 +1662,7 @@ impl SessionManager {
     pub async fn vod_manifest(&self, id: &str) -> Option<String> {
         // Snapshot what synthesis needs, then drop the map lock — the copy path
         // touches the keyframe cache (disk IO) and must not hold it across that.
-        let (reencodes, fmp4, duration_opt, start_secs, input_path) = {
+        let (reencodes, fmp4, duration_opt, start_secs, input_path, junctions, on_grid) = {
             let guard = self.sessions.lock().await;
             let s = guard.get(id)?;
             let fmp4 = matches!(
@@ -1536,14 +1678,21 @@ impl SessionManager {
                 s.duration_secs.filter(|d| *d > 0),
                 s.start_secs,
                 s.input_path.clone(),
+                s.crash_junctions.clone(),
+                s.on_grid,
             )
         };
+        if !on_grid {
+            return None;
+        }
         let duration = duration_opt? as f64;
+        let mark =
+            |m: Option<String>| m.map(|m| crate::vod_manifest::mark_discontinuities(m, &junctions));
 
         if reencodes {
             // RE-ENCODE: `-force_key_frames` makes segments uniform, so the list
             // is derivable from the duration alone.
-            return crate::vod_manifest::synthesize(duration, start_secs, fmp4);
+            return mark(crate::vod_manifest::synthesize(duration, start_secs, fmp4));
         }
 
         // COPY-remux: segments are cut at the SOURCE's own (irregular) keyframes,
@@ -1556,7 +1705,9 @@ impl SessionManager {
         // episode on detail open), using the seconds the user spends on the detail
         // page so the cache is hot by the time Play is pressed.
         match crate::keyframes::load(&self.cache_root, std::path::Path::new(&input_path)).await {
-            Some(kf) => crate::vod_manifest::synthesize_copy(&kf, duration, start_secs, fmp4),
+            Some(kf) => mark(crate::vod_manifest::synthesize_copy(
+                &kf, duration, start_secs, fmp4,
+            )),
             None => {
                 self.spawn_keyframe_warm(input_path);
                 None
@@ -1691,7 +1842,7 @@ impl SessionManager {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
         let id = session_id.to_string();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut child = match spawn_retrying_etxtbsy(&mut cmd).await {
                 Ok(child) => child,
                 Err(e) => {
@@ -1722,6 +1873,7 @@ impl SessionManager {
                 }
             }
         });
+        self.track_sidecar(session_id, task);
     }
 
     /// Kick a detached, one-shot ffmpeg pass per EXTRA audio track (best-effort;
@@ -1767,7 +1919,7 @@ impl SessionManager {
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
         let id = session_id.to_string();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut child = match spawn_retrying_etxtbsy(&mut cmd).await {
                 Ok(child) => child,
                 Err(e) => {
@@ -1793,6 +1945,7 @@ impl SessionManager {
                 }
             }
         });
+        self.track_sidecar(session_id, task);
     }
 
     /// The alternate-audio MASTER for an `alt_audio` (hls.js) session (see
@@ -2109,6 +2262,7 @@ impl SessionManager {
             client_max_kbps,
             media_kind,
             prev_number,
+            duration_secs,
         ) = {
             let guard = self.sessions.lock().await;
             let Some(s) = guard.get(id) else {
@@ -2125,15 +2279,32 @@ impl SessionManager {
                 s.client_max_kbps,
                 s.info_kind.clone(),
                 s.start_number,
+                s.duration_secs,
             )
         };
-        // Derive the furthest-written segment BEFORE clearing the dir.
-        let next_number = max_segment_index(&dir)
+        let crash = matches!(mode, RespawnMode::Crash);
+        let (start_arg, next_number, spawn_secs, on_grid) = if crash {
+            let (start_arg, next) = crash_resume(&dir, prev_number, id).await;
+            (
+                start_arg,
+                next,
+                crash_resume_secs(start_secs, prev_number, next),
+                None,
+            )
+        } else if let Some((eff, n)) = self
+            .grid_start(&plan, &input, duration_secs, start_secs)
             .await
-            .map_or(prev_number, |m| m.saturating_add(1).max(prev_number));
-        let spawn_secs = match mode {
-            RespawnMode::Seek => start_secs,
-            RespawnMode::Crash => crash_resume_secs(start_secs, prev_number, next_number),
+        {
+            // A seek lands on the same absolute grid the native manifest lists.
+            (n, n, eff, Some(true))
+        } else {
+            // No grid (copy-remux without a keyframe map): number past
+            // everything written so stale on-disk playlist entries can't alias
+            // new media. Derive the furthest-written segment BEFORE clearing.
+            let next = max_segment_index(&dir)
+                .await
+                .map_or(prev_number, |m| m.saturating_add(1).max(prev_number));
+            (next, next, start_secs, Some(false))
         };
         {
             let mut guard = self.sessions.lock().await;
@@ -2142,16 +2313,28 @@ impl SessionManager {
             };
             s.start_secs = spawn_secs;
             s.start_number = next_number;
+            if crash {
+                s.crash_junctions.push(next_number);
+            } else {
+                s.crash_junctions.clear();
+            }
+            if let Some(on_grid) = on_grid {
+                s.on_grid = on_grid;
+            }
         }
-        // Clear the main pipeline's outputs so the fresh ffmpeg writes against a
-        // clean playlist. Without this, `append_list` re-writes index.m3u8
-        // referencing new segments while the player may still hold the old list
-        // — stale media on every restart. (Numbering continuity is preserved by
-        // `-start_number` above, not by keeping old files around.) A SELECTIVE
-        // clear (not a whole-dir wipe) so the one-shot sidecar assets
-        // subtitles.vtt / thumb_* / audio_* — which only start() produces and a
-        // respawn never regenerates — survive the restart.
-        clear_pipeline_outputs(&dir, id).await;
+        // A seek starts another timeline: clear the main pipeline's outputs so
+        // the fresh ffmpeg writes against a clean playlist. Without this,
+        // `append_list` re-writes index.m3u8 referencing new segments while the
+        // player may still hold the old list — stale media on every restart.
+        // (Numbering continuity is preserved by `-start_number` above, not by
+        // keeping old files around.) A SELECTIVE clear (not a whole-dir wipe)
+        // so the one-shot sidecar assets subtitles.vtt / thumb_* / audio_* —
+        // which only start() produces and a respawn never regenerates —
+        // survive the restart. A crash continues the same timeline, so it
+        // appends instead (see crash_resume).
+        if !crash {
+            clear_pipeline_outputs(&dir, id).await;
+        }
         if let Err(e) = tokio::fs::create_dir_all(&dir).await {
             tracing::warn!(session = %id, error = %e, "failed to recreate session dir for respawn");
             return Respawn::Failed;
@@ -2168,7 +2351,7 @@ impl SessionManager {
                 source_avg_kbps,
                 client_max_kbps,
                 &media_kind,
-                next_number,
+                start_arg,
             )
             .await
         {
@@ -3019,6 +3202,128 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stop_kills_a_running_sidecar_job() {
+        // 2026-10-16 review item 18: detached sidecar passes (subtitles, thumbs,
+        // alt audio) ran on tasks stop() never reached, so they kept demuxing
+        // the source after the session was gone.
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = tmp.path().join("ffmpeg_slow_sidecar.sh");
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\n\
+             for a in \"$@\"; do last=\"$a\"; done\n\
+             d=$(dirname \"$last\")\n\
+             mkdir -p \"$d\"\n\
+             case \"$last\" in *subtitles.vtt.partial)\n\
+               echo $$ > \"$d/sidecar.pid\"; exec sleep 30;; esac\n\
+             printf '#EXTM3U\\n' > \"$last\"\n\
+             sleep 30\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mgr = manager_with_stub(&tmp, stub);
+        let mut o = opts("/lib/a.mkv");
+        o.subtitle = Some(SidecarSubtitle {
+            source_index: 2,
+            language: None,
+            forced: false,
+        });
+        let id = mgr.start(o).await.unwrap();
+        let dir = mgr
+            .manifest_path(&id)
+            .await
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let pid_file = dir.join("sidecar.pid");
+        wait_for(|| std::fs::read_to_string(&pid_file).is_ok_and(|p| !p.trim().is_empty())).await;
+        let pid: i32 = std::fs::read_to_string(&pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+
+        mgr.stop(&id).await;
+        wait_for(|| !process_alive(pid)).await;
+    }
+
+    #[tokio::test]
+    async fn crash_respawn_keeps_finished_segments_and_marks_the_seam() {
+        // 2026-10-16 review item 16: crash recovery deleted every segment and
+        // resumed at the encoder frontier, so a player behind it 404'd (native)
+        // or jumped minutes ahead (web). Finished segments are the same
+        // timeline and stay; only the unlisted, half-written newest one goes.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
+        let dir = mgr
+            .manifest_path(&id)
+            .await
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        wait_for(|| dir.join("args.txt").exists()).await;
+        std::fs::remove_file(dir.join("args.txt")).unwrap();
+        let mut listed = String::from("#EXTM3U\n");
+        for i in 10..16u64 {
+            std::fs::write(dir.join(format!("seg_{i:05}.ts")), b"seg").unwrap();
+            if i < 15 {
+                listed.push_str(&format!("#EXTINF:2.0,\nseg_{i:05}.ts\n"));
+            }
+        }
+        std::fs::write(dir.join("index.m3u8"), listed).unwrap();
+
+        let Respawn::Ok(mut child) = mgr.respawn(&id, RespawnMode::Crash).await else {
+            panic!("crash respawn failed")
+        };
+        for i in 10..15 {
+            assert!(
+                dir.join(format!("seg_{i:05}.ts")).exists(),
+                "finished segment {i} must survive"
+            );
+        }
+        assert!(
+            !dir.join("seg_00015.ts").exists(),
+            "the half-written segment is re-encoded"
+        );
+        let args = wait_for_args(&dir.join("args.txt"), |a| {
+            a.iter().any(|s| s == "-start_number")
+        })
+        .await
+        .join("\n");
+        // An appending ffmpeg numbers from -start_number plus parsed segments: 10 + 5.
+        assert!(args.contains("-start_number\n10\n"), "{args}");
+        assert!(args.contains("append_list"), "{args}");
+        assert_eq!(mgr.sessions.lock().await[&id].crash_junctions, vec![15]);
+        kill_child(&mut child, &id).await;
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
+    async fn duplicate_grant_at_an_off_grid_offset_coalesces() {
+        // 2026-10-16 review item 15: the session stored the offset rounded to
+        // the segment grid (125 -> 124) and compared it with the requested
+        // one, so an identical resume grant read as a new offset and stopped
+        // the live session instead of reusing it.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let resume = || StartOpts {
+            start_secs: 125,
+            ..encode_opts_id("/lib/a.mkv", 7)
+        };
+        let a = mgr.start(resume()).await.unwrap();
+        let b = mgr.start(resume()).await.unwrap();
+        assert_eq!(
+            a, b,
+            "an identical off-grid resume grant must reuse the session"
+        );
+        assert_eq!(mgr.len().await, 1);
+        mgr.stop(&a).await;
+    }
+
+    #[tokio::test]
     async fn regrant_at_new_offset_supersedes_stale_session_freeing_the_slot() {
         // A re-open of the SAME title at a DIFFERENT resume offset (the user
         // backed out mid-watch, then resumed) must SUPERSEDE the stale session:
@@ -3267,6 +3572,7 @@ mod tests {
                : > \"{flag}\"\n\
                printf 'seg' > \"$d/seg_00000.ts\"\n\
                printf 'seg' > \"$d/seg_00001.ts\"\n\
+               printf '#EXTM3U\\n#EXTINF:2.0,\\nseg_00000.ts\\n#EXTINF:2.0,\\nseg_00001.ts\\n' > \"$last\"\n\
                exit 1\n\
              fi\n\
              printf '%s\\n' \"$@\" > \"$d/args.txt\"\n\
@@ -3319,10 +3625,7 @@ mod tests {
         // respawn records its argv. Wait for a COMPLETE argv (both markers
         // present) — `> args.txt` truncates before the shell flushes content,
         // so a bare `|_| true` could read an empty/partial file and flake.
-        let args = wait_for_args(&dir.join("args.txt"), |a| {
-            a.iter().any(|s| s == "-ss") && a.iter().any(|s| s == "-start_number")
-        })
-        .await;
+        let args = wait_for_args(&dir.join("args.txt"), |a| a.iter().any(|s| s == "-ss")).await;
         let ss = args
             .iter()
             .position(|s| s == "-ss")
@@ -3334,11 +3637,16 @@ mod tests {
             resume_secs.to_string(),
             "2 segments × seglen past offset 0: {args:?}"
         );
-        let sn = args
-            .iter()
-            .position(|s| s == "-start_number")
-            .expect("crash respawn must continue segment numbering");
-        assert_eq!(args[sn + 1], "2", "numbering continues after seg_00001");
+        // The respawn appends to the finished list: ffmpeg numbers from
+        // -start_number (the first listed segment, 0, so omitted) plus the two
+        // segments it parsed, i.e. continues at seg_00002.
+        assert!(args.iter().any(|s| s.contains("append_list")), "{args:?}");
+        assert!(!args.iter().any(|s| s == "-start_number"), "{args:?}");
+        assert_eq!(mgr.sessions.lock().await[&id].start_number, 2);
+        assert!(
+            dir.join("seg_00001.ts").exists(),
+            "finished segments survive the crash"
+        );
 
         // The session reports the resumed position, not the stale offset.
         assert_eq!(mgr.list().await[0].start_secs, resume_secs);
@@ -3371,6 +3679,108 @@ mod tests {
             .position(|s| s == "-start_number")
             .expect("seek respawn must keep numbering monotonic");
         assert_eq!(args[sn + 1], "1", "first child wrote seg_00000: {args:?}");
+        mgr.stop(&id).await;
+    }
+
+    // 2026-10-16 review item 24: a seek numbered from the last written
+    // segment while the native VOD manifest is indexed by absolute time, and
+    // nothing ever produced the segments before a resume point.
+    #[tokio::test]
+    async fn seek_lands_on_the_native_manifest_grid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr.start(encode_opts_id("/lib/a.mkv", 7)).await.unwrap();
+        let manifest = mgr.manifest_path(&id).await.unwrap();
+        wait_for(|| manifest.exists()).await;
+        let dir = manifest.parent().unwrap().to_path_buf();
+        assert!(mgr.seek(&id, 125).await);
+        let args = wait_for_args(&dir.join("args.txt"), |a| {
+            a.iter().any(|s| s == "-start_number")
+        })
+        .await;
+        assert_eq!(
+            args[args.iter().position(|s| s == "-ss").unwrap() + 1],
+            "124",
+            "{args:?}"
+        );
+        assert_eq!(
+            args[args.iter().position(|s| s == "-start_number").unwrap() + 1],
+            "62",
+            "{args:?}"
+        );
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
+    async fn backfill_produces_a_segment_before_the_resume_point() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let id = mgr
+            .start(StartOpts {
+                start_secs: 600,
+                ..encode_opts_id("/lib/a.mkv", 7)
+            })
+            .await
+            .unwrap();
+        let dir = mgr
+            .manifest_path(&id)
+            .await
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        wait_for(|| dir.join("args.txt").exists()).await;
+        assert!(
+            !mgr.backfill(&id, 301).await,
+            "just past the frontier: the encoder gets there"
+        );
+        std::fs::remove_file(dir.join("args.txt")).unwrap();
+        assert!(
+            mgr.backfill(&id, 30).await,
+            "a scrub back before the resume point re-encodes from there"
+        );
+        let args = wait_for_args(&dir.join("args.txt"), |a| {
+            a.iter().any(|s| s == "-start_number")
+        })
+        .await;
+        assert_eq!(
+            args[args.iter().position(|s| s == "-ss").unwrap() + 1],
+            "60",
+            "{args:?}"
+        );
+        assert_eq!(
+            args[args.iter().position(|s| s == "-start_number").unwrap() + 1],
+            "30",
+            "{args:?}"
+        );
+        mgr.stop(&id).await;
+    }
+
+    #[tokio::test]
+    async fn an_off_grid_copy_session_keeps_its_on_disk_playlist_after_the_cache_warms() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"));
+        let input = tmp.path().join("copy.mkv");
+        std::fs::write(&input, b"x").unwrap();
+        let id = mgr
+            .start(StartOpts {
+                start_secs: 60,
+                duration_secs: Some(180),
+                ..opts(input.to_str().unwrap())
+            })
+            .await
+            .unwrap();
+        crate::keyframes::seed_for_test(
+            &mgr.cache_root,
+            &input,
+            (0..36).map(|i| f64::from(i) * 5.0).collect(),
+        )
+        .await;
+        assert_eq!(
+            mgr.vod_manifest(&id).await,
+            None,
+            "its segments are numbered from the resume point, not the grid"
+        );
         mgr.stop(&id).await;
     }
 

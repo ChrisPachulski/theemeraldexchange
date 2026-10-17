@@ -285,6 +285,7 @@ impl TranscodeHandoff<'_> {
                 "aac_max_channels": self.caps.aac_max_channels,
                 "hls_fmp4_hevc": self.caps.hls_fmp4_hevc,
                 "alt_audio": self.caps.alt_audio,
+                "native_hls": self.caps.native_hls,
                 "dolby_vision": self.caps.dolby_vision,
             },
             "media_kind": self.kind,
@@ -480,23 +481,43 @@ pub(super) async fn stream_file(
         axum::http::HeaderName::from_static("x-accel-buffering"),
         axum::http::HeaderValue::from_static("no"),
     );
-    // Hold the permit for the lifetime of the response (and its streaming body):
-    // it drops when the response is dropped after the client finishes or
-    // disconnects, freeing the slot.
-    resp.extensions_mut()
-        .insert(StreamPermit(std::sync::Arc::new(permit)));
-    Ok(resp)
+    // Hold the permit for the lifetime of the streaming body: it drops when the
+    // body does, after the client finishes or disconnects, freeing the slot.
+    // Not response extensions: hyper drops those with the head as soon as the
+    // headers are written, which freed the slot while the file still streamed.
+    Ok(resp.map(|body| {
+        axum::body::Body::new(PermitBody {
+            body,
+            _permit: permit,
+        })
+    }))
 }
 
-/// Newtype so the owned stream-concurrency permit can ride in the response
-/// extensions (which require `Clone`); it is only ever inserted, never cloned,
-/// and exists solely to keep the permit alive until the body is fully sent.
-#[derive(Clone)]
-pub(super) struct StreamPermit(
-    // Held purely for its `Drop` — keeps the concurrency slot reserved until the
-    // response body is fully sent. Never read by design, so silence dead_code.
-    #[allow(dead_code)] std::sync::Arc<tokio::sync::OwnedSemaphorePermit>,
-);
+/// A response body that holds its stream-concurrency permit until dropped.
+struct PermitBody {
+    body: axum::body::Body,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl http_body::Body for PermitBody {
+    type Data = <axum::body::Body as http_body::Body>::Data;
+    type Error = <axum::body::Body as http_body::Body>::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        std::pin::Pin::new(&mut self.body).poll_frame(cx)
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.body.is_end_stream()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        self.body.size_hint()
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -571,6 +592,37 @@ mod tests {
         // to tell "retry shortly, at capacity" from "transcoder is down".
         let v = body_json(resp).await;
         assert_eq!(v["error"], "stream_slots_exhausted");
+    }
+
+    #[tokio::test]
+    async fn stream_permit_lives_until_the_body_is_dropped() {
+        // 2026-10-16 review item 19: the permit rode in response extensions,
+        // which hyper drops with the head once headers are written, so the
+        // slot freed while the file was still streaming. Dropping the head
+        // here (as hyper does) must not free it; dropping the body must.
+        let mut state = test_state().await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.mp4");
+        std::fs::write(&path, b"bytes").unwrap();
+        let file_id = seed_media_file(&state, path.to_str().unwrap()).await;
+        let movie_id = seed_movie_for_file(&state, file_id).await;
+        let sem = Arc::new(tokio::sync::Semaphore::new(1));
+        state.stream_semaphore = sem.clone();
+
+        let resp = crate::build_router(state)
+            .oneshot(req("GET", format!("/api/media/stream/movie/{movie_id}")))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let (head, body) = resp.into_parts();
+        drop(head);
+        assert_eq!(
+            sem.available_permits(),
+            0,
+            "the slot is held while the body streams"
+        );
+        drop(body);
+        assert_eq!(sem.available_permits(), 1, "the slot frees with the body");
     }
 
     #[tokio::test]
@@ -884,6 +936,40 @@ mod tests {
         assert_eq!(body["force_transcode"], true);
         assert_eq!(body["start_secs"], 42);
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn stream_handoff_forwards_native_hls() {
+        // 2026-10-16 review item 21: grant_body dropped native_hls, so the
+        // transcoder never muxed the alternate audio tracks for AVPlayer.
+        for (query, want_cap) in [("&native_hls=true", true), ("", false)] {
+            let grant = json!({
+                "directPlay": false,
+                "transcode": true,
+                "sessionId": "sess-native",
+                "manifestUrl": "/api/transcode/session/sess-native/index.m3u8",
+                "heartbeatUrl": "/api/transcode/session/sess-native/heartbeat",
+            });
+            let seen = Arc::new(tokio::sync::Mutex::new(None));
+            let (base, handle) =
+                spawn_mock_transcoder_capture(grant, StatusCode::OK, seen.clone()).await;
+            let state = test_state_with_transcoder(&base).await;
+            let file_id = seed_media_file(&state, "/lib/dual-audio.mkv").await;
+            let movie_id = seed_movie_for_file(&state, file_id).await;
+            let resp = crate::build_router(state)
+                .oneshot(req(
+                    "GET",
+                    format!(
+                        "/api/media/stream/movie/{movie_id}?containers=mp4&video_codecs=av1{query}"
+                    ),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+            let body = seen.lock().await.clone().expect("transcoder grant body");
+            assert_eq!(body["caps"]["native_hls"], want_cap, "query {query:?}");
+            handle.abort();
+        }
     }
 
     #[tokio::test]

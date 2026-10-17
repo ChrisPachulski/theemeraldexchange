@@ -27,6 +27,19 @@ def _redacted_url(url: httpx.URL) -> str:
     return str(url.copy_set_param("api_key", "<redacted>"))
 
 
+class _RedactApiKey(logging.Filter):
+    """httpx logs every request URL at INFO, and TMDB v3 auth rides the query
+    string (auth_mode="query"): redact the key from those records."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(_redacted_url(a) if isinstance(a, httpx.URL) else a for a in record.args)
+        return True
+
+
+logging.getLogger("httpx").addFilter(_RedactApiKey())
+
+
 def _sanitize_http_status_error(exc: httpx.HTTPStatusError) -> httpx.HTTPStatusError:
     response = exc.response
     message = (

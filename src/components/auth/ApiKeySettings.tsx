@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useAuth } from '../../lib/auth'
 import { useUserApiKey } from '../../lib/hooks/useUserApiKey'
 import { apiUrl } from '../../lib/api/base'
 import { throwApiError } from '../../lib/api/errors'
@@ -35,6 +36,7 @@ async function fetchUsageMe(): Promise<UsageMe | null> {
 
 export function ApiKeySettings() {
   const { hasKey, fingerprint, setKey, clearKey } = useUserApiKey()
+  const sub = useAuth().user?.sub
   const [draft, setDraft] = useState('')
   // "Replace" flow: show the entry form even while a key is set. The
   // existing key is never displayed; the user pastes a fresh one.
@@ -49,7 +51,8 @@ export function ApiKeySettings() {
   const [busy, setBusy] = useState(false)
 
   // Reset the entry state when the stored key changes (saved here,
-  // replaced elsewhere, cleared). Synchronizing local UI state to an
+  // replaced elsewhere, cleared) or the account does (a draft typed for one
+  // account must not be saved to the next). Synchronizing local UI state to an
   // external source is the exception the setState-in-effect lint
   // rule's docs explicitly allow.
   useEffect(() => {
@@ -57,7 +60,7 @@ export function ApiKeySettings() {
     setDraft('')
     setTypeReveal(false)
     setReplacing(false)
-  }, [hasKey, fingerprint])
+  }, [hasKey, fingerprint, sub])
 
   const usage = useQuery({
     queryKey: ['usage', 'me'],

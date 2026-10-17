@@ -72,13 +72,14 @@ describe('compareFingerprints', () => {
 
 describe('capture argv', () => {
   it('reads a bounded slice of the upstream with the provider UA', () => {
-    const args = liveCaptureArgs('https://up.example/live/u/p/7.ts', 25, 'UA')
+    const args = liveCaptureArgs('https://up.example/live/u/p/7.ts', 25, 'UA', ['-http_proxy', 'http://127.0.0.1:9'])
     expect(args[args.indexOf('-user_agent') + 1]).toBe('UA')
     expect(args.indexOf('-t')).toBeLessThan(args.indexOf('-i'))
     expect(args[args.indexOf('-t') + 1]).toBe('25')
     expect(args[args.indexOf('-i') + 1]).toBe('https://up.example/live/u/p/7.ts')
     expect(args.at(-1)).toBe('pipe:1')
     expect(args[args.indexOf('-protocol_whitelist') + 1]).not.toContain('concat')
+    expect(args[args.indexOf('-http_proxy') + 1]).toBe('http://127.0.0.1:9')
   })
 
   it('concatenates session segments from disk only', () => {

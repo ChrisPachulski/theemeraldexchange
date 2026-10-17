@@ -57,6 +57,7 @@ let writeQueue: Promise<void> = Promise.resolve()
 export function _setUserFeedbackPathForTests(p: string): void {
   filePath = p
   cached = null
+  loading = null
 }
 
 
@@ -117,7 +118,19 @@ async function migrateNamespaceKeys(file: FeedbackFile): Promise<FeedbackFile> {
   return migrated
 }
 
-async function load(): Promise<FeedbackFile> {
+let loading: Promise<FeedbackFile> | null = null
+
+// One disk read at a time: a read that started before a write's rename and
+// resolved after it put the pre-write file back in the cache.
+function load(): Promise<FeedbackFile> {
+  if (cached) return Promise.resolve(cached)
+  loading ??= readFromDisk().finally(() => {
+    loading = null
+  })
+  return loading
+}
+
+async function readFromDisk(): Promise<FeedbackFile> {
   if (cached) return cached
   let raw: string
   try {

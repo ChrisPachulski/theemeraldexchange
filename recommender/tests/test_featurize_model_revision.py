@@ -66,6 +66,7 @@ def test_featurizer_passes_pinned_model_revision(monkeypatch) -> None:
         ),
     )
     monkeypatch.setattr(featurize, "connect", FakeConnection)
+    monkeypatch.setattr(featurize, "_reconcile_model_identity", lambda _conn, _identity: None)
     monkeypatch.setattr(
         featurize,
         "_load_pending",

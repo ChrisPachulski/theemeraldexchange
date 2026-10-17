@@ -101,3 +101,23 @@ def test_compute_funnel_zero_impressions_is_safe() -> None:
     out = compute_funnel(_conn(), window_days=7)
     assert out["impressions"] == 0
     assert out["metrics"]["added_rate"] == {"n": 0, "d": 0, "rate": 0.0, "ci95": [0.0, 0.0]}
+
+
+def test_compute_funnel_counts_only_outcomes_of_in_window_impressions() -> None:
+    # 2026-10-16 review item 23: outcomes and impressions were windowed
+    # independently, so a recent outcome on an old impression could push
+    # successes past impressions and wilson_interval raised a math domain error
+    # (/metrics 500).
+    conn = _conn()
+    conn.execute("INSERT INTO rec_log(id,sub,kind,tmdb_id,ts) VALUES (1,'plex:1','movie',1,datetime('now','-1 day'))")
+    for rid in (50, 51):
+        conn.execute(
+            "INSERT INTO rec_log(id,sub,kind,tmdb_id,ts) VALUES (?, 'plex:1','movie',?,datetime('now','-90 days'))",
+            (rid, rid),
+        )
+        conn.execute("INSERT INTO rec_outcomes(rec_id,outcome,ts) VALUES (?,'added',datetime('now','-1 hour'))", (rid,))
+
+    out = compute_funnel(conn, window_days=7)
+
+    assert out["impressions"] == 1
+    assert out["metrics"]["added_rate"]["n"] == 0

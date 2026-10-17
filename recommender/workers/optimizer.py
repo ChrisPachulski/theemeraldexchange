@@ -524,7 +524,9 @@ def _evaluate_entries(
             # persist_library=False is load-bearing here: eval reads the
             # same DB as production and must not write holdout tmdb_ids into
             # the live library_items table.
-            ctx = load_user_context(conn, req, persist_library=False)
+            # stored_engagement=False: live clicked/added rows must not leak
+            # held-out positives into the eval's inputs.
+            ctx = load_user_context(conn, req, persist_library=False, stored_engagement=False)
             _, selected_recipe, selected_params = select_model_config_for_context(
                 conn,
                 ctx,

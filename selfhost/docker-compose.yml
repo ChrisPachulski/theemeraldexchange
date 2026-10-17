@@ -177,8 +177,14 @@ services:
     pids_limit: "${RECOMMENDER_PIDS_LIMIT:-256}"
     security_opt:
       - "no-new-privileges:true"
+    # The entrypoint chowns /data as root, then drops to its user with gosu:
+    # without these back, cap_drop ALL crash-loops it (prod compose matches).
     cap_drop:
       - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
     volumes:
       - recommender-db:/data
     environment:

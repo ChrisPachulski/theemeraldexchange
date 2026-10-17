@@ -99,6 +99,32 @@ def _load_pending(conn: sqlite3.Connection, limit: int | None) -> list[sqlite3.R
     return conn.execute(q).fetchall()
 
 
+def _reconcile_model_identity(conn: sqlite3.Connection, identity: str) -> None:
+    """Mark every feature stale when the embedding model or revision changed.
+
+    Features carry no model identity, so a model switch used to leave the old
+    vectors in place and give new titles the new model's: one index, two
+    incompatible spaces. The identity lives in ingest_state; the first run
+    that sees none records the current one (the existing vectors were built by
+    the pinned config). The stale mark is durable, so an interrupted rebuild
+    resumes on the next run.
+    """
+    # ponytail: the index mixes models until the rebuild finishes; a shadow
+    # index would close that window if a model switch ever needs to be seamless.
+    row = conn.execute("SELECT value FROM ingest_state WHERE key = 'embed_model'").fetchone()
+    if row is not None and row["value"] == identity:
+        return
+    with transaction(conn):
+        if row is not None:
+            log.warning("embedding model changed (%s -> %s): rebuilding every vector", row["value"], identity)
+            conn.execute("UPDATE title_features SET computed_at = ''")
+        conn.execute(
+            """INSERT INTO ingest_state(key, value, ts) VALUES ('embed_model', ?, datetime('now'))
+               ON CONFLICT(key) DO UPDATE SET value = excluded.value, ts = excluded.ts""",
+            (identity,),
+        )
+
+
 def _ids_csv(s: str | None) -> list[int]:
     if not s:
         return []
@@ -115,6 +141,7 @@ def run(*, limit: int | None = None) -> int:
     )
     dim = CONFIG.embed_dim
 
+    _reconcile_model_identity(conn, f"{CONFIG.embed_model}@{CONFIG.embed_revision}")
     pending = _load_pending(conn, limit)
     if not pending:
         log.info("nothing to featurize")

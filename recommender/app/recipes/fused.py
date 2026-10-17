@@ -31,6 +31,7 @@ Pure numpy + sqlite (the production deps); no scipy/torch/pandas at serve time.
 
 from __future__ import annotations
 
+from dataclasses import replace
 import math
 import sqlite3
 
@@ -238,13 +239,21 @@ def score(ctx: UserContext, conn: sqlite3.Connection, *, n: int, params: dict) -
     if not batch.candidates:
         return RecipeResult(items=[], diag={"path": "empty_pool", **batch.diag})
 
-    cand_ids = [c.title.tmdb_id for c in batch.candidates]
-    # Library item embeddings (the source of "max sim to an item"). Fall back to
-    # the centroid path's content if the library has no stored embeddings.
+    # Library item embeddings (the source of "max sim to an item"). A profile
+    # whose taste comes only from likes scores against the liked titles, the
+    # same items retrieval's centroid used, minus those titles themselves (each
+    # would match itself at 1.0; the ranker excludes liked titles too).
     lib_ids = list(ctx.library_embedding_ids)
     lib_mat = ctx.library_embeddings
     if lib_mat is None or len(lib_ids) == 0:
+        lib_ids = list(ctx.liked_embedding_ids)
+        lib_mat = ctx.liked_embeddings
+        batch = replace(batch, candidates=[c for c in batch.candidates if c.title.tmdb_id not in ctx.liked_ids])
+    if lib_mat is None or len(lib_ids) == 0:
         return RecipeResult(items=[], diag={"path": "no_library_embeddings"})
+    if not batch.candidates:
+        return RecipeResult(items=[], diag={"path": "empty_pool", **batch.diag})
+    cand_ids = [c.title.tmdb_id for c in batch.candidates]
     lib_norm = lib_mat / np.clip(np.linalg.norm(lib_mat, axis=1, keepdims=True), EMBED_EPS, None)
     cand_mat = np.vstack([c.embedding for c in batch.candidates]).astype(np.float32)
     cand_norm = cand_mat / np.clip(np.linalg.norm(cand_mat, axis=1, keepdims=True), EMBED_EPS, None)

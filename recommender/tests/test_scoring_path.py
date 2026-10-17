@@ -746,3 +746,52 @@ def test_cold_start_trending_recipe(conn) -> None:
     ctx_with_veto = _ctx(conn, library=[], feedback=[])
     ids2 = [it.tmdb_id for it in cold_start_trending.score(ctx_with_veto, conn, n=20, params={"min_vote_count": 0}).items]
     assert VETOED not in ids2
+
+
+def test_optimizer_eval_ignores_live_engagement(conn, monkeypatch) -> None:
+    # 2026-10-16 review item 31: eval passed feedback=[] but load_user_context
+    # still merged stored clicked/added rows into liked_ids, so a live "added"
+    # on a held-out positive became a training input (and was excluded).
+    from workers import optimizer
+
+    conn.execute(
+        "INSERT INTO user_feedback(sub, kind, tmdb_id, signal, ts) VALUES ('plex:1','movie',11,'added','t')"
+    )
+    seen = []
+    real = optimizer.load_user_context
+
+    def capture(*a, **kw):
+        ctx = real(*a, **kw)
+        seen.append(ctx)
+        return ctx
+
+    monkeypatch.setattr(optimizer, "load_user_context", capture)
+    optimizer.evaluate(conn, "ranker", {}, [{"sub": "plex:1", "kind": "movie", "library": [], "positives": [11]}])
+    assert seen and 11 not in seen[0].liked_ids
+
+
+def test_featurize_rebuilds_every_vector_when_the_model_changes(conn) -> None:
+    # 2026-10-16 review item 31: features carried no model identity, so a model
+    # or revision change left old vectors in place beside new ones.
+    from workers import featurize
+
+    add_title(conn, 801, title="Old Vector", vec=axis_vec({1: 1.0}), genres=(35,))
+    def pending() -> set[int]:
+        return {r["tmdb_id"] for r in featurize._load_pending(conn, None)}
+
+    featurize._reconcile_model_identity(conn, "model-a@rev1")
+    assert 801 not in pending()
+    featurize._reconcile_model_identity(conn, "model-a@rev1")
+    assert 801 not in pending()
+    featurize._reconcile_model_identity(conn, "model-a@rev2")
+    assert 801 in pending()
+
+
+def test_fused_scores_from_likes_alone(conn) -> None:
+    # 2026-10-16 review item 31: retrieval used library + liked embeddings, but
+    # the rerank read only the library and returned nothing for a profile whose
+    # taste came only from likes.
+    ctx = _ctx(conn, library=[], feedback=[{"tmdb_id": LIB_A1, "signal": "like"}], household_rejections=[])
+    result = fused.score(ctx, conn, n=10, params={})
+    assert result.diag["path"] != "no_library_embeddings" and result.items
+    assert LIB_A1 not in [it.tmdb_id for it in result.items]

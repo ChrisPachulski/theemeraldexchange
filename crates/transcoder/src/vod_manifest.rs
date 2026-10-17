@@ -91,6 +91,32 @@ pub(crate) fn synthesize(total_duration_secs: f64, start_secs: u64, fmp4: bool) 
     Some(m)
 }
 
+/// Insert `#EXT-X-DISCONTINUITY` before each segment in `junctions`: where a
+/// crash respawn's child took over and its timestamps restarted.
+pub(crate) fn mark_discontinuities(manifest: String, junctions: &[u64]) -> String {
+    if junctions.is_empty() {
+        return manifest;
+    }
+    let mut out = String::with_capacity(manifest.len() + junctions.len() * 22);
+    let mut pending_extinf: Option<&str> = None;
+    for line in manifest.lines() {
+        if line.starts_with("#EXTINF:") {
+            pending_extinf = Some(line);
+            continue;
+        }
+        if let Some(extinf) = pending_extinf.take() {
+            if crate::session::segment_index(line).is_some_and(|i| junctions.contains(&i)) {
+                out.push_str("#EXT-X-DISCONTINUITY\n");
+            }
+            out.push_str(extinf);
+            out.push('\n');
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 /// Compute the copy-remux segment CUT POINTS from the source video keyframe PTS
 /// list, reproducing ffmpeg's `hlsenc` stream-copy segmenter EXACTLY.
 ///
@@ -168,6 +194,25 @@ pub(crate) fn copy_resume_base(
         }
     }
     (start_idx, base)
+}
+
+/// Source time where full-title copy segment `index` starts (segment 0 at 0),
+/// on the same cut grid as [`copy_resume_base`]; `None` past the last segment.
+pub(crate) fn copy_segment_start(
+    keyframes: &[f64],
+    total_duration_secs: f64,
+    index: u64,
+) -> Option<f64> {
+    if index == 0 {
+        return Some(0.0);
+    }
+    let cuts = copy_cut_points(
+        keyframes,
+        0.0,
+        total_duration_secs,
+        f64::from(HLS_SEGMENT_SECS),
+    );
+    cuts.get(usize::try_from(index - 1).ok()?).copied()
 }
 
 /// Build a complete VOD playlist for a COPY-remux session from the source's
@@ -567,5 +612,18 @@ mod tests {
         assert!(m.contains("#EXT-X-START:TIME-OFFSET=77.911000\n"), "{m}");
         // 11 prefix + 1 suffix (the [77.911, 79.830) tail) = 12 segments.
         assert_eq!(m.matches("#EXTINF:").count(), 12, "{m}");
+    }
+
+    #[test]
+    fn marks_a_discontinuity_before_each_crash_junction() {
+        let m = synthesize(10.0, 0, false).unwrap();
+        let marked = mark_discontinuities(m.clone(), &[3]);
+        assert!(
+            marked
+                .contains("seg_00002.ts\n#EXT-X-DISCONTINUITY\n#EXTINF:2.000000,\nseg_00003.ts\n"),
+            "{marked}"
+        );
+        assert_eq!(marked.matches("#EXT-X-DISCONTINUITY").count(), 1);
+        assert_eq!(mark_discontinuities(m.clone(), &[]), m);
     }
 }

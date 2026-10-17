@@ -655,9 +655,14 @@ auth.post('/apple', (c) => withAuthOutcome(c, 'apple', 'identity_verify', async 
   // APPLE_NONCE_TTL_MS): the raw value is burned here, whatever the verifier
   // says next, and its SHA-256 hex is what Apple echoed into the claim.
   // Browser sign-ins keep the client-chosen nonce Apple's JS SDK binds to its
-  // own session, compared as sent.
+  // own session, compared as sent. Either way a nonce is required: without one
+  // any valid identity token, replayed or minted for another flow, signed in.
   const isDevicePair = typeof body?.device_id === 'string' && body.device_id.trim() !== ''
   let expectedNonce = nonce
+  if (!nonce) {
+    authOutcome.record('invalid', 'invalid_request')
+    return c.json({ error: 'invalid_nonce' }, 400)
+  }
   if (isDevicePair) {
     if (!nonce || !consumeAppleNonce(nonce)) {
       authOutcome.record('invalid', 'invalid_request')

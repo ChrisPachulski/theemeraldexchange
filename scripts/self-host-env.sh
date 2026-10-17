@@ -18,6 +18,9 @@
 # required). $status is never assigned (zsh-reserved).
 
 set -eu
+# Every file this script writes holds secrets: .env.tmp, which replaces .env,
+# must be born 0600 rather than at the umask default (world-readable 0644).
+umask 077
 
 ENV_FILE="${1:-.env}"
 

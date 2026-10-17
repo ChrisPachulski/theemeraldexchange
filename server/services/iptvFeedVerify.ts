@@ -26,6 +26,7 @@
 // them (preemptAuxUpstreams). A preempted check records nothing, so a later tune
 // or sweep simply tries again.
 
+import { ffmpegProxyArgs } from './ffmpegEgress.js'
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -305,7 +306,8 @@ const NO_SIBLING: FeedCheckOutcome = { kind: 'unknown', reason: NO_SIBLING_REASO
 
 /** Capture ~`seconds` of a stream through a spare upstream slot. */
 async function captureUpstream(io: FeedCheckIo, streamId: number, seconds: number): Promise<Capture | 'no slot'> {
-  const proc = io.spawnUpstream(liveCaptureArgs(io.upstreamUrlFor(String(streamId)), seconds, io.userAgent))
+  const proxyArgs = ffmpegProxyArgs()
+  const proc = proxyArgs && io.spawnUpstream(liveCaptureArgs(io.upstreamUrlFor(String(streamId)), seconds, io.userAgent, proxyArgs))
   if (!proc) return 'no slot'
   return readFrames(proc, CAPTURE_TIMEOUT_MS)
 }
@@ -407,8 +409,10 @@ export async function checkFeedStandalone(io: FeedCheckIo, streamId: number, sti
     recordOutcome(db, streamId, listed, NO_SIBLING, new Date(io.now()))
     return NO_SIBLING
   }
-  const spawnCapture = (id: number): ChildProcess | null =>
-    io.spawnUpstream(liveCaptureArgs(io.upstreamUrlFor(String(id)), STANDALONE_CAPTURE_SECS, io.userAgent))
+  const spawnCapture = (id: number): ChildProcess | null => {
+    const proxyArgs = ffmpegProxyArgs()
+    return proxyArgs && io.spawnUpstream(liveCaptureArgs(io.upstreamUrlFor(String(id)), STANDALONE_CAPTURE_SECS, io.userAgent, proxyArgs))
+  }
   const footage = async (candidate: FeedCandidate): Promise<Footage> => {
     const subjectProc = spawnCapture(streamId)
     if (!subjectProc) return { abort: 'no free upstream slot' }

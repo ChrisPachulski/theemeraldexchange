@@ -63,7 +63,8 @@ def compute_funnel(conn: sqlite3.Connection, window_days: int = WINDOW_DAYS_DEFA
 
     Outcome counts are COUNT(DISTINCT rec_id) per outcome so a rec carrying
     several outcome rows (clicked + added + ...) is not double-counted within an
-    outcome. Impressions = rec_log rows in-window.
+    outcome, counted only for impressions in the window. Impressions = rec_log
+    rows in-window.
     """
     wd = clamp_window_days(window_days)
     win = f"-{wd} days"
@@ -73,12 +74,17 @@ def compute_funnel(conn: sqlite3.Connection, window_days: int = WINDOW_DAYS_DEFA
         (win,),
     ).fetchone()["c"]
 
+    # In-window outcomes of in-window impressions only: windowing the two
+    # independently let a recent outcome on an old impression push successes
+    # past impressions (and wilson_interval into a math domain error).
     rows = conn.execute(
         """SELECT o.outcome AS outcome, COUNT(DISTINCT o.rec_id) AS c
            FROM rec_outcomes o
-           WHERE datetime(o.ts) >= datetime('now', ?)
+           JOIN rec_log r ON r.id = o.rec_id
+           WHERE datetime(r.ts) >= datetime('now', ?)
+             AND datetime(o.ts) >= datetime('now', ?)
            GROUP BY o.outcome""",
-        (win,),
+        (win, win),
     ).fetchall()
     by = {r["outcome"]: r["c"] for r in rows}
 

@@ -93,9 +93,22 @@ let writeQueue: Promise<void> = Promise.resolve()
 export function _setUserPoliciesPathForTests(p: string): void {
   filePath = p
   cached = null
+  loading = null
 }
 
-async function load(): Promise<PoliciesFile> {
+let loading: Promise<PoliciesFile> | null = null
+
+// One disk read at a time: a read that started before a write's rename and
+// resolved after it put the pre-write file back in the cache.
+function load(): Promise<PoliciesFile> {
+  if (cached) return Promise.resolve(cached)
+  loading ??= readFromDisk().finally(() => {
+    loading = null
+  })
+  return loading
+}
+
+async function readFromDisk(): Promise<PoliciesFile> {
   if (cached) return cached
   let raw: string
   try {

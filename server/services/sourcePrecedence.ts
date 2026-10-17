@@ -17,6 +17,7 @@
 
 import { env } from '../env.js'
 import { fetchWithTimeout, LAN_TIMEOUT_MS } from './upstream.js'
+import { guardedFetchTrustedOrigin } from './ssrfGuard.js'
 
 // The sources that can back a title, in precedence order.
 // 'local' is reserved for media-core (M3+); 'plex' covers
@@ -94,9 +95,13 @@ async function probeIptvUncached(): Promise<boolean> {
     `?username=${encodeURIComponent(env.XTREAM_USERNAME)}` +
     `&password=${encodeURIComponent(env.XTREAM_PASSWORD)}`
   try {
-    const res = await fetchWithTimeout(url, {}, LAN_TIMEOUT_MS, 'sourcePrecedence.iptv')
-    // 5xx or timeout (504 synthesized by fetchWithTimeout) → unavailable.
-    // 4xx (expired line, bad creds) → also unavailable for play purposes.
+    // The panel is operator-configured, but a 30x it answers with is not: the
+    // guarded fetch re-validates every redirect hop (public addresses only)
+    // instead of following it into the compose network.
+    const res = await guardedFetchTrustedOrigin(url, {}, { hopTimeoutMs: LAN_TIMEOUT_MS })
+    await res.body?.cancel().catch(() => {})
+    // 4xx (expired line, bad creds) and 5xx → unavailable for play purposes; a
+    // timeout or a blocked hop throws and lands in the catch below.
     return res.ok
   } catch {
     return false
