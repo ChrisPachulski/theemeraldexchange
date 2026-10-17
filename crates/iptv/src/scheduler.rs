@@ -100,7 +100,7 @@ pub fn spawn(sync: Arc<CatalogSync>, sync_cron: &str) -> Vec<JoinHandle<()>> {
 
 /// Run `job` at every occurrence of `cron`, one at a time. A run that overlaps
 /// the next occurrence skips it, like the single-flight sync does.
-async fn every<F, Fut>(cron: Cron, mut job: F)
+pub(crate) async fn every<F, Fut>(cron: Cron, mut job: F)
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = ()>,

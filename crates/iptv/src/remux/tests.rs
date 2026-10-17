@@ -807,6 +807,82 @@ fn scrub_redacts_path_and_query_creds_and_leaves_clean_lines() {
     assert!(!out.contains("p%40ss%2Fw"), "{out}");
 }
 
+// ── Feed-check captures (aux upstream slots) ─────────────────────────────────
+
+/// A capture (its argv asks for rawvideo) runs until `$c/release` exists, then
+/// exits 0; anything else is a LIVE remux.
+const CAPTURE: &str = "case \"$*\" in *rawvideo*) while [ ! -f \"$c/release\" ]; do sleep 0.05; done; exit 0;; esac\n";
+
+fn capped() -> R {
+    remux_with(
+        Fake::new(&format!("{CAPTURE}{LIVE}")),
+        &[("IPTV_MAX_UPSTREAM_CONNECTIONS", "2")],
+        Timings::default(),
+    )
+}
+
+fn capture_args(url: &str) -> Vec<String> {
+    ["-i", url, "-f", "rawvideo", "pipe:1"]
+        .map(String::from)
+        .to_vec()
+}
+
+#[tokio::test]
+async fn a_capture_takes_only_a_free_slot_and_counts_against_the_cap_until_it_exits() {
+    let r = capped();
+    r.start("40", "plex:a").unwrap();
+    let capture = r.remux.capture_aux(capture_args("https://x/b.ts")).unwrap();
+    assert_eq!(r.remux.live_upstream_count(), 2);
+    assert!(
+        r.remux
+            .capture_aux(capture_args("https://x/c.ts"))
+            .is_none()
+    );
+    std::fs::write(r.fake.ctl().join("release"), "").unwrap();
+    let c = capture.frames().await;
+    assert!(c.ok && !c.killed);
+    assert_eq!(r.remux.live_upstream_count(), 1);
+}
+
+/// The slice's preemption proof: a viewer's remux start at the cap kills the
+/// in-flight capture, which stays counted until its process exits.
+#[tokio::test]
+async fn a_remux_start_preempts_an_in_flight_capture() {
+    let r = capped();
+    r.start("41", "plex:a").unwrap();
+    let capture = r.remux.capture_aux(capture_args("https://x/b.ts")).unwrap();
+    r.launched(2).await;
+    // The viewer's dial at the cap kills the capture and defers one poll.
+    assert!(r.start("42", "plex:b").is_none());
+    assert!(capture.kill.is_cancelled());
+    assert_eq!(r.remux.live_upstream_count(), 2);
+    let c = capture.frames().await;
+    assert!(c.killed && !c.ok);
+    assert_eq!(r.remux.live_upstream_count(), 1);
+    assert!(r.start("42", "plex:b").is_some());
+}
+
+#[tokio::test]
+async fn a_viewer_about_to_dial_yields_waiting_for_the_killed_capture_to_exit() {
+    let r = capped();
+    r.start("43", "plex:a").unwrap();
+    let capture = r.remux.capture_aux(capture_args("https://x/b.ts")).unwrap();
+    r.remux.yield_aux("test", Duration::from_secs(3)).await;
+    assert!(capture.kill.is_cancelled());
+    assert_eq!(r.remux.live_upstream_count(), 1);
+    assert!(capture.frames().await.killed);
+}
+
+#[tokio::test]
+async fn yield_leaves_a_capture_alone_when_the_cap_has_room() {
+    let r = capped();
+    let capture = r.remux.capture_aux(capture_args("https://x/b.ts")).unwrap();
+    r.remux.yield_aux("test", Duration::from_secs(3)).await;
+    assert!(!capture.kill.is_cancelled());
+    std::fs::write(r.fake.ctl().join("release"), "").unwrap();
+    assert!(capture.frames().await.ok);
+}
+
 #[cfg(feature = "requires-ffmpeg")]
 mod real_ffmpeg {
     //! One remux through the real ffmpeg on PATH, dialing a loopback fake

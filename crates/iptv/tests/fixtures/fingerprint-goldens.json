@@ -1,0 +1,94 @@
+[
+  {
+    "name": "noisy1 vs other source at 140",
+    "a": "90c564cd0a4643423944e29521f0595c507089788b1828b867f3a35029fc48ef",
+    "b": "82dedfc22d0022abf101ef3ef8280aec1204f6474bdbf3551965583270555d14",
+    "match": {
+      "score": 0.9984822521467464,
+      "offset": 140,
+      "overlap": 125
+    }
+  },
+  {
+    "name": "noisy1 vs noisy2",
+    "a": "90c564cd0a4643423944e29521f0595c507089788b1828b867f3a35029fc48ef",
+    "b": "f06f2f90781511749d3ba383acc0ef93ba467c7edce947d32e46314a4fff966c",
+    "match": {
+      "score": 0.025328772756310066,
+      "offset": 252,
+      "overlap": 48
+    }
+  },
+  {
+    "name": "black vs noisy3",
+    "a": "ef700bfd442c4a05e02f13e55f1707498af5c72f46c1afdd68016618527ebfeb",
+    "b": "e9cca5805daa15abb10791001368c2cc97dcf48881b9440270c26eb7ff40bbfc",
+    "match": null
+  },
+  {
+    "name": "noisy4 vs 30 frames",
+    "a": "7059a853b60dc5f21686fc930cd58f09f08221b97fd4b0114992cfe338f3b0d2",
+    "b": "0983405db9a7e3866ad0e05c13f25bac84850d757edceabb1f10b018be6414fc",
+    "match": null
+  },
+  {
+    "name": "sho1 vs slice sho1 140",
+    "a": "72dd25cf477a3a104e49761ec726bb034bf1e36587742e63323459d0d73f1ec9",
+    "b": "368047de5e7d26b11b04a706c98ebe09d4fb47f3fbc68f580bc6c215c0468b70",
+    "match": {
+      "score": 0.9999907172480698,
+      "offset": 140,
+      "overlap": 125
+    }
+  },
+  {
+    "name": "sho2 vs slice sho1 140",
+    "a": "ca8f192e07bb44c8033e20a952a856b128dea58f955adfee875183b01574aaa8",
+    "b": "368047de5e7d26b11b04a706c98ebe09d4fb47f3fbc68f580bc6c215c0468b70",
+    "match": {
+      "score": 0.02729174827460426,
+      "offset": 80,
+      "overlap": 125
+    }
+  },
+  {
+    "name": "sho2 vs slice sho2 140",
+    "a": "ca8f192e07bb44c8033e20a952a856b128dea58f955adfee875183b01574aaa8",
+    "b": "a89c34f88e8798c0f11fa5cb0ccc6963027060161427a451396a782c05a89b74",
+    "match": {
+      "score": 0.9999905829012105,
+      "offset": 140,
+      "overlap": 125
+    }
+  },
+  {
+    "name": "blend vs slice sho1 140",
+    "a": "a98410ea940a22e1a065296ad24caaab5385369cfd602f599868a8ea4e06169c",
+    "b": "368047de5e7d26b11b04a706c98ebe09d4fb47f3fbc68f580bc6c215c0468b70",
+    "match": {
+      "score": 0.7102432039018894,
+      "offset": 140,
+      "overlap": 125
+    }
+  },
+  {
+    "name": "slice sho2 130 vs slice sho2 140",
+    "a": "ba0bf75f0008c46da01f64622b85b8f0707ce00a45977b470d447c03108a3acf",
+    "b": "a89c34f88e8798c0f11fa5cb0ccc6963027060161427a451396a782c05a89b74",
+    "match": {
+      "score": 0.999999999904924,
+      "offset": 10,
+      "overlap": 115
+    }
+  },
+  {
+    "name": "sweep broadcast vs itself",
+    "a": "77383a38a0be09cb2880931ef2bd19d69d0c0293ece4e26cee110976cfb1977b",
+    "b": "77383a38a0be09cb2880931ef2bd19d69d0c0293ece4e26cee110976cfb1977b",
+    "match": {
+      "score": 0.9999999992180854,
+      "offset": 0,
+      "overlap": 125
+    }
+  }
+]

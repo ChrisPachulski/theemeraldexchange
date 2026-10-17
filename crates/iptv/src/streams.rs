@@ -31,6 +31,7 @@ use crate::api::{AppState, Claims, Params, js_date, param};
 use crate::concurrency::{Acquire, Kind, Limit, Session, Tracker};
 use crate::config::Config;
 use crate::egress::Egress;
+use crate::feed_verify::{LiveIo, LiveSessionRef};
 use crate::hls::{self, Owner, Rewrite, internal, is_word_id, json_error, upstream_status};
 use crate::playlist;
 use crate::remux::Remux;
@@ -57,6 +58,8 @@ const PROBE_OK_TTL: Duration = Duration::from_secs(60);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a raw live request waits for draining provider sockets.
 const DRAIN_WAIT: Duration = Duration::from_secs(6);
+/// How long a viewer's dial waits for preempted feed-check captures to exit.
+const AUX_YIELD: Duration = Duration::from_secs(3);
 const REDACTED: &str = "another household member";
 
 pub struct Streams {
@@ -64,6 +67,8 @@ pub struct Streams {
     pub dead: Arc<DeadFeeds>,
     /// The AVPlayer live remux: ffmpeg children and the (channel, viewer) index.
     pub live: LiveMap,
+    /// One feed check at a time, on tune or in the idle sweep.
+    pub feed: Arc<crate::feed_verify::Scheduler>,
     /// No redirects followed (each hop is guarded by hand), the provider UA.
     pub http: reqwest::Client,
     leases: Mutex<HashMap<String, Lease>>,
@@ -92,6 +97,7 @@ impl Streams {
         let remux = Remux::new(config, tracker.clone(), dead.clone(), egress);
         Streams {
             live: LiveMap::new(remux, config),
+            feed: Arc::default(),
             tracker,
             dead,
             http: reqwest::Client::builder()
@@ -1068,6 +1074,8 @@ async fn live_ts(
         }
     };
     tracker.heartbeat_by_resource(&sub, Kind::Live, id);
+    // A feed check's capture never holds a slot a viewer needs.
+    streams.live.remux.yield_aux("raw-live", AUX_YIELD).await;
     // A replaced remux child can still be draining its provider socket.
     let cap = s.config.iptv_max_upstream_connections as usize;
     let deadline = Instant::now() + DRAIN_WAIT;
@@ -1388,6 +1396,52 @@ fn remux_unavailable(live: &LiveMap, candidates: &[String]) -> Response {
     )
 }
 
+/// Check that the stream behind this viewer's session carries the channel they
+/// picked; if it carries another, switch them (feed_verify). Cheap per poll: a
+/// session is only ever checked once.
+fn start_feed_check(s: &AppState, creds: &Creds, e: &remux_map::Entry) {
+    let (Ok(tuned), Ok(dialed)) = (e.stream_id.parse(), e.dialed_stream_id.parse()) else {
+        return;
+    };
+    let streams = s.streams.clone();
+    let io = Arc::new(LiveIo::new(
+        streams.live.remux.clone(),
+        streams.dead.clone(),
+        creds,
+    ));
+    let r = LiveSessionRef {
+        tuned,
+        dialed,
+        session_id: e.session_id.clone(),
+        dir: e.dir.clone(),
+        started_at_ms: chrono::Utc::now().timestamp_millis()
+            - e.started_at.elapsed().as_millis() as i64,
+    };
+    let (st, stream_id, sub, sid) = (
+        streams.clone(),
+        e.stream_id.clone(),
+        e.sub.clone(),
+        e.session_id.clone(),
+    );
+    let is_active = Arc::new(move || {
+        st.live
+            .get_active(&stream_id, &sub)
+            .is_some_and(|x| x.session_id == sid)
+    });
+    let (st, stream_id, sub, sid) = (
+        streams.clone(),
+        e.stream_id.clone(),
+        e.sub.clone(),
+        e.session_id.clone(),
+    );
+    streams
+        .feed
+        .schedule_live(io, s.pool.clone(), r, is_active, move |to| {
+            st.live
+                .redirect(&stream_id, &sub, &to.to_string(), &sid, Instant::now())
+        });
+}
+
 /// The AVPlayer live playlist: ensure the viewer's remux session, wait for a
 /// small starting window, and serve it rewritten to signed segment URLs.
 async fn remux_manifest(
@@ -1437,6 +1491,10 @@ async fn remux_manifest(
         url_for: &url_for,
     };
     let live = &s.streams.live;
+    // About to dial for a viewer: a feed check's capture gives up its slot first.
+    if live.get_active(&id, &sub).is_none() {
+        live.remux.yield_aux("remux", AUX_YIELD).await;
+    }
     // The viewer's other channels were freed at grant time, not here: on this
     // hot path two overlapping sessions of one sub would kill each other.
     let mut entry = match live.ensure(&opts, Instant::now()) {
@@ -1445,6 +1503,9 @@ async fn remux_manifest(
         Err(e) => return internal(&e),
     };
     live.remux.heartbeat(&entry.session_id);
+    if s.config.iptv_feed_check {
+        start_feed_check(&s, &creds, &entry);
+    }
     let deadline = Instant::now() + MANIFEST_WAIT;
     while !remux_map::manifest_ready(&entry.manifest_path, START_SEGMENTS)
         && Instant::now() < deadline

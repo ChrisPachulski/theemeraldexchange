@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use iptv::{api, config::Config, db, scheduler, sync::CatalogSync};
+use iptv::{api, config::Config, db, feed_sweep, scheduler, sync::CatalogSync};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -22,6 +22,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::new(Config::from_env().inspect_err(|e| tracing::error!("iptv config error: {e}"))?);
     let pool = db::open(&config.iptv_db_path).await?;
     let state = api::AppState::new(pool.clone(), config.clone());
+    // Idle feed checks: every minute, only in the overnight window and only
+    // when nobody has watched for 30 minutes (IPTV_FEED_CHECK=0 turns it off).
+    let _sweep = feed_sweep::enabled(&config)
+        .then(|| feed_sweep::spawn(pool.clone(), state.streams.clone(), config.clone()));
     let sync = CatalogSync::new(pool, config.clone());
 
     let _jobs = if config.sync_enabled() {

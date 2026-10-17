@@ -105,7 +105,7 @@ pub fn reconnect_delay(streak: u32) -> Duration {
 }
 
 /// `^seg_\d{5}\.ts$`
-fn is_seg_file(s: &str) -> bool {
+pub(crate) fn is_seg_file(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() == 12
         && s.starts_with("seg_")

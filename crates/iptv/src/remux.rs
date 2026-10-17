@@ -2,7 +2,9 @@
 //! the provider's MPEG-TS into a 2 s sliding-window HLS playlist in a temp dir.
 //! This is the single place a remux opens a provider connection, so the
 //! upstream cap is enforced here: sessions, plus SIGTERMed children that still
-//! hold their socket (draining), plus the tracker's raw live and DVR slots.
+//! hold their socket (draining), plus feed-check captures (aux), plus the
+//! tracker's raw live and DVR slots. A capture only ever takes a free slot,
+//! and whoever needs it preempts it.
 //!
 //! Each child has one supervisor task that reads its stderr (codec probe,
 //! timestamp storm and single-jump detectors, segment-stall watchdog), signals
@@ -17,14 +19,17 @@ use std::time::Duration;
 
 use regex::Regex;
 use reqwest::Url;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
+use tokio::task::JoinHandle;
 use tokio::time::{Instant, sleep_until};
+use tokio_util::sync::CancellationToken;
 
 use crate::concurrency::{REMUX_IDLE_MS, Tracker};
 use crate::config::Config;
 use crate::egress::{Egress, FFMPEG_PROXIED_PROTOCOLS};
+use crate::fingerprint::{FP_FPS, FP_FRAME_BYTES};
 use crate::streams::{DEAD_FEED_CLEAN_EOF, DeadFeeds, UPSTREAM_USER_AGENT, encode_uri_component};
 
 /// A channel seen serving non-H.264 video is re-encoded this long.
@@ -33,6 +38,10 @@ const REENCODE_MEMORY: Duration = Duration::from_secs(6 * 3600);
 pub const TS_STORM_LINES: u32 = 30;
 /// One discontinuity bigger than this (microseconds, 1 h) freezes segment output.
 pub const TS_JUMP_RELAUNCH_US: f64 = 3_600_000_000.0;
+/// A feed-check capture is killed past this.
+const CAPTURE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Frames kept per capture (two minutes).
+const MAX_FRAME_BYTES: usize = FP_FRAME_BYTES * FP_FPS * 120;
 
 static VIDEO_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"Stream #\d+:\d+.*: Video: (\w+)").unwrap());
@@ -220,6 +229,35 @@ struct Inner {
     /// Children we signalled that have not exited: each still holds its
     /// provider socket, so the cap counts it until its exit.
     draining: HashSet<u64>,
+    /// Feed-check captures holding a provider connection, by child id.
+    aux: HashMap<u64, CancellationToken>,
+}
+
+/// What a feed-check capture read.
+#[derive(Debug, Default)]
+pub struct Capture {
+    /// ffmpeg exited 0.
+    pub ok: bool,
+    /// Killed by a signal: preempted by a viewer, or past the timeout.
+    pub killed: bool,
+    pub frames: Vec<u8>,
+}
+
+/// A running capture.
+pub struct CaptureTask {
+    pub kill: CancellationToken,
+    pub done: JoinHandle<Capture>,
+}
+
+impl CaptureTask {
+    /// SIGKILL it; [`CaptureTask::frames`] then reads `killed`.
+    pub fn kill(&self) {
+        self.kill.cancel();
+    }
+
+    pub async fn frames(self) -> Capture {
+        self.done.await.unwrap_or_default()
+    }
 }
 
 /// A started session: where its playlist lands.
@@ -337,7 +375,119 @@ impl Remux {
     }
 
     fn count(&self, inner: &Inner) -> usize {
-        inner.sessions.len() + inner.draining.len() + self.0.tracker.live_count()
+        inner.sessions.len() + inner.draining.len() + inner.aux.len() + self.0.tracker.live_count()
+    }
+
+    /// Provider connections viewers hold (remux sessions and raw .ts streams),
+    /// leaving out captures and children still draining.
+    pub fn viewer_upstream_count(&self) -> usize {
+        self.0.inner.lock().unwrap().sessions.len() + self.0.tracker.live_count()
+    }
+
+    /// `-http_proxy <egress>`; None while the egress proxy is down.
+    pub fn proxy_args(&self) -> Option<[String; 2]> {
+        self.0.egress.proxy_args()
+    }
+
+    /// Start a feed-check ffmpeg that opens a provider connection, or None when
+    /// the upstream cap leaves no free slot. It counts until it exits.
+    pub fn capture_aux(&self, args: Vec<String>) -> Option<CaptureTask> {
+        let mut inner = self.0.inner.lock().unwrap();
+        if self.0.cap > 0 && self.count(&inner) >= self.0.cap {
+            return None;
+        }
+        Some(self.spawn_capture(args, Some(&mut *inner)))
+    }
+
+    /// Start a local ffmpeg capture (a session's segments; no provider connection).
+    pub fn capture_local(&self, args: Vec<String>) -> CaptureTask {
+        self.spawn_capture(args, None)
+    }
+
+    fn spawn_capture(&self, args: Vec<String>, aux: Option<&mut Inner>) -> CaptureTask {
+        let kill = CancellationToken::new();
+        let _ = std::fs::create_dir_all(&self.0.tmp_dir);
+        let child = Command::new(&self.0.ffmpeg)
+            .args(args)
+            .current_dir(&self.0.tmp_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn();
+        let child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    message = self.scrub(&e.to_string()),
+                    "feed check ffmpeg error"
+                );
+                let done = tokio::spawn(async { Capture::default() });
+                return CaptureTask { kill, done };
+            }
+        };
+        let id = self.0.ids.fetch_add(1, Ordering::SeqCst);
+        if let Some(inner) = aux {
+            inner.aux.insert(id, kill.clone());
+        }
+        let sh = self.0.clone();
+        let token = kill.clone();
+        let done = tokio::spawn(async move {
+            let c = read_frames(child, token).await;
+            let mut inner = sh.inner.lock().unwrap();
+            inner.aux.remove(&id);
+            inner.draining.remove(&id);
+            c
+        });
+        CaptureTask { kill, done }
+    }
+
+    /// Kill every feed-check capture so a viewer or recording gets the slot.
+    /// Each stays counted (draining) until it exits. Returns how many it killed.
+    pub fn preempt_aux(&self, reason: &str) -> usize {
+        let mut inner = self.0.inner.lock().unwrap();
+        Self::preempt_locked(&mut inner, reason)
+    }
+
+    fn preempt_locked(inner: &mut Inner, reason: &str) -> usize {
+        let killed: Vec<(u64, CancellationToken)> = inner.aux.drain().collect();
+        for (id, kill) in &killed {
+            inner.draining.insert(*id);
+            kill.cancel();
+        }
+        if !killed.is_empty() {
+            tracing::info!(
+                reason,
+                captures = killed.len(),
+                "feed check preempted for a viewer"
+            );
+        }
+        killed.len()
+    }
+
+    /// A viewer is about to dial: when captures hold the slot it needs,
+    /// preempt them and wait (bounded) for their sockets to close.
+    pub async fn yield_aux(&self, reason: &str, timeout: Duration) {
+        {
+            let mut inner = self.0.inner.lock().unwrap();
+            if inner.aux.is_empty() || self.0.cap == 0 || self.count(&inner) < self.0.cap {
+                return;
+            }
+            Self::preempt_locked(&mut inner, reason);
+        }
+        let deadline = Instant::now() + timeout;
+        loop {
+            {
+                let inner = self.0.inner.lock().unwrap();
+                if inner.draining.is_empty() || self.count(&inner) < self.0.cap {
+                    return;
+                }
+            }
+            if Instant::now() >= deadline {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     pub fn note_activity(&self) {
@@ -475,7 +625,11 @@ impl Remux {
         let sh = &self.0;
         let mut inner = sh.inner.lock().unwrap();
         if sh.cap > 0 && self.count(&inner) >= sh.cap {
-            // ponytail: feed-check captures (aux slots) are preempted here once S6 adds them.
+            // A capture never outranks a viewer: kill it and let the next poll
+            // dial once its socket has closed (same deferral as an eviction).
+            if Self::preempt_locked(&mut inner, "remux") > 0 {
+                return Ok(None);
+            }
             // Reclaim only a session past the idle deadline (a buffered player
             // is silent for most of the window), and only when nothing is
             // already draining toward a free slot, so retries do not cascade.
@@ -664,12 +818,71 @@ impl Remux {
         self.0.inner.lock().unwrap().draining.len()
     }
 
+    /// Test seam: set the viewer-activity clock outright.
+    #[cfg(test)]
+    pub(crate) fn set_activity(&self, at: Instant) {
+        *self.0.activity.lock().unwrap() = at;
+    }
+
     /// Test seam: pretend the session was last polled `by` ago.
     #[cfg(test)]
     pub(crate) fn backdate(&self, session_id: &str, by: Duration) {
         if let Some(s) = self.0.inner.lock().unwrap().sessions.get_mut(session_id) {
             s.last_seen -= by;
         }
+    }
+}
+
+/// Read a capture's stdout frames (the first two minutes) until it exits;
+/// SIGKILL on `kill` or past the timeout.
+async fn read_frames(mut child: Child, kill: CancellationToken) -> Capture {
+    let deadline = Instant::now() + CAPTURE_TIMEOUT;
+    let stop = async {
+        tokio::select! {
+            _ = kill.cancelled() => {}
+            _ = sleep_until(deadline) => {}
+        }
+    };
+    tokio::pin!(stop);
+    let mut frames = Vec::new();
+    let mut stopped = false;
+    if let Some(mut out) = child.stdout.take() {
+        let mut chunk = vec![0u8; 64 * 1024];
+        loop {
+            tokio::select! {
+                r = out.read(&mut chunk) => match r {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) if frames.len() < MAX_FRAME_BYTES => frames.extend_from_slice(&chunk[..n]),
+                    Ok(_) => {}
+                },
+                _ = &mut stop, if !stopped => {
+                    stopped = true;
+                    let _ = child.start_kill();
+                }
+            }
+        }
+    }
+    let status = if stopped {
+        child.wait().await
+    } else {
+        tokio::select! {
+            st = child.wait() => st,
+            _ = &mut stop => {
+                let _ = child.start_kill();
+                child.wait().await
+            }
+        }
+    };
+    match status {
+        Ok(st) => Capture {
+            ok: st.code() == Some(0),
+            killed: exit_signal(&st).is_some(),
+            frames,
+        },
+        Err(_) => Capture {
+            frames,
+            ..Capture::default()
+        },
     }
 }
 
