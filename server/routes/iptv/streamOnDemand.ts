@@ -17,7 +17,7 @@ import { parseSegmentOwner } from '../../services/iptvHlsRewrite.js'
 import { containerExtensionRow } from '../../services/iptvRows.js'
 import { env } from '../../env.js'
 import { type Env } from '../../middleware/auth.js'
-import { clientIp, sessionTitle, enrichSessionsFor, userOf, checkToken } from './shared.js'
+import { clientIp, sessionTitle, enrichSessionsFor, userOf, checkToken, activeMemberSub } from './shared.js'
 
 export const iptv = new Hono<Env>()
 
@@ -244,6 +244,9 @@ iptv.get('/stream/segment', async (c) => {
   const segReplay = checkReplay(claims.jti, claims.exp, 'segment')
   if (!segReplay.allowed) return c.json({ error: segReplay.reason }, 401)
 
+  const sub = activeMemberSub(c, claims.sub)
+  if (typeof sub !== 'string') return sub
+
   // b5fa8293: for HLS VOD/series this route IS the playback — the owning
   // /stream/vod|series/:id/m3u8 route runs once and never again, so without
   // this the grant's slot was idle-swept ~30s into a movie and the
@@ -253,7 +256,7 @@ iptv.get('/stream/segment', async (c) => {
   // touch the caller's own sessions; parseSegmentOwner still rejects any tag
   // that isn't a well-formed vod/series id before it reaches the tracker.
   const owner = parseSegmentOwner(c.req.query('ok'), c.req.query('oid'))
-  if (owner) streamConcurrency().heartbeatByResource(claims.sub, owner.kind, owner.id)
+  if (owner) streamConcurrency().heartbeatByResource(sub, owner.kind, owner.id)
 
   const upstream = claims.rid
   let url: URL
@@ -282,7 +285,7 @@ iptv.get('/stream/segment', async (c) => {
     // heartbeat dies one level below the master playlist.
     return await fetchAndRewriteHlsPlaylist({
       upstreamUrl: upstream,
-      sub: claims.sub,
+      sub,
       clientSignal: c.req.raw.signal,
       owner,
     })

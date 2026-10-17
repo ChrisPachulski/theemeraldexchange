@@ -198,6 +198,7 @@ const remuxState = vi.hoisted(() => ({
   // streamIds iptvRemux currently remembers as dead-channel placeholders, so a
   // test can drive the dead-feed failover / channel_offline_upstream path.
   deadFeeds: new Set<string>(),
+  segmentReads: [] as string[],
 }))
 
 vi.mock('../services/iptvRemux.js', () => ({
@@ -239,9 +240,13 @@ vi.mock('node:fs', async (importOriginal) => {
   )
   // createReadStream's return value is irrelevant for remux because streamBridge
   // is mocked; delegate non-remux reads to the real implementation.
-  const createReadStream = vi.fn((p: string, ...rest: unknown[]) =>
-    isRemuxPath(p) ? (({}) as unknown as import('node:fs').ReadStream) : (actual.createReadStream as (...a: unknown[]) => unknown)(p, ...rest),
-  )
+  const createReadStream = vi.fn((p: string, ...rest: unknown[]) => {
+    if (isRemuxPath(p)) {
+      remuxState.segmentReads.push(String(p))
+      return ({}) as unknown as import('node:fs').ReadStream
+    }
+    return (actual.createReadStream as (...a: unknown[]) => unknown)(p, ...rest)
+  })
   return {
     ...actual,
     existsSync,
@@ -283,6 +288,7 @@ beforeEach(() => {
   concurrencyState.realTracker = null
   concurrencyState.releasedByResource.length = 0
   concurrencyState.heartbeatsByResource.length = 0
+  remuxState.segmentReads.length = 0
   dbState.testDb?.raw.exec('DELETE FROM iptv_playlist_tokens;')
 })
 
@@ -1498,6 +1504,106 @@ afterAll(() => {
   __setSsrfLookupForTests(null)
   dbState.testDb?.close()
   dbState.testDb = null
+})
+
+describe('revoked member playback tokens', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  const startUtc = '2026-05-24T12:00:00Z'
+  const readyManifest =
+    '#EXTM3U\n#EXTINF:6,\nseg_00000.ts\n#EXTINF:6,\nseg_00001.ts\n' +
+    '#EXTINF:6,\nseg_00002.ts\n#EXTINF:6,\nseg_00003.ts\n'
+
+  beforeEach(() => {
+    _resetLiveRemuxIndexForTests()
+    remuxState.activeSessions.clear()
+    remuxState.files.clear()
+    remuxState.startCalls.length = 0
+    remuxState.deadFeeds.clear()
+  })
+
+  it.each([
+    {
+      label: 'live',
+      url: `/api/iptv/stream/live/10.ts?t=${fakeToken('live', '10')}`,
+    },
+    {
+      label: 'remux manifest',
+      url: `/api/iptv/stream/live/10/remux/index.m3u8?t=${fakeToken('remux', '10')}`,
+    },
+    {
+      label: 'catch-up',
+      url:
+        `/api/iptv/stream/catchup/10/${encodeURIComponent(startUtc)}/30.ts?t=` +
+        fakeToken('catchup', `10|${startUtc}|30`),
+    },
+    {
+      label: 'VOD',
+      url: `/api/iptv/stream/vod/20/mp4?t=${fakeToken('vod', '20')}`,
+    },
+    {
+      label: 'series',
+      url: `/api/iptv/stream/series/ep-1/mkv?t=${fakeToken('series', 'ep-1')}`,
+    },
+  ])('rejects a revoked member\'s $label token before upstream access', async ({ url }) => {
+    tokenState.sub = 'plex:42'
+    membershipState.status = 'revoked'
+    remuxState.files.set('/tmp/remux/sess-1/index.m3u8', readyManifest)
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('bytes', { status: 200 }),
+    )
+
+    try {
+      const res = await app.request(url)
+
+      expect(res.status).toBe(401)
+      expect(await res.json()).toEqual({ error: 'access_revoked' })
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(remuxState.startCalls).toEqual([])
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it('rejects a revoked member remux segment before reading the segment file', async () => {
+    tokenState.sub = 'plex:42'
+    remuxState.files.set('/tmp/remux/sess-1/index.m3u8', readyManifest)
+    const index = await app.request(
+      `/api/iptv/stream/live/10/remux/index.m3u8?t=${fakeToken('remux', '10')}`,
+    )
+    expect(index.status).toBe(200)
+    remuxState.files.set('/tmp/remux/sess-1/seg_00000.ts', '')
+    remuxState.segmentReads.length = 0
+    membershipState.status = 'revoked'
+
+    const res = await app.request(
+      `/api/iptv/stream/live/10/remux/seg?t=${fakeToken('remux', 'sess-1/seg_00000.ts')}`,
+    )
+
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ error: 'access_revoked' })
+    expect(remuxState.segmentReads).toEqual([])
+  })
+
+  it('rejects a revoked member HLS segment before fetching upstream', async () => {
+    tokenState.sub = 'plex:42'
+    membershipState.status = 'revoked'
+    const upstreamUrl = 'https://cdn.example.com/foo/seg.ts'
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('segment', { status: 200 }),
+    )
+
+    try {
+      const res = await app.request(
+        `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', upstreamUrl))}`,
+      )
+
+      expect(res.status).toBe(401)
+      expect(await res.json()).toEqual({ error: 'access_revoked' })
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
 })
 
 describe('vod stream grant + proxy', () => {

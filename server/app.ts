@@ -294,10 +294,13 @@ app.route('/api/ratings', ratings)
 // /api/iptv tree is unmounted. The transitive iptv module imports still
 // load (Node ESM is eager), so the better-sqlite3 + node-cron deps are
 // not tree-shaken from the bundle — but a runtime request to any
-// /api/iptv/* path hits Hono's 404 fallback. App Review judges the
-// binary the user installs (the Apple app, gated via Swift compile
-// flag) — this env is the server-side counterpart for households that
-// never use IPTV.
+// /api/iptv/* path hits Hono's 404 fallback.
+//
+// Deployment switch only — it is NOT what makes a build submittable. App
+// Review judges the app binary, which carries its own Live surface
+// regardless of what this server answers; that half is the `EEX_NO_IPTV`
+// Swift compilation condition in the companion Apple repo. See the fuller
+// note on IPTV_DISABLED in server/env.ts.
 if (!env.IPTV_DISABLED) {
   app.route('/api/iptv', iptv)
 }

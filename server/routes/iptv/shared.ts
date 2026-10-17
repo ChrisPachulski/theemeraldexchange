@@ -260,6 +260,26 @@ export function parsePositiveInt(value: string | undefined): number | null {
   return parsed
 }
 
+// Canonical sub of a verified stream token, or the 401 to return. Shared by
+// checkToken and the routes that verify their own token (/stream/segment).
+export function activeMemberSub(c: Context<Env>, tokenSub: string): string | Response {
+  // The sub claim must be canonical namespaced form (§8). The M1
+  // bare-numeric grace normalization is gone — its 30-day window closed.
+  let sub: string
+  try {
+    sub = parseSub(tokenSub).raw
+  } catch {
+    return c.json({ error: 'invalid_token', detail: 'sub_invalid_format' }, 401)
+  }
+  // Tokens are stateless and live up to 12h: membership must be re-checked
+  // at serve time (same as media/transcode/dvr) or revocation cannot reach
+  // an already-minted stream grant.
+  if (memberStatus(sub) !== 'allowed') {
+    return c.json({ error: 'access_revoked' }, 401)
+  }
+  return sub
+}
+
 export function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId?: string): { ok: true; sub: string; resourceId: string } | { ok: false; resp: Response } {
   const t = c.req.query('t') ?? ''
   try {
@@ -275,20 +295,8 @@ export function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId?:
         return { ok: false, resp: c.json({ error: replay.reason }, 401) }
       }
     }
-    // The sub claim must be canonical namespaced form (§8). The M1
-    // bare-numeric grace normalization is gone — its 30-day window closed.
-    let sub: string
-    try {
-      sub = parseSub(claims.sub).raw
-    } catch {
-      return { ok: false, resp: c.json({ error: 'invalid_token', detail: 'sub_invalid_format' }, 401) }
-    }
-    // Tokens are stateless and live up to 12h: membership must be re-checked
-    // at serve time (same as media/transcode/dvr) or revocation cannot reach
-    // an already-minted stream grant.
-    if (memberStatus(sub) !== 'allowed') {
-      return { ok: false, resp: c.json({ error: 'access_revoked' }, 401) }
-    }
+    const sub = activeMemberSub(c, claims.sub)
+    if (typeof sub !== 'string') return { ok: false, resp: sub }
     return { ok: true, sub, resourceId: claims.rid }
   } catch (err) {
     return { ok: false, resp: c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401) }

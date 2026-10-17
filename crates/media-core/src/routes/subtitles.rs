@@ -397,9 +397,11 @@ pub(super) async fn subtitle_job_status() -> AppResult<Json<Value>> {
 
 pub(super) async fn transcribe_subtitle(
     State(state): State<AppState>,
+    claims: Option<Extension<InternalClaims>>,
     Path((kind, id)): Path<(String, i64)>,
     body: Option<Json<SubtitleLangBody>>,
 ) -> AppResult<axum::response::Response> {
+    require_admin(&claims.map(|Extension(c)| c), &state.config.principal_mode)?;
     let Some(bin) = state.config.whisper_bin.clone() else {
         return Err(AppError::FeatureDisabled(
             "transcription requires WHISPER_BIN".into(),
@@ -502,6 +504,8 @@ pub(super) async fn run_whisper_job(
 mod tests {
     use super::*;
     use crate::routes::testsupport::*;
+    use axum::body::Body;
+    use axum::http::Request as HttpRequest;
 
     use std::sync::Arc;
     use tower::ServiceExt;
@@ -1122,5 +1126,36 @@ mod tests {
         assert!(stored.starts_with("WEBVTT"), "{stored}");
         // srt's comma decimal separator becomes WebVTT's dot.
         assert!(stored.contains("00:00:01.000 --> 00:00:02.500"), "{stored}");
+    }
+
+    /// `transcribe_subtitle` holds the process-wide Whisper job slot, so a
+    /// non-admin is rejected before any feature check; an admin clears the gate
+    /// and reaches the WHISPER_BIN check.
+    #[tokio::test]
+    async fn transcribe_subtitle_is_admin_gated() {
+        let secret = "test-subtitle-secret";
+        let app = crate::build_router(test_state_enforce(secret).await);
+        for (role, status) in [
+            ("user", StatusCode::UNAUTHORIZED),
+            ("admin", StatusCode::SERVICE_UNAVAILABLE),
+        ] {
+            let resp = app
+                .clone()
+                .oneshot(
+                    HttpRequest::builder()
+                        .method("POST")
+                        .uri("/api/media/subtitles/movie/1/transcribe")
+                        .header(
+                            "authorization",
+                            format!("Bearer {}", signed_principal(secret, role)),
+                        )
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"language":"en"}"#))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), status, "{role}");
+        }
     }
 }

@@ -212,6 +212,76 @@ describe('transcode proxy route', () => {
     )
   })
 
+  // The transcoder's /grant and /warm both act on a caller-supplied filesystem
+  // path (start a session on `file.path`; ffprobe/keyframe-warm `req.path`).
+  // They are media-core→transcoder only. This browser-facing proxy mints the
+  // internal principal on every forwarded request, so if it forwarded them any
+  // authenticated household member would get an arbitrary-path read/probe
+  // oracle. They must die AT the proxy, before any network hop.
+  it.each([
+    ['/grant', JSON.stringify({ file: { path: '/etc/shadow' } })],
+    ['/warm', JSON.stringify({ path: '/etc/shadow' })],
+  ])('blocks the %s control path with 404 and never calls upstream', async (path, body) => {
+    mockFetch.mockResolvedValue(new Response('{"ok":true}', { status: 200 }))
+
+    const res = await transcode.request(path, {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body,
+    })
+
+    expect(res.status).toBe(404)
+    // The block happens before the upstream hop — not merely a rejected response.
+    expect(mockFetch).not.toHaveBeenCalled()
+    expect(mockFetch.mock.calls).toHaveLength(0)
+    // No internal principal is minted for a request that never leaves the proxy.
+    expect(mockMint).not.toHaveBeenCalled()
+  })
+
+  it('blocks a control path reached via dot-segments or a stream token', async () => {
+    // `new URL(c.req.url)` strips dot-segments, so the guard sees `/warm` even
+    // for a traversal-shaped path. This matters: WITHOUT normalization at the
+    // check, the raw subpath would sail past the Set and then be collapsed to
+    // `/warm` by the URL parse inside fetch — arriving at the transcoder anyway.
+    // The `?t=` token branch must not buy an exemption either.
+    mockFetch.mockResolvedValue(new Response('{"ok":true}', { status: 200 }))
+    const token = signMediaToken({
+      kind: MEDIA_HLS_KIND,
+      rid: mediaSessionResourceId('abc'),
+      sub: 'plex:42',
+    })
+
+    const traversed = await transcode.request('/session/abc/../../warm', {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({ path: '/etc/shadow' }),
+    })
+    const tokened = await transcode.request(`/grant?t=${token}`, {
+      method: 'POST',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: JSON.stringify({ file: { path: '/etc/shadow' } }),
+    })
+
+    expect(traversed.status).toBe(404)
+    expect(tokened.status).toBe(404)
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('still proxies the sibling /sessions path (guard is exact, not a prefix)', async () => {
+    // Guard against over-blocking: only the two exact control subpaths are shut.
+    mockFetch.mockResolvedValue(
+      new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } }),
+    )
+
+    const res = await transcode.request('/sessions', {
+      method: 'GET',
+      headers: { host: 'localhost' },
+    })
+
+    expect(res.status).toBe(200)
+    expect(mockFetch).toHaveBeenCalledOnce()
+  })
+
   it('proxies anonymously in off posture (no caller) without failing closed', async () => {
     mockCaller.mockReturnValue(null as unknown as ReturnType<typeof recommenderCallerFromSession>)
     mockFetch.mockResolvedValue(new Response('x', { status: 200 }))

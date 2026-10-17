@@ -769,12 +769,20 @@ export const env = {
   IPTV_REENCODE_MAX_HEIGHT: positiveInt('IPTV_REENCODE_MAX_HEIGHT', 1080),
   // Reviewer-insurance gate per contract §13. Set IPTV_DISABLED=1 (or
   // 'true') to build an instance with no IPTV surface — the /api/iptv
-  // routes 404 and the IPTV sync cron never registers. The Apple-side
-  // equivalent is a Swift Active Compilation Condition (NOT this env);
-  // App Review judges the binary's capability, not its runtime config.
-  // Server-side default: enabled. Flip to disabled per deploy if the
-  // household never uses IPTV or as a fallback insurance build for the
-  // App Review submission.
+  // routes 404 and the IPTV sync cron never registers.
+  //
+  // This is a DEPLOYMENT switch and is NOT the App Review gate. App Review
+  // judges the binary's capability, not the configuration of the server it
+  // happens to talk to: an app built with the Live surface in it still has
+  // that surface against any other server. The Apple-side gate is the
+  // `EEX_NO_IPTV` Swift active compilation condition in the companion repo
+  // (Sources/EmeraldKit/EmeraldBuild.swift), which compiles the guide, the
+  // live/catch-up renderers, the provider catalog client, the DVR, and the
+  // VLCKit dependency out of the app. Setting THIS env does not produce a
+  // submittable build, and setting the Swift flag does not need it.
+  //
+  // Server-side default: enabled. Flip it per deploy if a household never
+  // uses IPTV.
   IPTV_DISABLED: process.env.IPTV_DISABLED === '1' || process.env.IPTV_DISABLED === 'true',
   // DVR (M6). Off by default; when enabled, recordings are written under DVR_DIR
   // and the scheduler ticks the recorder engine.
