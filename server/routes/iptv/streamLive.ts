@@ -21,7 +21,7 @@ import { resolveSiblingFeeds } from '../../services/iptvSiblingFeeds.js'
 import { channelArchiveRow } from '../../services/iptvRows.js'
 import { env } from '../../env.js'
 import { type Env } from '../../middleware/auth.js'
-import { clientIp, sessionTitle, enrichSessionsFor, userOf, clientWantsAvplayer, makeHeartbeatStream, formatXtreamTimeshiftStart, parsePositiveInt, checkToken, sleep, beginRawLiveStream, stopOtherRawLiveStreams } from './shared.js'
+import { clientIp, sessionTitle, enrichSessionsFor, userOf, clientWantsAvplayer, makeHeartbeatStream, formatXtreamTimeshiftStart, parsePositiveInt, checkToken, sleep, beginRawLiveStream, stopOtherRawLiveStreams, holdSlot } from './shared.js'
 
 export const iptv = new Hono<Env>()
 
@@ -544,7 +544,8 @@ iptv.get('/stream/catchup/:streamId/:startUtc/:durationMin.ts', async (c) => {
   const v = checkToken(c, 'catchup', resourceId)
   if (!v.ok) return v.resp
   // Finding 8-1: keep the grant slot alive while catch-up bytes flow.
-  streamConcurrency().heartbeatByResource(v.sub, 'catchup', resourceId)
+  const held = holdSlot(c, v.sub, 'catchup', resourceId)
+  if (held) return held
 
   const creds = credsFromEnv()
   const upstreamUrl =

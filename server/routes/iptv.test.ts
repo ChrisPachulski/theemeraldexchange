@@ -3175,3 +3175,45 @@ describe('GET /api/iptv/stream/live/:id.ts — dead-feed sibling failover', () =
     fetchSpy.mockRestore()
   })
 })
+
+// 2026-10-16 review item 3: the on-demand byte routes ignored the false from
+// heartbeatByResource, so a slot idle-swept after 30s (a paused player) kept
+// streaming as an uncounted upstream connection. A gone slot is now re-taken
+// under the cap, and refused when the cap is full.
+describe('on-demand byte routes hold a counted slot', () => {
+  const app = new Hono().route('/api/iptv', iptv)
+  const startUtc = '2026-05-24T10:00:00.000Z'
+  const routes: Array<[string, string, string]> = [
+    ['vod', '20', '/api/iptv/stream/vod/20/mp4?t=fake.vod.MjA'],
+    ['series', 'ep-1', `/api/iptv/stream/series/ep-1/mkv?t=${fakeToken('series', 'ep-1')}`],
+    ['vod', '20', `/api/iptv/stream/segment?u=${encodeURIComponent(fakeToken('segment', 'https://cdn.example.com/seg.ts'))}&ok=vod&oid=20`],
+    ['catchup', `10|${startUtc}|30`, `/api/iptv/stream/catchup/10/${encodeURIComponent(startUtc)}/30.ts?t=${fakeToken('catchup', `10|${startUtc}|30`)}`],
+  ]
+
+  it.each(routes)('re-takes a swept %s slot when the cap has room', async (kind, resourceId, url) => {
+    const tracker = createConcurrencyTracker({ cap: 2, idleMs: 30_000 })
+    concurrencyState.realTracker = tracker
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('abc', { status: 200 }))
+    try {
+      const res = await app.request(url)
+      expect(res.status).toBe(200)
+      expect(tracker.list()).toEqual([expect.objectContaining({ sub: 'plex:42', kind, resourceId })])
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it.each(routes)('refuses a swept %s slot when the cap is full', async (_kind, _resourceId, url) => {
+    const tracker = createConcurrencyTracker({ cap: 1, idleMs: 30_000 })
+    tracker.tryAcquire({ sub: 'plex:7', sessionId: 'other', kind: 'live', resourceId: '99' })
+    concurrencyState.realTracker = tracker
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    try {
+      const res = await app.request(url)
+      expect(res.status).toBe(429)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+})

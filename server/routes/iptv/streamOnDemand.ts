@@ -17,7 +17,7 @@ import { parseSegmentOwner } from '../../services/iptvHlsRewrite.js'
 import { containerExtensionRow } from '../../services/iptvRows.js'
 import { env } from '../../env.js'
 import { type Env } from '../../middleware/auth.js'
-import { clientIp, sessionTitle, enrichSessionsFor, userOf, checkToken, activeMemberSub } from './shared.js'
+import { clientIp, sessionTitle, enrichSessionsFor, userOf, checkToken, activeMemberSub, holdSlot } from './shared.js'
 
 export const iptv = new Hono<Env>()
 
@@ -95,8 +95,9 @@ iptv.get('/stream/vod/:streamId/:ext', async (c) => {
   const v = checkToken(c, 'vod', streamId)
   if (!v.ok) return v.resp
   // Finding 8-1: each range request heartbeats the grant slot so a long VOD
-  // playback (or a player paused >30s then resumed) keeps its slot.
-  streamConcurrency().heartbeatByResource(v.sub, 'vod', streamId)
+  // playback keeps it; a player paused past the sweep takes it again.
+  const held = holdSlot(c, v.sub, 'vod', streamId)
+  if (held) return held
 
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/movie/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${streamId}.${ext}`
@@ -202,7 +203,8 @@ iptv.get('/stream/series/:episodeId/:ext', async (c) => {
   const v = checkToken(c, 'series', episodeId)
   if (!v.ok) return v.resp
   // Finding 8-1: heartbeat the grant slot on each series byte/range request.
-  streamConcurrency().heartbeatByResource(v.sub, 'series', episodeId)
+  const held = holdSlot(c, v.sub, 'series', episodeId)
+  if (held) return held
 
   const creds = credsFromEnv()
   const upstreamUrl = `${creds.host}/series/${encodeURIComponent(creds.username)}/${encodeURIComponent(creds.password)}/${episodeId}.${ext}`
@@ -256,7 +258,8 @@ iptv.get('/stream/segment', async (c) => {
   // touch the caller's own sessions; parseSegmentOwner still rejects any tag
   // that isn't a well-formed vod/series id before it reaches the tracker.
   const owner = parseSegmentOwner(c.req.query('ok'), c.req.query('oid'))
-  if (owner) streamConcurrency().heartbeatByResource(sub, owner.kind, owner.id)
+  const held = owner && holdSlot(c, sub, owner.kind, owner.id)
+  if (held) return held
 
   const upstream = claims.rid
   let url: URL

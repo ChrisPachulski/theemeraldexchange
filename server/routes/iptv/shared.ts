@@ -8,7 +8,7 @@ import { verifyStreamToken, type StreamKind } from '../../services/iptvStreamTok
 import { memberStatus } from '../../services/membership.js'
 import { checkReplay } from '../../services/tokenReplayCache.js'
 import { parseSub } from '../../services/sub.js'
-import { type SessionView, type SessionKind } from '../../services/iptvConcurrency.js'
+import { streamConcurrency, type SessionView, type SessionKind } from '../../services/iptvConcurrency.js'
 import { episodeTitleRow, nameRow } from '../../services/iptvRows.js'
 import { env } from '../../env.js'
 
@@ -278,6 +278,24 @@ export function activeMemberSub(c: Context<Env>, tokenSub: string): string | Res
     return c.json({ error: 'access_revoked' }, 401)
   }
   return sub
+}
+
+/**
+ * Keep the concurrency slot an on-demand byte route serves under. A slot idle
+ * past the sweep (a player paused >30s) is gone, and streaming on would hold
+ * an upstream connection the cap no longer counts, so it is taken again under
+ * the same cap. Returns the 429/503 to send when that fails, null otherwise.
+ */
+export function holdSlot(c: Context<Env>, sub: string, kind: 'vod' | 'series' | 'catchup', resourceId: string): Response | null {
+  const tracker = streamConcurrency()
+  if (tracker.heartbeatByResource(sub, kind, resourceId)) return null
+  const acquired = tracker.tryAcquire({
+    sub, sessionId: `${kind}:${resourceId}:${sub}:${Date.now()}`, kind, resourceId,
+    ip: clientIp(c), title: sessionTitle(kind, resourceId),
+  })
+  if (acquired.ok) return null
+  if (acquired.reason !== 'iptv_concurrency_limit') return c.json({ ok: false, reason: acquired.reason }, 503)
+  return c.json({ ...acquired, sessions: enrichSessionsFor(acquired.sessions, sub, false) }, 429)
 }
 
 export function checkToken(c: Context<Env>, expectKind: StreamKind, resourceId?: string): { ok: true; sub: string; resourceId: string } | { ok: false; resp: Response } {
