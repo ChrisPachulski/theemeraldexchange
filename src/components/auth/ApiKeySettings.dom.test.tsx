@@ -12,13 +12,15 @@ import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-qu
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiKeySettings } from './ApiKeySettings'
 
-const { useUserApiKeyMock, setKeyMock, clearKeyMock } = vi.hoisted(() => ({
+const { useUserApiKeyMock, setKeyMock, clearKeyMock, useAuthMock } = vi.hoisted(() => ({
   useUserApiKeyMock: vi.fn(),
   setKeyMock: vi.fn(),
   clearKeyMock: vi.fn(),
+  useAuthMock: vi.fn(),
 }))
 
 vi.mock('../../lib/hooks/useUserApiKey', () => ({ useUserApiKey: useUserApiKeyMock }))
+vi.mock('../../lib/auth', () => ({ useAuth: useAuthMock }))
 
 function mount(
   qc = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
@@ -31,6 +33,7 @@ function mount(
 }
 
 beforeEach(() => {
+  useAuthMock.mockReturnValue({ user: { sub: 'plex:alice' } })
   setKeyMock.mockResolvedValue(undefined)
   clearKeyMock.mockResolvedValue(undefined)
   // The usage panel fetches /api/usage/me when a key is set.
@@ -132,6 +135,20 @@ describe('ApiKeySettings — no key', () => {
     fireEvent.change(input, { target: { value: 'sk-ant-first-key-1234' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(setKeyMock).toHaveBeenCalledWith('sk-ant-first-key-1234'))
+  })
+
+  // 2026-10-16 review item 30: with no key on either account, nothing the
+  // reset keyed on changed, so the typed key carried over to the next account.
+  it('drops an unsaved draft when the account changes', () => {
+    const view = mount()
+    fireEvent.change(screen.getByPlaceholderText('sk-ant-…'), { target: { value: 'sk-ant-alice-draft' } })
+    useAuthMock.mockReturnValue({ user: { sub: 'plex:bob' } })
+    view.rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <ApiKeySettings />
+      </QueryClientProvider>,
+    )
+    expect(screen.getByPlaceholderText('sk-ant-…')).toHaveValue('')
   })
 
   it('rejects a paste without the sk-ant- prefix before any request', () => {
