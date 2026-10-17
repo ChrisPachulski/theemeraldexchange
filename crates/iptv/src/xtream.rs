@@ -395,42 +395,15 @@ impl Client {
         Ok(Client { creds, http })
     }
 
-    /// The panel is operator-configured (trusted, sometimes plain http), but a
-    /// 30x it answers with is provider-controlled, so every redirect target goes
-    /// through the SSRF guard before it is dialed. Errors never carry the URL:
-    /// it holds the provider password.
-    async fn get_json(&self, mut url: Url, label: &str) -> Result<Value, String> {
-        for hop in 0..=ssrf_guard::MAX_REDIRECTS {
-            if hop > 0 {
-                ssrf_guard::guard_url(&url)
-                    .await
-                    .map_err(|e| format!("{label}_blocked: {e}"))?;
-            }
-            let res = self
-                .http
-                .get(url.clone())
-                .send()
-                .await
-                .map_err(|e| format!("{label}_failed: {}", e.without_url()))?;
-            let status = res.status();
-            if status.is_redirection()
-                && let Some(loc) = res
-                    .headers()
-                    .get(reqwest::header::LOCATION)
-                    .and_then(|v| v.to_str().ok())
-            {
-                url = url.join(loc).map_err(|_| format!("{label}_bad_redirect"))?;
-                continue;
-            }
-            if !status.is_success() {
-                return Err(format!("{label}_{}", status.as_u16()));
-            }
-            return res
-                .json::<Value>()
-                .await
-                .map_err(|e| format!("{label}_bad_json: {}", e.without_url()));
+    async fn get_json(&self, url: Url, label: &str) -> Result<Value, String> {
+        let res = send_guarded(&self.http, url, label).await?;
+        let status = res.status();
+        if !status.is_success() {
+            return Err(format!("{label}_{}", status.as_u16()));
         }
-        Err(format!("{label}_too_many_redirects"))
+        res.json::<Value>()
+            .await
+            .map_err(|e| format!("{label}_bad_json: {}", e.without_url()))
     }
 
     /// Catalog lists are JSON arrays. Anything else (an auth-error object, null,
@@ -498,6 +471,41 @@ impl Client {
             series_id,
         ))
     }
+}
+
+/// GET a trusted, operator-configured URL (the panel, an external EPG feed;
+/// sometimes plain http) and return the first non-redirect response. A 30x is
+/// upstream-controlled, so every redirect target goes through the SSRF guard
+/// before it is dialed. `http` must not follow redirects itself. Errors never
+/// carry the URL: a panel URL holds the provider password.
+pub async fn send_guarded(
+    http: &reqwest::Client,
+    mut url: Url,
+    label: &str,
+) -> Result<reqwest::Response, String> {
+    for hop in 0..=ssrf_guard::MAX_REDIRECTS {
+        if hop > 0 {
+            ssrf_guard::guard_url(&url)
+                .await
+                .map_err(|e| format!("{label}_blocked: {e}"))?;
+        }
+        let res = http
+            .get(url.clone())
+            .send()
+            .await
+            .map_err(|e| format!("{label}_failed: {}", e.without_url()))?;
+        if res.status().is_redirection()
+            && let Some(loc) = res
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+        {
+            url = url.join(loc).map_err(|_| format!("{label}_bad_redirect"))?;
+            continue;
+        }
+        return Ok(res);
+    }
+    Err(format!("{label}_too_many_redirects"))
 }
 
 #[cfg(test)]

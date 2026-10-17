@@ -336,6 +336,7 @@ pub fn pii_scrub_value(json_str: String) -> Result<String> {
 // XMLTV parsing (server/services/iptvEpg.ts streamXmltv)
 // ---------------------------------------------------------------------------
 
+#[path = "../../iptv/src/xmltv.rs"]
 mod xmltv;
 
 /// Incremental XMLTV parser. Each call returns the rows completed so far as a

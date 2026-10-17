@@ -1,0 +1,3819 @@
+{
+ "syncs": [
+  {
+   "epg": 21,
+   "epg_programs": [
+    {
+     "channel_id": "aljazeera.arabic.net",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T03:30:00.000Z",
+     "title": "Provider",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cinemaxclassics.us",
+     "start_utc": "2026-10-15T02:39:00.000Z",
+     "stop_utc": "2026-10-15T04:01:00.000Z",
+     "title": "Godzilla vs. Megalon",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cinemaxclassics.us",
+     "start_utc": "2026-10-15T04:01:00.000Z",
+     "stop_utc": "2026-10-15T05:23:00.000Z",
+     "title": "Godzilla Raids Again",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cmt.hd.us2",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Hot 20",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cmt.uk",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "UK Hits",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cmt.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "CMT Music",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cnn.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "CNN Newsroom",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "disneyjunior.ca",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Bluey CA",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "disneyjunior.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Bluey",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "dubai.ae",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Shark Tank :Season 4",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "external.espn",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Current external game",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "hgtv.us",
+     "start_utc": "2026-10-15T02:00:00.000Z",
+     "stop_utc": "2026-10-15T03:00:00.000Z",
+     "title": "House Hunters",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "hgtv.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Fixer Upper",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "hgtvwest.us",
+     "start_utc": "2026-10-15T05:00:00.000Z",
+     "stop_utc": "2026-10-15T06:00:00.000Z",
+     "title": "House Hunters",
+     "description": null,
+     "derived": 1
+    },
+    {
+     "channel_id": "hgtvwest.us",
+     "start_utc": "2026-10-15T06:00:00.000Z",
+     "stop_utc": "2026-10-15T07:00:00.000Z",
+     "title": "Fixer Upper",
+     "description": null,
+     "derived": 1
+    },
+    {
+     "channel_id": "nbckare.us",
+     "start_utc": "2026-10-16T11:00:00.000Z",
+     "stop_utc": "2026-10-16T12:00:00.000Z",
+     "title": "KARE 11 Sunrise",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "nbckare11minneapolis.us",
+     "start_utc": "2026-10-14T05:00:00.000Z",
+     "stop_utc": "2026-10-14T06:00:00.000Z",
+     "title": "KARE 11 News at 10",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "outdoorchannel.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T03:30:00.000Z",
+     "title": "Guns & Ammo TV",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "oxygen.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Snapped",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "oxygenwest.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Snapped West",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "showtime.us",
+     "start_utc": "2026-10-15T00:00:00.000Z",
+     "stop_utc": "2026-10-15T02:15:00.000Z",
+     "title": "V for Vendetta",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "showtime.us",
+     "start_utc": "2026-10-15T02:15:00.000Z",
+     "stop_utc": "2026-10-15T04:15:00.000Z",
+     "title": "Patriot Games",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "showtime2west.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T05:00:00.000Z",
+     "title": "The Return",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "showtimewest.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T05:00:00.000Z",
+     "title": "Real West",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "starzencoresuspense.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:26:00.000Z",
+     "title": "Unknown",
+     "description": "When five men awake in a locked warehouse, none of them can remember his identity.",
+     "derived": 0
+    },
+    {
+     "channel_id": "wesh-ld.us_locals1",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "WESH 2 News",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "wsvn-dt.us_locals1",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "7 News",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "x.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T05:00:00.000Z",
+     "title": "Old movie",
+     "description": null,
+     "derived": 0
+    }
+   ],
+   "channels": [
+    {
+     "stream_id": 1,
+     "epg_resolved_id": "cmt.uk"
+    },
+    {
+     "stream_id": 2,
+     "epg_resolved_id": "wesh-ld.us_locals1"
+    },
+    {
+     "stream_id": 3,
+     "epg_resolved_id": "wesh-ld.us_locals1"
+    },
+    {
+     "stream_id": 4,
+     "epg_resolved_id": "wsvn-dt.us_locals1"
+    },
+    {
+     "stream_id": 7,
+     "epg_resolved_id": "aljazeera.arabic.net"
+    },
+    {
+     "stream_id": 8,
+     "epg_resolved_id": "hgtvwest.us"
+    },
+    {
+     "stream_id": 9,
+     "epg_resolved_id": null
+    },
+    {
+     "stream_id": 10,
+     "epg_resolved_id": "oxygenwest.us"
+    },
+    {
+     "stream_id": 11,
+     "epg_resolved_id": "x.us"
+    },
+    {
+     "stream_id": 12,
+     "epg_resolved_id": "starzencoresuspense.us"
+    },
+    {
+     "stream_id": 13,
+     "epg_resolved_id": "outdoorchannel.us"
+    },
+    {
+     "stream_id": 14,
+     "epg_resolved_id": "disneyjunior.us"
+    },
+    {
+     "stream_id": 15,
+     "epg_resolved_id": null
+    },
+    {
+     "stream_id": 100,
+     "epg_resolved_id": "external.espn"
+    },
+    {
+     "stream_id": 200,
+     "epg_resolved_id": "cnn.us"
+    },
+    {
+     "stream_id": 5866,
+     "epg_resolved_id": "showtimewest.us"
+    },
+    {
+     "stream_id": 30800,
+     "epg_resolved_id": "cmt.us"
+    },
+    {
+     "stream_id": 36206,
+     "epg_resolved_id": "cmt.us"
+    },
+    {
+     "stream_id": 67730,
+     "epg_resolved_id": "cmt.us"
+    },
+    {
+     "stream_id": 200163548,
+     "epg_resolved_id": "cinemaxclassics.us"
+    },
+    {
+     "stream_id": 200163566,
+     "epg_resolved_id": "showtime.us"
+    },
+    {
+     "stream_id": 200168129,
+     "epg_resolved_id": ""
+    },
+    {
+     "stream_id": 200168199,
+     "epg_resolved_id": ""
+    },
+    {
+     "stream_id": 200168354,
+     "epg_resolved_id": "nbckare.us"
+    },
+    {
+     "stream_id": 200168388,
+     "epg_resolved_id": ""
+    },
+    {
+     "stream_id": 200168495,
+     "epg_resolved_id": ""
+    },
+    {
+     "stream_id": 400124927,
+     "epg_resolved_id": "showtimewest.us"
+    }
+   ]
+  },
+  {
+   "epg": 22,
+   "epg_programs": [
+    {
+     "channel_id": "aljazeera.arabic.net",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T03:30:00.000Z",
+     "title": "Provider",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cinemaxclassics.us",
+     "start_utc": "2026-10-15T01:56:00.000Z",
+     "stop_utc": "2026-10-15T03:32:00.000Z",
+     "title": "Just Friends",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cinemaxclassics.us",
+     "start_utc": "2026-10-15T03:32:00.000Z",
+     "stop_utc": "2026-10-15T04:58:00.000Z",
+     "title": "Son of Godzilla",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cinemaxclassics.us",
+     "start_utc": "2026-10-15T04:58:00.000Z",
+     "stop_utc": "2026-10-15T06:45:00.000Z",
+     "title": "The Usual Suspects",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cmt.hd.us2",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Hot 20",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cmt.uk",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "UK Hits",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cmt.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "CMT Music",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "cnn.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "CNN Newsroom",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "disneyjunior.ca",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Bluey CA",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "disneyjunior.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Bluey",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "dubai.ae",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Shark Tank :Season 4",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "external.espn",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Current external game",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "hgtv.us",
+     "start_utc": "2026-10-15T02:00:00.000Z",
+     "stop_utc": "2026-10-15T03:00:00.000Z",
+     "title": "House Hunters",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "hgtv.us",
+     "start_utc": "2026-10-15T03:10:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Love It or List It",
+     "description": "Moved ten minutes",
+     "derived": 0
+    },
+    {
+     "channel_id": "hgtvwest.us",
+     "start_utc": "2026-10-15T05:00:00.000Z",
+     "stop_utc": "2026-10-15T06:00:00.000Z",
+     "title": "House Hunters",
+     "description": null,
+     "derived": 1
+    },
+    {
+     "channel_id": "hgtvwest.us",
+     "start_utc": "2026-10-15T06:10:00.000Z",
+     "stop_utc": "2026-10-15T07:00:00.000Z",
+     "title": "Love It or List It",
+     "description": "Moved ten minutes",
+     "derived": 1
+    },
+    {
+     "channel_id": "nbckare.us",
+     "start_utc": "2026-10-16T11:00:00.000Z",
+     "stop_utc": "2026-10-16T12:00:00.000Z",
+     "title": "KARE 11 Sunrise",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "nbckare11minneapolis.us",
+     "start_utc": "2026-10-14T05:00:00.000Z",
+     "stop_utc": "2026-10-14T06:00:00.000Z",
+     "title": "KARE 11 News at 10",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "outdoorchannel.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T03:30:00.000Z",
+     "title": "Guns & Ammo TV",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "oxygen.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Snapped",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "oxygenwest.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "Snapped West",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "showtime.us",
+     "start_utc": "2026-10-15T00:00:00.000Z",
+     "stop_utc": "2026-10-15T02:15:00.000Z",
+     "title": "V for Vendetta",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "showtime.us",
+     "start_utc": "2026-10-15T02:15:00.000Z",
+     "stop_utc": "2026-10-15T04:15:00.000Z",
+     "title": "Sleeping Dogs",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "showtime2west.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T05:00:00.000Z",
+     "title": "The Return",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "showtimewest.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T05:00:00.000Z",
+     "title": "Real West",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "starzencoresuspense.us",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:26:00.000Z",
+     "title": "Unknown",
+     "description": "When five men awake in a locked warehouse, none of them can remember his identity.",
+     "derived": 0
+    },
+    {
+     "channel_id": "wesh-ld.us_locals1",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "WESH 2 News",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "wsvn-dt.us_locals1",
+     "start_utc": "2026-10-15T03:00:00.000Z",
+     "stop_utc": "2026-10-15T04:00:00.000Z",
+     "title": "7 News",
+     "description": null,
+     "derived": 0
+    },
+    {
+     "channel_id": "x.us",
+     "start_utc": "2026-10-15T03:30:00.000Z",
+     "stop_utc": "2026-10-15T05:30:00.000Z",
+     "title": "Rescheduled movie",
+     "description": null,
+     "derived": 0
+    }
+   ],
+   "channels": [
+    {
+     "stream_id": 1,
+     "epg_resolved_id": "cmt.uk"
+    },
+    {
+     "stream_id": 2,
+     "epg_resolved_id": "wesh-ld.us_locals1"
+    },
+    {
+     "stream_id": 3,
+     "epg_resolved_id": "wesh-ld.us_locals1"
+    },
+    {
+     "stream_id": 4,
+     "epg_resolved_id": "wsvn-dt.us_locals1"
+    },
+    {
+     "stream_id": 7,
+     "epg_resolved_id": "aljazeera.arabic.net"
+    },
+    {
+     "stream_id": 8,
+     "epg_resolved_id": "hgtvwest.us"
+    },
+    {
+     "stream_id": 9,
+     "epg_resolved_id": null
+    },
+    {
+     "stream_id": 10,
+     "epg_resolved_id": "oxygenwest.us"
+    },
+    {
+     "stream_id": 11,
+     "epg_resolved_id": "x.us"
+    },
+    {
+     "stream_id": 12,
+     "epg_resolved_id": "starzencoresuspense.us"
+    },
+    {
+     "stream_id": 13,
+     "epg_resolved_id": "outdoorchannel.us"
+    },
+    {
+     "stream_id": 14,
+     "epg_resolved_id": "disneyjunior.us"
+    },
+    {
+     "stream_id": 15,
+     "epg_resolved_id": null
+    },
+    {
+     "stream_id": 100,
+     "epg_resolved_id": "external.espn"
+    },
+    {
+     "stream_id": 200,
+     "epg_resolved_id": "cnn.us"
+    },
+    {
+     "stream_id": 5866,
+     "epg_resolved_id": "showtimewest.us"
+    },
+    {
+     "stream_id": 30800,
+     "epg_resolved_id": "cmt.us"
+    },
+    {
+     "stream_id": 36206,
+     "epg_resolved_id": "cmt.us"
+    },
+    {
+     "stream_id": 67730,
+     "epg_resolved_id": "cmt.us"
+    },
+    {
+     "stream_id": 200163548,
+     "epg_resolved_id": "cinemaxclassics.us"
+    },
+    {
+     "stream_id": 200163566,
+     "epg_resolved_id": "showtime.us"
+    },
+    {
+     "stream_id": 200168129,
+     "epg_resolved_id": ""
+    },
+    {
+     "stream_id": 200168199,
+     "epg_resolved_id": ""
+    },
+    {
+     "stream_id": 200168354,
+     "epg_resolved_id": "nbckare.us"
+    },
+    {
+     "stream_id": 200168388,
+     "epg_resolved_id": ""
+    },
+    {
+     "stream_id": 200168495,
+     "epg_resolved_id": ""
+    },
+    {
+     "stream_id": 400124927,
+     "epg_resolved_id": "showtimewest.us"
+    }
+   ]
+  }
+ ],
+ "resolved": {
+  "catalog_tvg": {
+   "bigtennetwork": "bigtennetwork.us",
+   "destinationamerica": "destinationamerica.us",
+   "freeform": "freeform.us",
+   "hbocomedy": "hbocomedy.us",
+   "hbohits": "hbo2.us",
+   "msg2": "msg2.us",
+   "nhlnetwork": "nhlnetwork.us",
+   "pbskids": "pbskids.us",
+   "pursuitchannel": "pursuitchannel.us",
+   "reelz": "reelzchannel.us",
+   "showtime2": "showtime2.us",
+   "showtimeeast": "showtime.us",
+   "showtimeextreme": "showtimeextreme.us",
+   "showtimenext": "showtimenext.us",
+   "showtimeshowcase": "showtimeshowcase.us",
+   "starzcinema": "starzcinema.us",
+   "starzcomedy": "starzcomedy.us",
+   "starzedge": "starzedge.us",
+   "starzencoreaction": "starzencoreaction.us",
+   "starzencoreblack": "starzencoreblack.us",
+   "starzencoresuspense": "starzencoresuspense.us",
+   "starzencorewesterns": "starzencorewesterns.us"
+  },
+  "cases": [
+   {
+    "stream_id": 200163515,
+    "provider": "tvland.us",
+    "external": "tv.land.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163524,
+    "provider": "oxygenwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200164799,
+    "provider": "hallmarkmystery.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163536,
+    "provider": "nbcwtvjmiamifl.us",
+    "external": "wtvj-dt.us_locals1",
+    "callsign_ids": [
+     "wtvj-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200169483,
+    "provider": "lifetimemovienetwork.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163557,
+    "provider": "mgmplushits.us",
+    "external": "mgm+.hits.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163548,
+    "provider": "cinemaxclassics.us",
+    "external": "cinemax.classics.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200151409,
+    "provider": "spectrumsportsnetla.us",
+    "external": "spectrum.sportsnet.la.dodgers.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163563,
+    "provider": "hbodrama.us",
+    "external": "hbo.drama.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200151233,
+    "provider": "cbssportsnetwork.us",
+    "external": "cbs.sports.network.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163559,
+    "provider": "hbo2.us",
+    "external": "hbo2.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200151450,
+    "provider": "theweatherchannel.us",
+    "external": "the.weather.channel.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163498,
+    "provider": "ifc.us",
+    "external": "ifc.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163555,
+    "provider": null,
+    "external": "mgm+.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200151362,
+    "provider": "chicagosportsnetwork.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163554,
+    "provider": "mgmplusmarquee.us",
+    "external": "mgm+.marquee.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200151206,
+    "provider": "antennatv.us",
+    "external": "antenna.tv.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200151410,
+    "provider": "spectrumsportsnetlakers.us",
+    "external": "spectrum.sportsnet.lakers.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163585,
+    "provider": "starzencoreblack.us",
+    "external": "starz.encore.black.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163577,
+    "provider": "starzencoreclassic.us",
+    "external": "starz.encore.classic.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163556,
+    "provider": null,
+    "external": "mgm+.drive-in.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200164420,
+    "provider": "altitudesports.us",
+    "external": "altitude.sports.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163525,
+    "provider": "tastemade.us",
+    "external": "tastemade.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200151309,
+    "provider": "fuse.us",
+    "external": "fuse.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200162595,
+    "provider": "worldfishingnetwork.us",
+    "external": "world.fishing.network.hd.(us).us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200170630,
+    "provider": "news12newjersey.us",
+    "external": "news.12.new.jersey.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200163448,
+    "provider": "pbswned.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200162598,
+    "provider": "pixl.us",
+    "external": "pixl.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200162574,
+    "provider": "nesnplus.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200170626,
+    "provider": "news12connecticut.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124882,
+    "provider": "msnbc.us",
+    "external": "msnbc.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200151365,
+    "provider": "nbcsnwashington.us",
+    "external": "",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200167194,
+    "provider": "fanduelsouth.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200170945,
+    "provider": null,
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200170622,
+    "provider": "news12newyork.us",
+    "external": "plex.tv.news.12.new.york.plex",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200151316,
+    "provider": null,
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200173813,
+    "provider": "aspire.us",
+    "external": "aspire.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168433,
+    "provider": "",
+    "external": "kcbs-dt.us_locals1",
+    "callsign_ids": [
+     "kcbs-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168134,
+    "provider": null,
+    "external": "wxin-dt.us_locals1",
+    "callsign_ids": [
+     "wxin-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168422,
+    "provider": "cbswbzboston.us",
+    "external": "wbz-dt.us_locals1",
+    "callsign_ids": [
+     "wbz-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168318,
+    "provider": "abc30fresno.us",
+    "external": "kfsn-dt.us_locals1",
+    "callsign_ids": [
+     "kfsn-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168344,
+    "provider": "nbc10philadelphia.us",
+    "external": "wcau-dt.us_locals1",
+    "callsign_ids": [
+     "wcau-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168402,
+    "provider": "foxwjwclevelandoh.us",
+    "external": "wjw-dt.us_locals1",
+    "callsign_ids": [
+     "wjw-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124888,
+    "provider": "newsmax.us",
+    "external": "newsmax.us",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125102,
+    "provider": "tennischannel.us",
+    "external": "tennis.channel.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400112302,
+    "provider": null,
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168480,
+    "provider": null,
+    "external": "wscv-dt.us_locals1",
+    "callsign_ids": [
+     "wscv-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124917,
+    "provider": "hbo.us",
+    "external": "hbo.east.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124847,
+    "provider": "investigationdiscoverywest.us",
+    "external": "investigation.discovery.hd.(pacific).us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124832,
+    "provider": null,
+    "external": "usa.network.hd.(pacific).us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168388,
+    "provider": "",
+    "external": "kcpq-ld.us_locals1",
+    "callsign_ids": [
+     "kcpq-ld.us_locals1",
+     "kcpq-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125093,
+    "provider": "spectrumsportsnetla.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168139,
+    "provider": "nbcweshorlandodaytonabeachfl.us",
+    "external": "wesh-dt.us_locals1",
+    "callsign_ids": [
+     "wesh-dt.us_locals1",
+     "wesh-ld.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124842,
+    "provider": "discoverychannelwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125038,
+    "provider": "cbssportsnetwork.us",
+    "external": "cbs.sports.network.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124815,
+    "provider": "tbs.us",
+    "external": "tbs.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168462,
+    "provider": null,
+    "external": "kdka-dt.us_locals1",
+    "callsign_ids": [
+     "kdka-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168307,
+    "provider": "abcwpviphiladelphia.us",
+    "external": "wpvi-dt.us_locals1",
+    "callsign_ids": [
+     "wpvi-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125121,
+    "provider": "disneyjunior.us",
+    "external": "disney.junior.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124868,
+    "provider": "cspan3.us",
+    "external": "cspan3.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168300,
+    "provider": "abc10miami.us",
+    "external": "wplg-dt.us_locals1",
+    "callsign_ids": [
+     "wplg-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124827,
+    "provider": "tvland.us",
+    "external": "tv.land.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124808,
+    "provider": "reelzchannel.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168135,
+    "provider": null,
+    "external": "wthr-dt.us_locals1",
+    "callsign_ids": [
+     "wthr-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168272,
+    "provider": "abcksatsanantoniotx.us",
+    "external": "ksat-dt.us_locals1",
+    "callsign_ids": [
+     "ksat-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168394,
+    "provider": null,
+    "external": "wxix-dt.us_locals1",
+    "callsign_ids": [
+     "wxix-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168345,
+    "provider": "nbckpnxmesaphoenixaz.us",
+    "external": "kpnx-dt.us_locals1",
+    "callsign_ids": [
+     "kpnx-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168428,
+    "provider": "cbswwjdetroitmi.us",
+    "external": "wwj-dt.us_locals1",
+    "callsign_ids": [
+     "wwj-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124819,
+    "provider": "tlc.us",
+    "external": "tlc.hd.(us).us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168530,
+    "provider": null,
+    "external": "wnet-dt.us_locals1",
+    "callsign_ids": [
+     "wnet-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168379,
+    "provider": "foxwsvnmiamifl.us",
+    "external": "wsvn-dt.us_locals1",
+    "callsign_ids": [
+     "wsvn-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168386,
+    "provider": "foxkdfwdallasfortworthtx.us",
+    "external": "kdfw-dt.us_locals1",
+    "callsign_ids": [
+     "kdfw-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168414,
+    "provider": null,
+    "external": "wach-dt.us_locals1",
+    "callsign_ids": [
+     "wach-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168310,
+    "provider": "abcktrkhoustontx.us",
+    "external": "ktrk-dt.us_locals1",
+    "callsign_ids": [
+     "ktrk-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124908,
+    "provider": "cinemaxwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125095,
+    "provider": "spectrumsportsnetla.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125112,
+    "provider": "yesnetwork.us",
+    "external": "yes.network.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168297,
+    "provider": "abcwxyzdetroitmi.us",
+    "external": "wxyz-dt.us_locals1",
+    "callsign_ids": [
+     "wxyz-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124846,
+    "provider": "investigationdiscovery.us",
+    "external": "investigation.discovery.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124892,
+    "provider": "theweatherchannel.us",
+    "external": "the.weather.channel.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168180,
+    "provider": null,
+    "external": "wjzy-dt.us_locals1",
+    "callsign_ids": [
+     "wjzy-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124831,
+    "provider": "usanetwork.us",
+    "external": "usa.network.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124981,
+    "provider": "nhlnetwork.us",
+    "external": "nhl.network.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124854,
+    "provider": "pursuitchannel.us",
+    "external": "pursuit.channel.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125043,
+    "provider": "espnnews.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168426,
+    "provider": "cbswkrccincinnatioh.us",
+    "external": "wkrc-dt.us_locals1",
+    "callsign_ids": [
+     "wkrc-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125117,
+    "provider": "cartoonnetwork.us",
+    "external": "cartoon.network.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168390,
+    "provider": "foxwvueneworleansla.us",
+    "external": "wvue-dt.us_locals1",
+    "callsign_ids": [
+     "wvue-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168424,
+    "provider": "cbskhouhoustontx.us",
+    "external": "khou-dt.us_locals1",
+    "callsign_ids": [
+     "khou-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124942,
+    "provider": "starz.us",
+    "external": "starz.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168330,
+    "provider": "abc11raleigh.us",
+    "external": "wtvd-dt.us_locals1",
+    "callsign_ids": [
+     "wtvd-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124967,
+    "provider": "showtime2.us",
+    "external": "showtime.2.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125108,
+    "provider": "willowcricket.us",
+    "external": "willow.cricket.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124841,
+    "provider": "discoverychannel.us",
+    "external": "discovery.channel.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125044,
+    "provider": "espnu.us",
+    "external": "espnu.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168370,
+    "provider": "nbc5raleigh.us",
+    "external": "wral-dt.us_locals1",
+    "callsign_ids": [
+     "wral-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124927,
+    "provider": null,
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168435,
+    "provider": "cbsktvtdallasfortworthtx.us",
+    "external": "ktvt-dt.us_locals1",
+    "callsign_ids": [
+     "ktvt-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168304,
+    "provider": "abckocooklahomacityok.us",
+    "external": "koco-dt.us_locals1",
+    "callsign_ids": [
+     "koco-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168129,
+    "provider": null,
+    "external": "whbq-dt.us_locals1",
+    "callsign_ids": [
+     "whbq-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124980,
+    "provider": null,
+    "external": "mlb.network.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124844,
+    "provider": "history.us",
+    "external": "history.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168392,
+    "provider": null,
+    "external": "kvvu-dt.us_locals1",
+    "callsign_ids": [
+     "kvvu-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124828,
+    "provider": "tvlandwest.us",
+    "external": "tv.land.hd.(pacific).us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125041,
+    "provider": "espndeportes.us",
+    "external": "espn.deportes.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125122,
+    "provider": "disneyjrwest.us",
+    "external": "disney.junior.hd.(pacific).us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168481,
+    "provider": null,
+    "external": "ktmd-dt.us_locals1",
+    "callsign_ids": [
+     "ktmd-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168298,
+    "provider": "abc7chicago.us",
+    "external": "wls-dt.us_locals1",
+    "callsign_ids": [
+     "wls-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168361,
+    "provider": "nbcwkycclevelandoh.us",
+    "external": "wkyc-dt.us_locals1",
+    "callsign_ids": [
+     "wkyc-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168133,
+    "provider": null,
+    "external": "wttv-dt.us_locals1",
+    "callsign_ids": [
+     "wttv-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125131,
+    "provider": "pbskids.us",
+    "external": "pbs.kids.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168309,
+    "provider": null,
+    "external": "komo-dt.us_locals1",
+    "callsign_ids": [
+     "komo-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124921,
+    "provider": "hbowest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124922,
+    "provider": "hbozone.us",
+    "external": "hbo.zone.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168479,
+    "provider": null,
+    "external": "wnju-dt.us_locals1",
+    "callsign_ids": [
+     "wnju-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124930,
+    "provider": "showtimeextreme.us",
+    "external": "showtime.extreme.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168305,
+    "provider": "abcwjlawashingtondc.us",
+    "external": "wjla-dt.us_locals1",
+    "callsign_ids": [
+     "wjla-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168384,
+    "provider": "fox9minneapolis.us",
+    "external": "kmsp-dt.us_locals1",
+    "callsign_ids": [
+     "kmsp-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125094,
+    "provider": "spectrumsportsnetlakers.us",
+    "external": "spectrum.sportsnet.lakers.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168442,
+    "provider": "cbsphiladelphia.us",
+    "external": "kyw-dt.us_locals1",
+    "callsign_ids": [
+     "kyw-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168352,
+    "provider": "nbcnashville.us",
+    "external": "wsmv-dt.us_locals1",
+    "callsign_ids": [
+     "wsmv-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124979,
+    "provider": "nflnetwork.us",
+    "external": "nfl.network.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124926,
+    "provider": "showtime.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124912,
+    "provider": "epix.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125056,
+    "provider": "marqueesportsnetwork.us",
+    "external": "marquee.sports.network.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168449,
+    "provider": "cbswoioclevelandshakerheightsoh.us",
+    "external": "woio-ld.us_locals1",
+    "callsign_ids": [
+     "woio-ld.us_locals1",
+     "woio-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124783,
+    "provider": "hallmarkchannel.us",
+    "external": "hallmark.channel.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124822,
+    "provider": "tnt.us",
+    "external": "tnt.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168172,
+    "provider": "cbswhiodaytonoh.us",
+    "external": "whio-dt.us_locals1",
+    "callsign_ids": [
+     "whio-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168383,
+    "provider": "foxbaltimore.us",
+    "external": "wbff-dt.us_locals1",
+    "callsign_ids": [
+     "wbff-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168412,
+    "provider": "fox50raleigh.us",
+    "external": "wraz-dt.us_locals1",
+    "callsign_ids": [
+     "wraz-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124765,
+    "provider": "foodnetworkwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124953,
+    "provider": "starzencoreaction.us",
+    "external": "starz.encore.action.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168325,
+    "provider": "abcwkbwbuffalony.us",
+    "external": "wkbw-dt.us_locals1",
+    "callsign_ids": [
+     "wkbw-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124755,
+    "provider": "cozitv.us",
+    "external": "",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168136,
+    "provider": "abcwftvorlandofl.us",
+    "external": "wftv-dt.us_locals1",
+    "callsign_ids": [
+     "wftv-dt.us_locals1",
+     "wftv-ld.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200173343,
+    "provider": "cbskremspokanewa.us",
+    "external": "krem-dt.us_locals1",
+    "callsign_ids": [
+     "krem-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125123,
+    "provider": "disneyxd.us",
+    "external": "disney.xd.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124984,
+    "provider": "altitudesports.us",
+    "external": "altitude.sports.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124791,
+    "provider": "insp.us",
+    "external": "insp.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168286,
+    "provider": "",
+    "external": "ktsm-dt.us_locals1",
+    "callsign_ids": [
+     "ktsm-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168459,
+    "provider": null,
+    "external": "wncn-dt.us_locals1",
+    "callsign_ids": [
+     "wncn-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124849,
+    "provider": null,
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124771,
+    "provider": "fx.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168438,
+    "provider": "cbswjzbaltimore.us",
+    "external": "wjz-dt.us_locals1",
+    "callsign_ids": [
+     "wjz-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124966,
+    "provider": "5starmax.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124889,
+    "provider": "scrippsnews.us",
+    "external": "scripps.news.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168511,
+    "provider": "univisionwltvmiamifl.us",
+    "external": "wltv-dt.us_locals1",
+    "callsign_ids": [
+     "wltv-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124739,
+    "provider": "bet.us",
+    "external": "bet.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168437,
+    "provider": "cbswusawashingtondc.us",
+    "external": "wusa-dt.us_locals1",
+    "callsign_ids": [
+     "wusa-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124816,
+    "provider": "tbswest.us",
+    "external": "tbs.hd.(pacific).us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125126,
+    "provider": "nickjr.us",
+    "external": "nick.jr.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124907,
+    "provider": "cinemax.us",
+    "external": "cinemax.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124890,
+    "provider": "oneamericanews.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168333,
+    "provider": "abcwtaepittsburgh.us",
+    "external": "wtae-dt.us_locals1",
+    "callsign_ids": [
+     "wtae-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168255,
+    "provider": null,
+    "external": "wcia-dt.us_locals1",
+    "callsign_ids": [
+     "wcia-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125061,
+    "provider": "msg.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124772,
+    "provider": "fxx.us",
+    "external": "fxx.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124869,
+    "provider": "cspan.us",
+    "external": "cspan.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124928,
+    "provider": "showtimeshowcase.us",
+    "external": "showtime.showcase.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168346,
+    "provider": "nbcwbalbaltimore.us",
+    "external": "wbal-dt.us_locals1",
+    "callsign_ids": [
+     "wbal-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125119,
+    "provider": "disneychannel.us",
+    "external": "disney.channel.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124796,
+    "provider": "lifetimemovienetwork.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125049,
+    "provider": "foxsoccerplus.us",
+    "external": "fox.soccer.plus.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168327,
+    "provider": "abc30stlouis.us",
+    "external": "kdnl-dt.us_locals1",
+    "callsign_ids": [
+     "kdnl-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168505,
+    "provider": null,
+    "external": "kxln-dt.us_locals1",
+    "callsign_ids": [
+     "kxln-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124974,
+    "provider": "tcmwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125048,
+    "provider": "foxdeportes.us",
+    "external": "fox.deportes.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168280,
+    "provider": "foxktbcaustintx.us",
+    "external": "ktbc-dt.us_locals1",
+    "callsign_ids": [
+     "ktbc-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168335,
+    "provider": "nbcwxiaatlanta.us",
+    "external": "wxia-dt.us_locals1",
+    "callsign_ids": [
+     "wxia-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124803,
+    "provider": "oxygen.us",
+    "external": "oxygen.au",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168317,
+    "provider": "abckoatalbuquerquenm.us",
+    "external": "koat-dt.us_locals1",
+    "callsign_ids": [
+     "koat-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125057,
+    "provider": "masn.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124949,
+    "provider": "starzblack.us",
+    "external": "starz.in.black.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124944,
+    "provider": "starzcomedy.us",
+    "external": "starz.comedy.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124915,
+    "provider": "hbocomedy.us",
+    "external": "hbo.comedy.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125104,
+    "provider": null,
+    "external": "tudn.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125034,
+    "provider": "bigtennetwork.us",
+    "external": "big.ten.network.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124934,
+    "provider": "showtimenext.us",
+    "external": "showtime.next.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168247,
+    "provider": "foxwlukgreenbaywi.us",
+    "external": "wluk-dt.us_locals1",
+    "callsign_ids": [
+     "wluk-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124820,
+    "provider": "tlcwest.us",
+    "external": "tlc.hd.(pacific).us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124905,
+    "provider": "actionmax.us",
+    "external": "actionmax.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125067,
+    "provider": "nbcsportsbayarea.us",
+    "external": "nbc.sports.bay.area.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168128,
+    "provider": null,
+    "external": "wreg-dt.us_locals1",
+    "callsign_ids": [
+     "wreg-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168358,
+    "provider": "nbckobalburquerquenm.us",
+    "external": "kob-dt.us_locals1",
+    "callsign_ids": [
+     "kob-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125124,
+    "provider": "disneyxdwest.us",
+    "external": "disney.xd.hd.(pacific).us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124787,
+    "provider": "hgtvwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125066,
+    "provider": "golfchannel.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125129,
+    "provider": "nickelodeonwest.us",
+    "external": "nickelodeon.(pacific).us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168353,
+    "provider": "nbcksnvlasvegasnv.us",
+    "external": "ksnv-dt.us_locals1",
+    "callsign_ids": [
+     "ksnv-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125062,
+    "provider": "msg2.us",
+    "external": "msg2.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124857,
+    "provider": "smithsonianchannelwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125092,
+    "provider": "secnetwork.us",
+    "external": "sec.network.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168441,
+    "provider": "cbsklaslasvegasnv.us",
+    "external": "klas-dt.us_locals1",
+    "callsign_ids": [
+     "klas-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124879,
+    "provider": "foxweather.us",
+    "external": "fox.weather.us",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168456,
+    "provider": "cbskmovstlouismo.us",
+    "external": "kmov-dt.us_locals1",
+    "callsign_ids": [
+     "kmov-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124781,
+    "provider": "heroesandiconstv.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168452,
+    "provider": "cbskztvcorpuschristitx.us",
+    "external": "kztv-dt.us_locals1",
+    "callsign_ids": [
+     "kztv-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168308,
+    "provider": "abcknxvphoenixaz.us",
+    "external": "knxv-dt.us_locals1",
+    "callsign_ids": [
+     "knxv-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168212,
+    "provider": null,
+    "external": "wtvc-dt.us_locals1",
+    "callsign_ids": [
+     "wtvc-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124835,
+    "provider": "wetv.us",
+    "external": "we.tv.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124909,
+    "provider": "moremax.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168347,
+    "provider": "nbcwashingtondc.us",
+    "external": "wrc-dt.us_locals1",
+    "callsign_ids": [
+     "wrc-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124916,
+    "provider": "hbocomedywest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125047,
+    "provider": "fubosportsnetwork.us",
+    "external": "plex.tv.fubo.sports.network.plex",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125103,
+    "provider": "thecowboychannel.us",
+    "external": "the.cowboy.channel.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124785,
+    "provider": "hallmarkmystery.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124955,
+    "provider": "starzencoreclassic.us",
+    "external": "starz.encore.classic.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124968,
+    "provider": "sonymoviechannel.us",
+    "external": "sony.movie.channel.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124925,
+    "provider": "hbosignaturewest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125128,
+    "provider": "nickelodeon.us",
+    "external": "nickelodeon.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168419,
+    "provider": null,
+    "external": "wtnz-dt.us_locals1",
+    "callsign_ids": [
+     "wtnz-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125125,
+    "provider": "nickjrwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124960,
+    "provider": "starzencoresuspense.us",
+    "external": "starz.encore.suspense.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125075,
+    "provider": "nbcsportsphiladelphia.us",
+    "external": "nbc.sports.philadelphia.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124735,
+    "provider": "antennatv.us",
+    "external": "antenna.tv.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124837,
+    "provider": "americanheroeschannel.us",
+    "external": "american.heroes.channel.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124946,
+    "provider": "starzedge.us",
+    "external": "starz.edge.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125120,
+    "provider": "disneychannelwest.us",
+    "external": "disney.channel.(pacific).us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168288,
+    "provider": "cbskfdaamarillotx.us",
+    "external": "kfda-dt.us_locals1",
+    "callsign_ids": [
+     "kfda-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168278,
+    "provider": "abckvueaustintx.us",
+    "external": "kvue-dt.us_locals1",
+    "callsign_ids": [
+     "kvue-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124779,
+    "provider": "grittvc.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124924,
+    "provider": "hbo2west.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168463,
+    "provider": null,
+    "external": "wvlt-dt.us_locals1",
+    "callsign_ids": [
+     "wvlt-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168316,
+    "provider": "abckguntucsonaz.us",
+    "external": "kgun-dt.us_locals1",
+    "callsign_ids": [
+     "kgun-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124838,
+    "provider": "animalplanet.us",
+    "external": "animal.planet.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124971,
+    "provider": "indieplexwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400125069,
+    "provider": "nbcsportsboston.us",
+    "external": "nbc.sports.boston.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124933,
+    "provider": "showtimefamilyzonewest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124792,
+    "provider": "iontv.us",
+    "external": "ion.tv.uk",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124856,
+    "provider": "smithsonianchannel.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168436,
+    "provider": "cbsktvtdallasfortworthtx.us",
+    "external": "ktvt-dt.us_locals1",
+    "callsign_ids": [
+     "ktvt-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168314,
+    "provider": "abckatuportlandor.us",
+    "external": "katu-dt.us_locals1",
+    "callsign_ids": [
+     "katu-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125109,
+    "provider": "willowcricket.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168368,
+    "provider": null,
+    "external": "kntv-dt.us_locals1",
+    "callsign_ids": [
+     "kntv-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168137,
+    "provider": "cbswkmgorlandofl.us",
+    "external": "wkmg-dt.us_locals1",
+    "callsign_ids": [
+     "wkmg-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125096,
+    "provider": "spectrumsportsnet.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168152,
+    "provider": "abcwtenalbanyny.us",
+    "external": "wten-dt.us_locals1",
+    "callsign_ids": [
+     "wten-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124940,
+    "provider": "starzcinema.us",
+    "external": "starz.cinema.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168418,
+    "provider": "fox9minneapolis.us",
+    "external": "wftc-dt.us_locals1",
+    "callsign_ids": [
+     "wftc-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168497,
+    "provider": null,
+    "external": "wbff-dt.us_locals1",
+    "callsign_ids": [
+     "wbff-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168328,
+    "provider": "abckgosanfrancisco.us",
+    "external": "kgo-dt.us_locals1",
+    "callsign_ids": [
+     "kgo-dt.us_locals1",
+     "kgo-ld.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124923,
+    "provider": "hbozonewest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124855,
+    "provider": "science.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168334,
+    "provider": "abcwateknoxville.us",
+    "external": "wate-dt.us_locals1",
+    "callsign_ids": [
+     "wate-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168281,
+    "provider": "nbckxanaustintx.us",
+    "external": "kxan-dt.us_locals1",
+    "callsign_ids": [
+     "kxan-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124784,
+    "provider": "hallmarkfamily.us",
+    "external": "hallmark.family.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124945,
+    "provider": "starzcomedywest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168191,
+    "provider": "cbslouisville.us",
+    "external": "wlky-dt.us_locals1",
+    "callsign_ids": [
+     "wlky-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124943,
+    "provider": "starzwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124938,
+    "provider": "showtime2west.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168508,
+    "provider": "univisionkuvndallasfortworthtx.us",
+    "external": "kuvn-dt.us_locals1",
+    "callsign_ids": [
+     "kuvn-dt.us_locals1",
+     "kuvn-cd.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124936,
+    "provider": "showtimewomen.us",
+    "external": "showtime.women.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124978,
+    "provider": "screenpixwesterns.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124969,
+    "provider": "moremaxwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124914,
+    "provider": "epixhits.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168115,
+    "provider": "abcwzzmgrandrapidsmi.us",
+    "external": "wzzm-dt.us_locals1",
+    "callsign_ids": [
+     "wzzm-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124873,
+    "provider": "cnbcworld.us",
+    "external": "cnbc.world.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168279,
+    "provider": "cbskeyeaustintx.us",
+    "external": "keye-dt.us_locals1",
+    "callsign_ids": [
+     "keye-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124863,
+    "provider": "abcnewslive.us",
+    "external": "abc.news.live.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168187,
+    "provider": "cbswkyt.us",
+    "external": "wkyt-dt.us_locals1",
+    "callsign_ids": [
+     "wkyt-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124906,
+    "provider": "actionmaxwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124767,
+    "provider": "freeform.us",
+    "external": "freeform.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124794,
+    "provider": "lafftv.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168204,
+    "provider": "abcwjclsavannah.us",
+    "external": "wjcl-dt.us_locals1",
+    "callsign_ids": [
+     "wjcl-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168354,
+    "provider": "nbckare.us",
+    "external": "kare-dt.us_locals1",
+    "callsign_ids": [
+     "kare-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124961,
+    "provider": "starzencorewesterns.us",
+    "external": "starz.encore.westerns.sd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124982,
+    "provider": "accnetwork.us",
+    "external": "acc.network.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124744,
+    "provider": "bouncetv.us",
+    "external": "bounce.tv.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124833,
+    "provider": "vice.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124825,
+    "provider": "trutvwest.us",
+    "external": "trutv.hd.(pacific).us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124884,
+    "provider": "news12longisland.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124790,
+    "provider": "ifc.us",
+    "external": "ifc.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168359,
+    "provider": "nbc24fresno.us",
+    "external": "ksee-dt.us_locals1",
+    "callsign_ids": [
+     "ksee-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400125080,
+    "provider": "nesnplus.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168143,
+    "provider": "cbswtsptampastpetersburgfl.us",
+    "external": "wtsp-dt.us_locals1",
+    "callsign_ids": [
+     "wtsp-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124813,
+    "provider": "starttv.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168448,
+    "provider": "cbskgmbhonoluluhi.us",
+    "external": "kgmb-dt.us_locals1",
+    "callsign_ids": [
+     "kgmb-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168458,
+    "provider": null,
+    "external": "wcsc-dt.us_locals1",
+    "callsign_ids": [
+     "wcsc-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124752,
+    "provider": "cometwttv.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124747,
+    "provider": "buzzertv.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124741,
+    "provider": "bether.us",
+    "external": "bet.her.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124939,
+    "provider": null,
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124947,
+    "provider": "starzedgewest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124840,
+    "provider": "destinationamerica.us",
+    "external": "destination.america.hd.us2",
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168217,
+    "provider": "abcktbsshreveportla.us",
+    "external": "ktbs-dt.us_locals1",
+    "callsign_ids": [
+     "ktbs-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168263,
+    "provider": "nbckshbkansascitymo.us",
+    "external": "kshb-dt.us_locals1",
+    "callsign_ids": [
+     "kshb-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 400124804,
+    "provider": "oxygenwest.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168262,
+    "provider": null,
+    "external": "ksmo-dt.us_locals1",
+    "callsign_ids": [
+     "ksmo-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 5866,
+    "provider": null,
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 22588,
+    "provider": "hbo2west.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 22598,
+    "provider": null,
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 159675,
+    "provider": null,
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 200168199,
+    "provider": "abcwearpensacolafl.us",
+    "external": "wear-dt.us_locals1",
+    "callsign_ids": [
+     "wear-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200168495,
+    "provider": "",
+    "external": "wsbk-dt.us_locals1",
+    "callsign_ids": [
+     "wsbk-dt.us_locals1"
+    ]
+   },
+   {
+    "stream_id": 200170645,
+    "provider": "indieplex.us",
+    "external": null,
+    "callsign_ids": []
+   },
+   {
+    "stream_id": 400124965,
+    "provider": "shoxbet.us",
+    "external": "sho.x.bet.hd.us2",
+    "callsign_ids": []
+   }
+  ],
+  "normalized": {
+   "(US) (CX) Showtime BET (West)": "showtimebetwest",
+   "5starmax": "5starmax",
+   "ABC News Live": "abcnewslive",
+   "ACC Network": "accnetwork",
+   "ANIMAL PLANET": "animalplanet",
+   "ANIMAL PLANET HD": "animalplanet",
+   "ANIMAL PLANET HD (Animal Planet HD)": "animalplanet",
+   "ASPiRE HD": "aspire",
+   "ActionMAX HD": "actionmax",
+   "Altitude Sports": "altitudesports",
+   "American Heroes Channel HD": "americanheroeschannel",
+   "Animal Planet": "animalplanet",
+   "Animal Planet (HD)": "animalplanet",
+   "Animal Planet (niem.)": "animalplanet",
+   "Animal Planet HD": "animalplanet",
+   "Animal Planet HD (BIH)": "animalplanet",
+   "Animal Planet HD (RS)": "animalplanet",
+   "Animal Planet HD [EU]": "animalplanet",
+   "Antenna TV": "antennatv",
+   "BET": "bet",
+   "BET HD": "bet",
+   "BET Her": "bether",
+   "BS-TBS 4K": "tbs",
+   "Big Ten Network HD": "bigtennetwork",
+   "Bounce TV": "bouncetv",
+   "CARTOON NETWORK": "cartoonnetwork",
+   "CARTOON NETWORK (CartoonNetwork)": "cartoonnetwork",
+   "CARTOON NETWORK HD": "cartoonnetwork",
+   "CBS Sports Network HD": "cbssportsnetwork",
+   "CINEBOX: ACTION": "cineboxaction",
+   "CINEMAX": "cinemax",
+   "CINEMAX (Cinemax)": "cinemax",
+   "CINEMAX (HD)": "cinemax",
+   "CINEMAX HD": "cinemax",
+   "CINEMAX HD (CinemaxHD)": "cinemax",
+   "CNBC World": "cnbcworld",
+   "CSPAN": "cspan",
+   "CSPAN3": "cspan3",
+   "Cartoon Network": "cartoonnetwork",
+   "Cartoon Network (BIH)": "cartoonnetwork",
+   "Cartoon Network (HD)": "cartoonnetwork",
+   "Cartoon Network (en)": "cartoonnetwork",
+   "Cartoon Network (en2)": "cartoonnetwork",
+   "Cartoon Network (hr)": "cartoonnetwork",
+   "Cartoon Network (pl)": "cartoonnetwork",
+   "Cartoon Network HD": "cartoonnetwork",
+   "Cartoon Network HD (Cartoon Network HD)": "cartoonnetwork",
+   "Cartoon Network HD (RS)": "cartoonnetwork",
+   "Cartoon Network HD+": "cartoonnetwork",
+   "Cartoon network (English) [EU]": "cartoonnetwork",
+   "Cartoon network [EU]": "cartoonnetwork",
+   "CartoonNetwork HD": "cartoonnetwork",
+   "CineMAX": "cinemax",
+   "Cinemax": "cinemax",
+   "Cinemax (HD)": "cinemax",
+   "Cinemax (Pacific)": "cinemaxwest",
+   "Cinemax (hr)": "cinemax",
+   "Cinemax Classics": "cinemaxclassics",
+   "Cinemax HD": "cinemax",
+   "Cinemax HD (BIH)": "cinemax",
+   "Cinemax HD (Pacific)": "cinemaxwest",
+   "DE: Tennis Channel": "tennischannel",
+   "DISCOVERY CHANNEL": "discoverychannel",
+   "DISCOVERY CHANNEL (Disc.Channel)": "discoverychannel",
+   "DISCOVERY CHANNEL HD": "discoverychannel",
+   "DISNEY CHANNEL": "disneychannel",
+   "DISNEY CHANNEL HD (DisneyHD)": "disneychannel",
+   "DISNEY JR": "disneyjr",
+   "DISNEY JR HD": "disneyjr",
+   "DISNEY JUNIOR": "disneyjunior",
+   "DISNEY JUNIOR (DisneyJunior)": "disneyjunior",
+   "DISNEY XD": "disneyxd",
+   "Destination America HD": "destinationamerica",
+   "Discovery Channel": "discoverychannel",
+   "Discovery Channel (HD)": "discoverychannel",
+   "Discovery Channel (hr)": "discoverychannel",
+   "Discovery Channel (niem.)": "discoverychannel",
+   "Discovery Channel HD": "discoverychannel",
+   "Discovery Channel HD (BIH)": "discoverychannel",
+   "Discovery Channel HD (RS)": "discoverychannel",
+   "Disney Channel": "disneychannel",
+   "Disney Channel (BIH)": "disneychannel",
+   "Disney Channel (Pacific)": "disneychannelwest",
+   "Disney Channel (de)": "disneychannel",
+   "Disney Channel HD": "disneychannel",
+   "Disney Jr HD": "disneyjr",
+   "Disney Jr.": "disneyjr",
+   "Disney Junior": "disneyjunior",
+   "Disney Junior (BIH)": "disneyjunior",
+   "Disney Junior (RS)": "disneyjunior",
+   "Disney Junior HD": "disneyjunior",
+   "Disney Junior HD (Pacific)": "disneyjuniorwest",
+   "Disney XD": "disneyxd",
+   "Disney XD HD": "disneyxd",
+   "Disney XD HD (Pacific)": "disneyxdwest",
+   "ESPN Deportes HD": "espndeportes",
+   "ESPNU HD": "espnu",
+   "FOX Weather": "foxweather",
+   "FXX HD": "fxx",
+   "Fox Deportes HD": "foxdeportes",
+   "Fox Soccer Plus HD": "foxsoccerplus",
+   "Fox Weather": "foxweather",
+   "Freeform HD": "freeform",
+   "Fubo Sports Network": "fubosportsnetwork",
+   "Fuse HD": "fuse",
+   "GINX eSports": "ginxesports",
+   "HBO": "hbo",
+   "HBO (HD)": "hbo",
+   "HBO (Pacific)": "hbowest",
+   "HBO (hr)": "hbo",
+   "HBO 2": "hbo2",
+   "HBO 2 HD": "hbo2",
+   "HBO 2 HD (BIH)": "hbo2",
+   "HBO 2 HD (HBO 2 HD)": "hbo2",
+   "HBO 2 HD (RS)": "hbo2",
+   "HBO Comedy": "hbocomedy",
+   "HBO Comedy HD": "hbocomedy",
+   "HBO Drama": "hbodrama",
+   "HBO East": "hboeast",
+   "HBO HD": "hbo",
+   "HBO HD (BIH)": "hbo",
+   "HBO HD (HBOHD)": "hbo",
+   "HBO HD (RS)": "hbo",
+   "HBO HITS": "hbohits",
+   "HBO HITS HD": "hbohits",
+   "HBO Hits": "hbohits",
+   "HBO Hits (HD)": "hbohits",
+   "HBO Hits HD": "hbohits",
+   "HBO West": "hbowest",
+   "HBO Zone HD": "hbozone",
+   "HBO+": "hbo",
+   "HBO2": "hbo2",
+   "HBO2 (HD)": "hbo2",
+   "HBO2 (Pacific)": "hbo2west",
+   "HBO2 (hr)": "hbo2",
+   "HBO2 HD": "hbo2",
+   "HBO2 HD (Pacific)": "hbo2west",
+   "HISTORY": "history",
+   "HISTORY HD": "history",
+   "HISTORY HD (niem.)": "history",
+   "HISTORY™ (HD)": "history",
+   "Hallmark Channel HD": "hallmarkchannel",
+   "Hallmark Family": "hallmarkfamily",
+   "History": "history",
+   "History (HD)": "history",
+   "History (pl)": "history",
+   "History HD": "history",
+   "History HD (BIH)": "history",
+   "History HD (RS)": "history",
+   "History Европа [EU]": "history",
+   "ID - Investigation Discovery": "investigationdiscovery",
+   "ID: Investigation Discovery": "investigationdiscovery",
+   "IFC HD": "ifc",
+   "INSP HD": "insp",
+   "INVESTIGATION DISCOVERY (Invest. Discovery)": "investigationdiscovery",
+   "Investigation Discovery": "investigationdiscovery",
+   "Investigation Discovery (ID)": "investigationdiscovery",
+   "Investigation Discovery HD": "investigationdiscovery",
+   "Investigation Discovery HD (Pacific)": "investigationdiscoverywest",
+   "KARE-DT": null,
+   "KATU-DT": null,
+   "KATU-DT2": "dt2",
+   "KCBS All News 106.9FM and 740AM": "kcbsallnews1069fmand740am",
+   "KCBS-DT": null,
+   "KCPQ-DT": null,
+   "KCPQ-LD": null,
+   "KDFW-DT": null,
+   "KDKA-DT": null,
+   "KDNL-DT": null,
+   "KEYE-DT": null,
+   "KFDA-DT": null,
+   "KFSN-DT": null,
+   "KGMB-DT": null,
+   "KGO-DT": null,
+   "KGO-LD": null,
+   "KGUN-DT": null,
+   "KHOU-DT": null,
+   "KLAS-DT": null,
+   "KLASİK MÜZİK": "klaskmzk",
+   "KMOV-DT": null,
+   "KMOV-DT2": "dt2",
+   "KMSP-DT": null,
+   "KNTV": "kntv",
+   "KNTV-DT": null,
+   "KNXV-DT": null,
+   "KOAT-DT": null,
+   "KOAT-DT4": "dt4",
+   "KOB-DT": null,
+   "KOCO-DT": null,
+   "KOMO-DT": null,
+   "KPNX-DT": null,
+   "KREM-DT": null,
+   "KSAT-DT": null,
+   "KSEE-DT": null,
+   "KSHB-DT": null,
+   "KSMO-DT": null,
+   "KSNV-DT": null,
+   "KTBC-DT": null,
+   "KTBS-DT": null,
+   "KTMD-DT": null,
+   "KTRK-DT": null,
+   "KTSM-DT": null,
+   "KTVT-DT": null,
+   "KUVN-CD": null,
+   "KUVN-DT": null,
+   "KVUE-DT": null,
+   "KVVU-DT": null,
+   "KXAN-DT": null,
+   "KXLN-DT": null,
+   "KYW Newsradio": "kywnewsradio",
+   "KYW-DT": null,
+   "KZTV-DT": null,
+   "MEX: Fox Deportes": "foxdeportes",
+   "MGM+ Drive-In": "mgmdrivein",
+   "MGM+ HD": "mgm",
+   "MGM+ Hits HD": "mgmhits",
+   "MGM+ Marquee HD": "mgmmarquee",
+   "MLB Network HD": "mlbnetwork",
+   "MSG2 HD": "msg2",
+   "MSNBC HD": "msnbc",
+   "Marquee Sports Network HD": "marqueesportsnetwork",
+   "NBC Sports Bay Area HD": "nbcsportsbayarea",
+   "NBC Sports Boston HD": "nbcsportsboston",
+   "NBC Sports Philadelphia HD": "nbcsportsphiladelphia",
+   "NEWSMAX": "newsmax",
+   "NFL Network HD": "nflnetwork",
+   "NHL Network HD": "nhlnetwork",
+   "NICK JR": "nickjr",
+   "NICK JR.": "nickjr",
+   "NICKELODEON": "nickelodeon",
+   "NICKELODEON (Nickelodeon)": "nickelodeon",
+   "NICKELODEON HD": "nickelodeon",
+   "NICKELODEON+": "nickelodeon",
+   "News 12 New Jersey": "news12newjersey",
+   "News 12 New York": "news12newyork",
+   "Newsmax": "newsmax",
+   "Newsy": "newsy",
+   "Nick JR": "nickjr",
+   "Nick Jr": "nickjr",
+   "Nick Jr HD": "nickjr",
+   "Nick Jr [EU]": "nickjr",
+   "Nick Jr.": "nickjr",
+   "Nick Jr. (BIH)": "nickjr",
+   "Nick Jr. (RS)": "nickjr",
+   "Nick Jr. (pl)": "nickjr",
+   "Nick Jr. HD": "nickjr",
+   "NickJr": "nickjr",
+   "Nickelodeon": "nickelodeon",
+   "Nickelodeon (BIH)": "nickelodeon",
+   "Nickelodeon (Pacific)": "nickelodeonwest",
+   "Nickelodeon (affiliate)": "nickelodeon",
+   "Nickelodeon (hu)": "nickelodeon",
+   "Nickelodeon (pl)": "nickelodeon",
+   "Nickelodeon HD": "nickelodeon",
+   "Nickelodeon HD (BIH)": "nickelodeon",
+   "Nickelodeon HD [EU]": "nickelodeon",
+   "Nickelodeon SD": "nickelodeon",
+   "Oxygen": "oxygen",
+   "PBS KIDS HD": "pbskids",
+   "PixL": "pixl",
+   "Pursuit Channel": "pursuitchannel",
+   "SEC Network HD": "secnetwork",
+   "SHO x BET HD": "shoxbet",
+   "SONY MOVIES HD": "sonymovies",
+   "Scripps News": "scrippsnews",
+   "Showtime 2 HD": "showtime2",
+   "Showtime Extreme HD": "showtimeextreme",
+   "Showtime Next HD": "showtimenext",
+   "Showtime Showcase HD": "showtimeshowcase",
+   "Showtime Women HD": "showtimewomen",
+   "Sony Movie Channel HD": "sonymoviechannel",
+   "Spectrum SportsNet Lakers HD": "spectrumsportsnetlakers",
+   "Starz (Pacific)": "starzwest",
+   "Starz Cinema HD": "starzcinema",
+   "Starz Comedy HD": "starzcomedy",
+   "Starz Edge HD": "starzedge",
+   "Starz Encore Action HD": "starzencoreaction",
+   "Starz Encore Black": "starzencoreblack",
+   "Starz Encore Classic": "starzencoreclassic",
+   "Starz Encore Suspense": "starzencoresuspense",
+   "Starz Encore Westerns SD": "starzencorewesterns",
+   "Starz HD": "starz",
+   "Starz HD (Pacific)": "starzwest",
+   "Starz in Black HD": "starzinblack",
+   "TBS": "tbs",
+   "TBS HD": "tbs",
+   "TBS HD (Pacific)": "tbswest",
+   "TLC": "tlc",
+   "TLC (HD)": "tlc",
+   "TLC (TLC)": "tlc",
+   "TLC (hr)": "tlc",
+   "TLC HD": "tlc",
+   "TLC HD (BIH)": "tlc",
+   "TLC HD (Pacific)": "tlcwest",
+   "TLC HD (RS)": "tlc",
+   "TLC HD (US)": "tlc",
+   "TLC여행레저채널": "tlc",
+   "TNT": "tnt",
+   "TNT (TNT)": "tnt",
+   "TNT HD": "tnt",
+   "TUDN": "tudn",
+   "TV Land HD": "tvland",
+   "TV Land HD (Pacific)": "tvlandwest",
+   "Tastemade": "tastemade",
+   "Tennis Channel HD": "tennischannel",
+   "The Cowboy Channel": "thecowboychannel",
+   "The Weather Channel HD": "theweatherchannel",
+   "UK: GINX E SPORTS SD": "ginxesports",
+   "UK: Tennis Channel": "tennischannel",
+   "US American Heroes Channel (AHC) (H)": "americanheroeschannel",
+   "US Aspire (A)": "aspire",
+   "US Big Ten Network (H)": "bigtennetwork",
+   "US CBS 10 (KZTV) Corpus christi (H)": "cbs10corpuschristi",
+   "US CBS 27 (WKYT) Lexington (H)": "cbs27lexington",
+   "US CBS Sports Network (H)": "cbssportsnetwork",
+   "US CineMAX (West) (H)": "cinemaxwest",
+   "US Cinemax Classics (East) (H)": "cinemaxclassics",
+   "US Cinemax East (A)": "cinemaxeast",
+   "US Destination America (H)": "destinationamerica",
+   "US Disney Channel East (A)": "disneychanneleast",
+   "US Disney XD East (A)": "disneyxdeast",
+   "US ESPN News (A)": "espnnews",
+   "US Freeform (East) (H)": "freeform",
+   "US HBO (West) (H)": "hbowest",
+   "US HBO Comedy (East) (H)": "hbocomedy",
+   "US HBO Drama (East) (H)": "hbodrama",
+   "US HBO Hits (A)": "hbohits",
+   "US HBO Hits (East) (H)": "hbohits",
+   "US HBO Hits (West) (H)": "hbohitswest",
+   "US HBO West (H)": "hbowest",
+   "US HGTV (West) (F)": "hgtvwest",
+   "US Lifetime Movie Network (LMN) (H)": "lifetimemovienetwork",
+   "US MGM+ (East) (A)": "mgm",
+   "US MGM+ Hits (A)": "mgmhits",
+   "US MGM+ Marquee (S)": "mgmmarquee",
+   "US MSG2 (F)": "msg2",
+   "US MSNBC (H)": "msnbc",
+   "US NBC 11 (KARE) Minneapolis (H)": "nbc11minneapolis",
+   "US NBC Golf Channel (H)": "nbcgolfchannel",
+   "US NHL Network (A)": "nhlnetwork",
+   "US Nick JR East (A)": "nickjreast",
+   "US Nickelodeon East (A)": "nickelodeoneast",
+   "US PBS Kids": "pbskids",
+   "US Pursuit Channel (A)": "pursuitchannel",
+   "US Pursuit Channel (S)": "pursuitchannel",
+   "US REELZ (A)": "reelz",
+   "US REELZ (S)": "reelz",
+   "US Showtime (West) (H)": "showtimewest",
+   "US Showtime 2 (East) (H)": "showtime2",
+   "US Showtime 2 (S)": "showtime2",
+   "US Showtime East (FHD) (S)": "showtimeeast",
+   "US Showtime East (S)": "showtimeeast",
+   "US Showtime Extreme (East) (H)": "showtimeextreme",
+   "US Showtime Extreme (East) (S)": "showtimeextreme",
+   "US Showtime Next (East) (H)": "showtimenext",
+   "US Showtime Next (East) (S)": "showtimenext",
+   "US Showtime Showcase (East) (H)": "showtimeshowcase",
+   "US Showtime Showcase (East) (S)": "showtimeshowcase",
+   "US Showtime West (S)": "showtimewest",
+   "US Starz (West) (S)": "starzwest",
+   "US Starz Cinema (East) (H)": "starzcinema",
+   "US Starz Cinema (East) (S)": "starzcinema",
+   "US Starz Comedy (East) (H)": "starzcomedy",
+   "US Starz East (S)": "starzeast",
+   "US Starz Edge (East) (H)": "starzedge",
+   "US Starz Edge (East) (S)": "starzedge",
+   "US Starz Encore Action (East) (H)": "starzencoreaction",
+   "US Starz Encore Action (East) (S)": "starzencoreaction",
+   "US Starz Encore Black (East) (H)": "starzencoreblack",
+   "US Starz Encore Black (S)": "starzencoreblack",
+   "US Starz Encore Suspense (East) (H)": "starzencoresuspense",
+   "US Starz Encore Suspense (East) (S)": "starzencoresuspense",
+   "US Starz Encore Westerns (East) (H)": "starzencorewesterns",
+   "US Starz Encore Westerns (East) (S)": "starzencorewesterns",
+   "US Tastemade (A)": "tastemade",
+   "US USA Network East (A)": "usanetworkeast",
+   "US: 5 STARMAX": "5starmax",
+   "US: ABC 10 Albany (WTEN)": "abc10albany",
+   "US: ABC 10 Miami (WPLG)": "abc10miami",
+   "US: ABC 11 Raleigh Durham (WTVD)": "abc11raleighdurham",
+   "US: ABC 12 San Antonio (KSAT)": "abc12sanantonio",
+   "US: ABC 13 Grand Rapids (WZZM)": "abc13grandrapids",
+   "US: ABC 13 Houston (KTRK)": "abc13houston",
+   "US: ABC 15 Phoenix (KNXV)": "abc15phoenix",
+   "US: ABC 2 Portland (KATU)": "abc2portland",
+   "US: ABC 22 Savannah (WJCL)": "abc22savannah",
+   "US: ABC 24 Austin (KVUE)": "abc24austin",
+   "US: ABC 3 Mobile (WEAR)": "abc3mobile",
+   "US: ABC 3 Shreveport (KTBS)": "abc3shreveport",
+   "US: ABC 30 Fresno (KFSN)": "abc30fresno",
+   "US: ABC 30 St. Louis (KDNL)": "abc30stlouis",
+   "US: ABC 4 Pittsburgh (WTAE)": "abc4pittsburgh",
+   "US: ABC 4 Seattle (KOMO)": "abc4seattle",
+   "US: ABC 5 Oklahoma City (KOCO)": "abc5oklahomacity",
+   "US: ABC 6 Knoxville (WATE)": "abc6knoxville",
+   "US: ABC 6 Philadelphia (WPVI)": "abc6philadelphia",
+   "US: ABC 7 Albuquerque (KOAT)": "abc7albuquerque",
+   "US: ABC 7 Buffalo (WKBW)": "abc7buffalo",
+   "US: ABC 7 Chicago (WLS)": "abc7chicago",
+   "US: ABC 7 Detroit (WXYZ)": "abc7detroit",
+   "US: ABC 7 San Francisco (KGO)": "abc7sanfrancisco",
+   "US: ABC 7 Washington DC (WJLA)": "abc7washingtondc",
+   "US: ABC 9 Chattanooga (WTVC)": "abc9chattanooga",
+   "US: ABC 9 Orlando (WFTV)": "abc9orlando",
+   "US: ABC 9 Tucson (KGUN)": "abc9tucson",
+   "US: ABC NEWS LIVE HD": "abcnewslive",
+   "US: ABC News Live": "abcnewslive",
+   "US: ACC NETWORK": "accnetwork",
+   "US: ACC Network": "accnetwork",
+   "US: ACTIONMAX": "actionmax",
+   "US: ACTIONMAX WEST": "actionmaxwest",
+   "US: ALTITUDE SPORTS": "altitudesports",
+   "US: AMERICAN HEROES CHANNEL FHD": "americanheroeschannel",
+   "US: ANIMAL PLANET EAST HD": "animalplaneteast",
+   "US: ANTENNA TV": "antennatv",
+   "US: Altitude Sports": "altitudesports",
+   "US: Antenna TV": "antennatv",
+   "US: Aspire": "aspire",
+   "US: BET EAST": "beteast",
+   "US: BET HER": "bether",
+   "US: BET Her": "bether",
+   "US: BIG TEN NETWORK": "bigtennetwork",
+   "US: BOUNCE TV": "bouncetv",
+   "US: BUZZER TV": "buzzertv",
+   "US: Big Ten Network": "bigtennetwork",
+   "US: Bounce TV": "bouncetv",
+   "US: C SPAN": "cspan",
+   "US: C SPAN 3": "cspan3",
+   "US: C SPAN FHD": "cspan",
+   "US: CARTOON NETWORK EAST HD": "cartoonnetworkeast",
+   "US: CBS 10 Amarillo (KFDA)": "cbs10amarillo",
+   "US: CBS 10 Corpus Christi (KZTV)": "cbs10corpuschristi",
+   "US: CBS 10 Tampa Bay (WTSP)": "cbs10tampabay",
+   "US: CBS 11 Dallas Fort Worth (KTVT)": "cbs11dallasfortworth",
+   "US: CBS 11 Houston (KHOU)": "cbs11houston",
+   "US: CBS 12 Cincinnati (WKRC)": "cbs12cincinnati",
+   "US: CBS 13 Baltimore (WJZ)": "cbs13baltimore",
+   "US: CBS 14 Dallas Fort Worth (KTVT)": "cbs14dallasfortworth",
+   "US: CBS 17 Raleigh (WNCN)": "cbs17raleigh",
+   "US: CBS 19 Cleveland (WOIO)": "cbs19cleveland",
+   "US: CBS 2 Los Angeles (KCBS)": "cbs2losangeles",
+   "US: CBS 2 Pittsburgh (KDKA)": "cbs2pittsburgh",
+   "US: CBS 27 Lexington (WKYT)": "cbs27lexington",
+   "US: CBS 3 Memphis (WREG)": "cbs3memphis",
+   "US: CBS 3 Philadelphia (KYW)": "cbs3philadelphia",
+   "US: CBS 3 Springfield (WCIA)": "cbs3springfield",
+   "US: CBS 4 Boston (WBZ)": "cbs4boston",
+   "US: CBS 4 Indianapolis (WTTV)": "cbs4indianapolis",
+   "US: CBS 4 St. Louis (KMOV)": "cbs4stlouis",
+   "US: CBS 42 Austin (KEYE)": "cbs42austin",
+   "US: CBS 5 Charleston (WCSC)": "cbs5charleston",
+   "US: CBS 5 Honolulu (KGMB)": "cbs5honolulu",
+   "US: CBS 6 Orlando (WKMG)": "cbs6orlando",
+   "US: CBS 62 Detroit (WWJ)": "cbs62detroit",
+   "US: CBS 7 Dayton (WHIO)": "cbs7dayton",
+   "US: CBS 8 Knoxville (WVLT)": "cbs8knoxville",
+   "US: CBS 8 Las Vegas (KLAS)": "cbs8lasvegas",
+   "US: CBS 9 Washington DC (WUSA)": "cbs9washingtondc",
+   "US: CBS Louisville (WLKY)": "cbslouisville",
+   "US: CBS SPORTS NETWORK": "cbssportsnetwork",
+   "US: CBS Spokane (KREM)": "cbsspokane",
+   "US: CBS Sports Network": "cbssportsnetwork",
+   "US: CINEMAX EAST": "cinemaxeast",
+   "US: CINEMAX WEST": "cinemaxwest",
+   "US: CNBC WORLD FHD": "cnbcworld",
+   "US: CNBC World": "cnbcworld",
+   "US: COMET TV": "comettv",
+   "US: COZI": "cozi",
+   "US: Chicago Sports Network": "chicagosportsnetwork",
+   "US: Cinemax Classics": "cinemaxclassics",
+   "US: DESTINATION AMERICA HD": "destinationamerica",
+   "US: DISCOVERY CHANNEL EAST HD": "discoverychanneleast",
+   "US: DISCOVERY CHANNEL WEST  HD": "discoverychannelwest",
+   "US: DISNEY CHANNEL EAST HD": "disneychanneleast",
+   "US: DISNEY CHANNEL WEST HD": "disneychannelwest",
+   "US: DISNEY JR EAST HD": "disneyjreast",
+   "US: DISNEY JR WEST HD": "disneyjrwest",
+   "US: DISNEY XD EAST HD": "disneyxdeast",
+   "US: DISNEY XD WEST HD": "disneyxdwest",
+   "US: Destination America": "destinationamerica",
+   "US: EPIX": "epix",
+   "US: EPIX HITS": "epixhits",
+   "US: ESPN DEPORTES": "espndeportes",
+   "US: ESPN Deportes": "espndeportes",
+   "US: ESPN NEWS": "espnnews",
+   "US: ESPN U": "espnu",
+   "US: ESPNU": "espnu",
+   "US: FOOD NETWORK WEST": "foodnetworkwest",
+   "US: FOX 11 Green Bay (WLUK)": "fox11greenbay",
+   "US: FOX 13 Memphis (WHBQ)": "fox13memphis",
+   "US: FOX 13 Seattle (KCPQ)": "fox13seattle",
+   "US: FOX 19 Cincinnati (WXIX)": "fox19cincinnati",
+   "US: FOX 4 Dallas Fort Worth (KDFW)": "fox4dallasfortworth",
+   "US: FOX 43 Knoxville (WTNZ)": "fox43knoxville",
+   "US: FOX 45 Baltimore (WBFF)": "fox45baltimore",
+   "US: FOX 46 Charlotte (WJZY)": "fox46charlotte",
+   "US: FOX 5 Las Vegas (KVVU)": "fox5lasvegas",
+   "US: FOX 50 Raleigh (WRAZ)": "fox50raleigh",
+   "US: FOX 57 Columbia (WACH)": "fox57columbia",
+   "US: FOX 59 Indianapolis (WXIN)": "fox59indianapolis",
+   "US: FOX 7 Austin (KTBC)": "fox7austin",
+   "US: FOX 7 Miami (WSVN)": "fox7miami",
+   "US: FOX 8 Cleveland (WJW)": "fox8cleveland",
+   "US: FOX 8 New Orleans (WVUE)": "fox8neworleans",
+   "US: FOX 9 Minneapolis St. Paul (KMSP)": "fox9minneapolisstpaul",
+   "US: FOX DEPORTES FHD": "foxdeportes",
+   "US: FOX SOCCER PLUS FHD": "foxsoccerplus",
+   "US: FOX WEATHER HD": "foxweather",
+   "US: FREEFORM": "freeform",
+   "US: FUBO SPORTS NETWORK HD": "fubosportsnetwork",
+   "US: FX EAST": "fxeast",
+   "US: FXX EAST": "fxxeast",
+   "US: Fanduel Southeast (Carolinas)": "fanduelsoutheast",
+   "US: Fox 9 Plus Minneapolis (WFTC)": "fox9plusminneapolis",
+   "US: Freeform": "freeform",
+   "US: Fuse": "fuse",
+   "US: GINX eSports": "ginxesports",
+   "US: GRIT TV": "grittv",
+   "US: HALLMARK CHANNEL": "hallmarkchannel",
+   "US: HALLMARK DRAMA": "hallmarkdrama",
+   "US: HALLMARK MOVIES & MYSTERIES": "hallmarkmoviesmysteries",
+   "US: HBO (West)": "hbowest",
+   "US: HBO 2 WEST": "hbo2west",
+   "US: HBO COMEDY": "hbocomedy",
+   "US: HBO COMEDY WEST": "hbocomedywest",
+   "US: HBO Comedy": "hbocomedy",
+   "US: HBO Drama": "hbodrama",
+   "US: HBO EAST": "hboeast",
+   "US: HBO Hits": "hbohits",
+   "US: HBO SIGNATURE WEST": "hbosignaturewest",
+   "US: HBO WEST": "hbowest",
+   "US: HBO ZONE": "hbozone",
+   "US: HBO ZONE WEST": "hbozonewest",
+   "US: HBO Zone": "hbozone",
+   "US: HEROES AND ICONS EAST": "heroesandiconseast",
+   "US: HGTV WEST": "hgtvwest",
+   "US: HISTORY EAST HD": "historyeast",
+   "US: Hallmark Channel (D)": "hallmarkchannel",
+   "US: Hallmark Movies & Mysteries": "hallmarkmoviesmysteries",
+   "US: IFC": "ifc",
+   "US: INDIEPLEX WEST": "indieplexwest",
+   "US: INSP": "insp",
+   "US: INVESTIGATION DISCOVERY EAST HD": "investigationdiscoveryeast",
+   "US: INVESTIGATION DISCOVERY WEST HD": "investigationdiscoverywest",
+   "US: ION TV HD": "iontv",
+   "US: IndiePlex (West)": "indieplexwest",
+   "US: LAFF TV": "lafftv",
+   "US: LIFETIME MOVIE NETWORK": "lifetimemovienetwork",
+   "US: Lifetime Movie Network (D)": "lifetimemovienetwork",
+   "US: MARQUEE SPORTS NETWORK": "marqueesportsnetwork",
+   "US: MASN": "masn",
+   "US: MGM+": "mgm",
+   "US: MGM+ Drive In": "mgmdrivein",
+   "US: MGM+ Hits": "mgmhits",
+   "US: MGM+ Marquee": "mgmmarquee",
+   "US: MLB NETWORK HD": "mlbnetwork",
+   "US: MLB Network": "mlbnetwork",
+   "US: MORE MAX WEST": "moremaxwest",
+   "US: MOREMAX": "moremax",
+   "US: MOTORTREND WEST": "motortrendwest",
+   "US: MSG": "msg",
+   "US: MSG 2": "msg2",
+   "US: MSNBC FHD": "msnbc",
+   "US: MY 24 Baltimore (WBFF)": "my24baltimore",
+   "US: MY 38 Boston (WSBK)": "my38boston",
+   "US: MY 62 Kansas City (KSMO)": "my62kansascity",
+   "US: Marquee Sports Network": "marqueesportsnetwork",
+   "US: MyTV (New Jersey)": "mytv",
+   "US: NBC 10 Philadelphia (WCAU)": "nbc10philadelphia",
+   "US: NBC 11 Atlanta (WXIA)": "nbc11atlanta",
+   "US: NBC 11 Baltimore (WBAL)": "nbc11baltimore",
+   "US: NBC 11 Minneapolis (KARE)": "nbc11minneapolis",
+   "US: NBC 11 San Francisco (KNTV)": "nbc11sanfrancisco",
+   "US: NBC 12 Phoenix (KPNX)": "nbc12phoenix",
+   "US: NBC 13 Indianapolis (WTHR)": "nbc13indianapolis",
+   "US: NBC 2 Orlando (WESH)": "nbc2orlando",
+   "US: NBC 24 Fresno (KSEE)": "nbc24fresno",
+   "US: NBC 3 Cleveland (WKYC)": "nbc3cleveland",
+   "US: NBC 3 Las Vegas (KSNV)": "nbc3lasvegas",
+   "US: NBC 36 Austin (KXAN)": "nbc36austin",
+   "US: NBC 4 Albuquerque (KOB)": "nbc4albuquerque",
+   "US: NBC 4 Nashville (WSMV)": "nbc4nashville",
+   "US: NBC 4 Washington DC (WRC)": "nbc4washingtondc",
+   "US: NBC 41 Kansas City (KSHB)": "nbc41kansascity",
+   "US: NBC 5 Raleigh (WRAL)": "nbc5raleigh",
+   "US: NBC GOLF CHANNEL": "nbcgolfchannel",
+   "US: NBC Miami (WTVJ)": "nbcmiami",
+   "US: NBC SPORTS BAY AREA": "nbcsportsbayarea",
+   "US: NBC SPORTS BOSTON": "nbcsportsboston",
+   "US: NBC SPORTS PHILADELPHIA": "nbcsportsphiladelphia",
+   "US: NBC Sports Bay Area": "nbcsportsbayarea",
+   "US: NBC Sports Boston": "nbcsportsboston",
+   "US: NBC Sports Philadelphia": "nbcsportsphiladelphia",
+   "US: NBC Sports Philadelphia+": "nbcsportsphiladelphia",
+   "US: NBC Sports Washington": "nbcsportswashington",
+   "US: NESN PLUS": "nesnplus",
+   "US: NESN Plus": "nesnplus",
+   "US: NEWS 12 LONG ISLAND FHD": "news12longisland",
+   "US: NEWSMAX": "newsmax",
+   "US: NEWSMAX HD": "newsmax",
+   "US: NEWSY HD": "newsy",
+   "US: NFL NETWORK HD": "nflnetwork",
+   "US: NFL Network": "nflnetwork",
+   "US: NHL NETWORK HD": "nhlnetwork",
+   "US: NHL Network": "nhlnetwork",
+   "US: NICK JR WEST FHD": "nickjrwest",
+   "US: NICK JR. EAST FHD": "nickjreast",
+   "US: NICKELODEON EAST FHD": "nickelodeoneast",
+   "US: NICKELODEON WEST FHD": "nickelodeonwest",
+   "US: News 12 Connecticut": "news12connecticut",
+   "US: News 12 Long Island": "news12longisland",
+   "US: News 12 New Jersey": "news12newjersey",
+   "US: News 12 New York": "news12newyork",
+   "US: ONE AMERICA NEWS": "oneamericanews",
+   "US: ONE AMERICA NEWS HD": "oneamericanews",
+   "US: OXYGEN EAST": "oxygeneast",
+   "US: OXYGEN WEST": "oxygenwest",
+   "US: Oxygen (West)": "oxygenwest",
+   "US: PBS": "pbs",
+   "US: PBS KIDS HD": "pbskids",
+   "US: PBS Kids": "pbskids",
+   "US: PBS New York (WNET)": "pbsnewyork",
+   "US: PIXL": "pixl",
+   "US: PURSUIT CHANNEL FHD": "pursuitchannel",
+   "US: Pursuit Channel": "pursuitchannel",
+   "US: REELZ": "reelz",
+   "US: SCIENCE HD": "science",
+   "US: SCREENPIX WESTERNS US": "screenpixwesternsus",
+   "US: SEC NETWORK": "secnetwork",
+   "US: SEC Network": "secnetwork",
+   "US: SHOWTIME 2": "showtime2",
+   "US: SHOWTIME 2 WEST": "showtime2west",
+   "US: SHOWTIME BET": "showtimebet",
+   "US: SHOWTIME BET WEST": "showtimebetwest",
+   "US: SHOWTIME EAST": "showtimeeast",
+   "US: SHOWTIME EXTREME": "showtimeextreme",
+   "US: SHOWTIME FAMILY ZONE WEST": "showtimefamilyzonewest",
+   "US: SHOWTIME NEXT": "showtimenext",
+   "US: SHOWTIME SHOWCASE": "showtimeshowcase",
+   "US: SHOWTIME WEST": "showtimewest",
+   "US: SHOWTIME WOMEN": "showtimewomen",
+   "US: SMITHSONIAN EAST HD": "smithsonianeast",
+   "US: SMITHSONIAN WEST FHD": "smithsonianwest",
+   "US: SONY MOVIES": "sonymovies",
+   "US: SPECTRUM SPORTSNET DODGERS": "spectrumsportsnetdodgers",
+   "US: SPECTRUM SPORTSNET FHD": "spectrumsportsnet",
+   "US: SPECTRUM SPORTSNET LA HD": "spectrumsportsnetla",
+   "US: SPECTRUM SPORTSNET LAKERS": "spectrumsportsnetlakers",
+   "US: START TV HD": "starttv",
+   "US: STARZ CINEMA": "starzcinema",
+   "US: STARZ COMEDY": "starzcomedy",
+   "US: STARZ COMEDY WEST": "starzcomedywest",
+   "US: STARZ EAST": "starzeast",
+   "US: STARZ EDGE": "starzedge",
+   "US: STARZ EDGE WEST": "starzedgewest",
+   "US: STARZ ENCORE SUSPENSE": "starzencoresuspense",
+   "US: STARZ IN BLACK": "starzinblack",
+   "US: STARZ WEST": "starzwest",
+   "US: STARZENCORE ACTION": "starzencoreaction",
+   "US: STARZENCORE CLASSIC": "starzencoreclassic",
+   "US: STARZENCORE WESTERNS": "starzencorewesterns",
+   "US: Showtime 2": "showtime2",
+   "US: Showtime Extreme": "showtimeextreme",
+   "US: Showtime Next": "showtimenext",
+   "US: Showtime Showcase": "showtimeshowcase",
+   "US: Showtime Women": "showtimewomen",
+   "US: Spectrum Sportsnet Dodgers": "spectrumsportsnetdodgers",
+   "US: Spectrum Sportsnet Lakers": "spectrumsportsnetlakers",
+   "US: Starz Cinema": "starzcinema",
+   "US: Starz Comedy": "starzcomedy",
+   "US: Starz Edge": "starzedge",
+   "US: Starz Encore Action": "starzencoreaction",
+   "US: Starz Encore Black": "starzencoreblack",
+   "US: Starz Encore Black (D)": "starzencoreblack",
+   "US: Starz Encore Classic": "starzencoreclassic",
+   "US: Starz Encore Suspense": "starzencoresuspense",
+   "US: Starz Encore Westerns": "starzencorewesterns",
+   "US: Starz West": "starzwest",
+   "US: TASTEMADE": "tastemade",
+   "US: TBS EAST FHD": "tbseast",
+   "US: TBS WEST FHD": "tbswest",
+   "US: TCM WEST": "tcmwest",
+   "US: TENNIS CHANNEL": "tennischannel",
+   "US: THE COWBOY CHANNEL": "thecowboychannel",
+   "US: THE WEATHER CHANNEL HD": "theweatherchannel",
+   "US: TLC EAST FHD": "tlceast",
+   "US: TLC WEST FHD": "tlcwest",
+   "US: TNT EAST FHD": "tnteast",
+   "US: TRUTV WEST HD": "trutvwest",
+   "US: TUDN": "tudn",
+   "US: TV LAND": "tvland",
+   "US: TV LAND WEST HD": "tvlandwest",
+   "US: TV Land": "tvland",
+   "US: TV Land (West)": "tvlandwest",
+   "US: Telemundo El Paso (KTSM)": "telemundoelpaso",
+   "US: Telemundo Houston (KTMD)": "telemundohouston",
+   "US: Telemundo Miami (WSCV)": "telemundomiami",
+   "US: Telemundo New York (WNJU)": "telemundonewyork",
+   "US: The Weather Channel (D)": "theweatherchannel",
+   "US: USA NETWORK EAST": "usanetworkeast",
+   "US: USA NETWORK WEST": "usanetworkwest",
+   "US: USA Network (West)": "usanetworkwest",
+   "US: Univision Dallas–Fort Worth (KUVN)": "univisiondallasfortworth",
+   "US: Univision Houston (KXLN)": "univisionhouston",
+   "US: Univision Miami (WLTV)": "univisionmiami",
+   "US: VICE": "vice",
+   "US: WE TV": "wetv",
+   "US: WE TV FHD": "wetv",
+   "US: WILLOW CRICKET": "willowcricket",
+   "US: WILLOW CRICKET EXTRA": "willowcricketextra",
+   "US: Willow Cricket": "willowcricket",
+   "US: World Fishing Network": "worldfishingnetwork",
+   "US: YES NETWORK FHD": "yesnetwork",
+   "US: Yes Network": "yesnetwork",
+   "US: iON TV": "iontv",
+   "USA NETWORK": "usanetwork",
+   "USA NETWORK HD": "usanetwork",
+   "USA Network": "usanetwork",
+   "USA Network HD": "usanetwork",
+   "USA Network HD (Pacific)": "usanetworkwest",
+   "VICE": "vice",
+   "Vice": "vice",
+   "Vice HD": "vice",
+   "WACH-DT": null,
+   "WATE-DT": null,
+   "WBAL-DT": null,
+   "WBFF-DT": null,
+   "WBZ": "wbz",
+   "WBZ-DT": null,
+   "WCAU-DT": null,
+   "WCIA-DT": null,
+   "WCSC-DT": null,
+   "WE TV": "wetv",
+   "WE tv HD": "wetv",
+   "WEAR-DT": null,
+   "WEAR-DT2": "dt2",
+   "WESH-DT": null,
+   "WESH-LD": null,
+   "WFTC-DT": null,
+   "WFTV-DT": null,
+   "WFTV-LD": null,
+   "WHBQ-DT": null,
+   "WHIO-DT": null,
+   "WJCL-DT": null,
+   "WJLA-DT": null,
+   "WJW-DT": null,
+   "WJZ-DT": null,
+   "WJZY-DT": null,
+   "WKBW-DT": null,
+   "WKMG-DT": null,
+   "WKRC-DT": null,
+   "WKYC-DT": null,
+   "WKYT-DT": null,
+   "WLKY-DT": null,
+   "WLS-DT": null,
+   "WLTV-DT": null,
+   "WLUK-DT": null,
+   "WNCN-DT": null,
+   "WNET-DT": null,
+   "WNJU-DT": null,
+   "WOIO-DT": null,
+   "WOIO-LD": null,
+   "WPLG-DT": null,
+   "WPVI-DT": null,
+   "WRAL-DT": null,
+   "WRAZ-DT": null,
+   "WRC-DT": null,
+   "WREG-DT": null,
+   "WSBK-DT": null,
+   "WSCV-DT": null,
+   "WSMV-DT": null,
+   "WSVN-DT": null,
+   "WSVN-DT2": "dt2",
+   "WTAE-DT": null,
+   "WTEN-DT": null,
+   "WTHR-DT": null,
+   "WTNZ-DT": null,
+   "WTSP-DT": null,
+   "WTTV-DT": null,
+   "WTVC-DT": null,
+   "WTVC-DT2": "dt2",
+   "WTVD-DT": null,
+   "WTVJ-DT": null,
+   "WUSA-DT": null,
+   "WVLT-DT": null,
+   "WVUE-DT": null,
+   "WVUE-DT3": "dt3",
+   "WWJ Newsradio 950": "wwjnewsradio950",
+   "WWJ-DT": null,
+   "WXIA-DT": null,
+   "WXIN-DT": null,
+   "WXIX-DT": null,
+   "WXYZ-DT": null,
+   "WZZM-DT": null,
+   "We TV": "wetv",
+   "Willow Cricket HD": "willowcricket",
+   "World Fishing Network": "worldfishingnetwork",
+   "World Fishing Network HD (US)": "worldfishingnetwork",
+   "Yes Network": "yesnetwork",
+   "[121] Discovery Channel HD": "discoverychannel",
+   "[135] TLC HD": "tlc",
+   "[186] History": "history",
+   "[301] Cartoon Network": "cartoonnetwork",
+   "[303] Disney Channel": "disneychannel",
+   "[305] Nickelodeon": "nickelodeon",
+   "[307] NickJr": "nickjr",
+   "[309] Disney Junior": "disneyjunior",
+   "[ANIPLHD] Animal Planet HD": "animalplanet",
+   "[ANIPL] Animal Planet": "animalplanet",
+   "[CARTNET] Cartoon Network": "cartoonnetwork",
+   "[DISCCH] Discovery Channel": "discoverychannel",
+   "[DISCOHD] Discovery Channel HD": "discoverychannel",
+   "[DISNJMX] Disney Junior": "disneyjunior",
+   "[DISNLS] Disney Channel": "disneychannel",
+   "[HBO2EHD] HBO 2": "hbo2",
+   "[HBO2ENG] HBO 2": "hbo2",
+   "[HBO2LA] HBO 2": "hbo2",
+   "[HBOL] HBO": "hbo",
+   "[HCLI] History": "history",
+   "[HISTOSD] History": "history",
+   "[NCKJRHD] Nick Jr. HD": "nickjr",
+   "[NICKEHD] Nickelodeon HD": "nickelodeon",
+   "[NICKJLM] Nick Jr.": "nickjr",
+   "[NICKJMH] Nick Jr.": "nickjr",
+   "[SONYHD] Sony Movie Channel HD": "sonymoviechannel",
+   "[TLCLASP] TLC": "tlc",
+   "[TLCSWHD] TLC HD": "tlc",
+   "[TNTLC] TNT": "tnt",
+   "[TOONARG] Cartoon Network": "cartoonnetwork",
+   "[USA] USA Network": "usanetwork",
+   "abc10albany": "abc10albany",
+   "abc10miami": "abc10miami",
+   "abc11raleighdurham": "abc11raleighdurham",
+   "abc12sanantonio": "abc12sanantonio",
+   "abc13grandrapids": "abc13grandrapids",
+   "abc13houston": "abc13houston",
+   "abc15phoenix": "abc15phoenix",
+   "abc22savannah": "abc22savannah",
+   "abc24austin": "abc24austin",
+   "abc2portland": "abc2portland",
+   "abc30fresno": "abc30fresno",
+   "abc30stlouis": "abc30stlouis",
+   "abc3shreveport": "abc3shreveport",
+   "abc4pittsburgh": "abc4pittsburgh",
+   "abc4seattle": "abc4seattle",
+   "abc5oklahomacity": "abc5oklahomacity",
+   "abc6knoxville": "abc6knoxville",
+   "abc6philadelphia": "abc6philadelphia",
+   "abc7albuquerque": "abc7albuquerque",
+   "abc7buffalo": "abc7buffalo",
+   "abc7chicago": "abc7chicago",
+   "abc7detroit": "abc7detroit",
+   "abc7sanfrancisco": "abc7sanfrancisco",
+   "abc7washingtondc": "abc7washingtondc",
+   "abc9chattanooga": "abc9chattanooga",
+   "abc9orlando": "abc9orlando",
+   "abc9tucson": "abc9tucson",
+   "abcnewslive": "abcnewslive",
+   "actionmax": "actionmax",
+   "actionmaxwest": "actionmaxwest",
+   "altitudesports": "altitudesports",
+   "animal planet": "animalplanet",
+   "animalplaneteast": "animalplaneteast",
+   "antennatv": "antennatv",
+   "aspire": "aspire",
+   "beteast": "beteast",
+   "bether": "bether",
+   "bigtennetwork": "bigtennetwork",
+   "buzzertv": "buzzertv",
+   "cartoonnetworkeast": "cartoonnetworkeast",
+   "cbs10amarillo": "cbs10amarillo",
+   "cbs10corpuschristi": "cbs10corpuschristi",
+   "cbs10tampabay": "cbs10tampabay",
+   "cbs11dallasfortworth": "cbs11dallasfortworth",
+   "cbs11houston": "cbs11houston",
+   "cbs12cincinnati": "cbs12cincinnati",
+   "cbs13baltimore": "cbs13baltimore",
+   "cbs14dallasfortworth": "cbs14dallasfortworth",
+   "cbs17raleigh": "cbs17raleigh",
+   "cbs19cleveland": "cbs19cleveland",
+   "cbs27lexington": "cbs27lexington",
+   "cbs2losangeles": "cbs2losangeles",
+   "cbs2pittsburgh": "cbs2pittsburgh",
+   "cbs3memphis": "cbs3memphis",
+   "cbs3philadelphia": "cbs3philadelphia",
+   "cbs3springfield": "cbs3springfield",
+   "cbs42austin": "cbs42austin",
+   "cbs4boston": "cbs4boston",
+   "cbs4indianapolis": "cbs4indianapolis",
+   "cbs4stlouis": "cbs4stlouis",
+   "cbs5charleston": "cbs5charleston",
+   "cbs5honolulu": "cbs5honolulu",
+   "cbs62detroit": "cbs62detroit",
+   "cbs6orlando": "cbs6orlando",
+   "cbs7dayton": "cbs7dayton",
+   "cbs8knoxville": "cbs8knoxville",
+   "cbs8lasvegas": "cbs8lasvegas",
+   "cbs9washingtondc": "cbs9washingtondc",
+   "cbslouisville": "cbslouisville",
+   "cbsspokane": "cbsspokane",
+   "cbssportsnetwork": "cbssportsnetwork",
+   "chicagosportsnetwork": "chicagosportsnetwork",
+   "cineboxaction": "cineboxaction",
+   "cinemaxclassics": "cinemaxclassics",
+   "cinemaxeast": "cinemaxeast",
+   "cinemaxwest": "cinemaxwest",
+   "cnbcworld": "cnbcworld",
+   "comettv": "comettv",
+   "cozi": "cozi",
+   "cspan": "cspan",
+   "cspan3": "cspan3",
+   "destinationamerica": "destinationamerica",
+   "discoverychanneleast": "discoverychanneleast",
+   "discoverychannelwest": "discoverychannelwest",
+   "disneychanneleast": "disneychanneleast",
+   "disneychannelwest": "disneychannelwest",
+   "disneyjreast": "disneyjreast",
+   "disneyjrwest": "disneyjrwest",
+   "disneyxdeast": "disneyxdeast",
+   "disneyxdwest": "disneyxdwest",
+   "epix": "epix",
+   "epixhits": "epixhits",
+   "espndeportes": "espndeportes",
+   "espnnews": "espnnews",
+   "fanduelsoutheast": "fanduelsoutheast",
+   "foodnetworkwest": "foodnetworkwest",
+   "fox11greenbay": "fox11greenbay",
+   "fox13memphis": "fox13memphis",
+   "fox13seattle": "fox13seattle",
+   "fox19cincinnati": "fox19cincinnati",
+   "fox43knoxville": "fox43knoxville",
+   "fox45baltimore": "fox45baltimore",
+   "fox46charlotte": "fox46charlotte",
+   "fox4dallasfortworth": "fox4dallasfortworth",
+   "fox50raleigh": "fox50raleigh",
+   "fox57columbia": "fox57columbia",
+   "fox59indianapolis": "fox59indianapolis",
+   "fox5lasvegas": "fox5lasvegas",
+   "fox7austin": "fox7austin",
+   "fox7miami": "fox7miami",
+   "fox8cleveland": "fox8cleveland",
+   "fox8neworleans": "fox8neworleans",
+   "fox9minneapolisstpaul": "fox9minneapolisstpaul",
+   "fox9plusminneapolis": "fox9plusminneapolis",
+   "foxdeportes": "foxdeportes",
+   "foxsoccerplus": "foxsoccerplus",
+   "foxweather": "foxweather",
+   "freeform": "freeform",
+   "fubosportsnetwork": "fubosportsnetwork",
+   "fuse": "fuse",
+   "fxeast": "fxeast",
+   "fxxeast": "fxxeast",
+   "grittv": "grittv",
+   "hallmarkchannel": "hallmarkchannel",
+   "hallmarkdrama": "hallmarkdrama",
+   "hallmarkfamily": "hallmarkfamily",
+   "hallmarkmoviesmysteries": "hallmarkmoviesmysteries",
+   "hbo2west": "hbo2west",
+   "hbocomedy": "hbocomedy",
+   "hbocomedywest": "hbocomedywest",
+   "hbodrama": "hbodrama",
+   "hboeast": "hboeast",
+   "hbohits": "hbohits",
+   "hbosignaturewest": "hbosignaturewest",
+   "hbowest": "hbowest",
+   "hbozone": "hbozone",
+   "hbozonewest": "hbozonewest",
+   "heroesandiconseast": "heroesandiconseast",
+   "hgtvwest": "hgtvwest",
+   "historyeast": "historyeast",
+   "iON TV": "iontv",
+   "ifc": "ifc",
+   "indieplexwest": "indieplexwest",
+   "insp": "insp",
+   "investigationdiscoveryeast": "investigationdiscoveryeast",
+   "investigationdiscoverywest": "investigationdiscoverywest",
+   "lafftv": "lafftv",
+   "lifetimemovienetwork": "lifetimemovienetwork",
+   "marqueesportsnetwork": "marqueesportsnetwork",
+   "masn": "masn",
+   "mgmhits": "mgmhits",
+   "mgmmarquee": "mgmmarquee",
+   "mlbnetwork": "mlbnetwork",
+   "moremax": "moremax",
+   "moremaxwest": "moremaxwest",
+   "motortrendwest": "motortrendwest",
+   "msg": "msg",
+   "my24baltimore": "my24baltimore",
+   "my62kansascity": "my62kansascity",
+   "mytv": "mytv",
+   "nbc10philadelphia": "nbc10philadelphia",
+   "nbc11atlanta": "nbc11atlanta",
+   "nbc11baltimore": "nbc11baltimore",
+   "nbc11minneapolis": "nbc11minneapolis",
+   "nbc11sanfrancisco": "nbc11sanfrancisco",
+   "nbc12phoenix": "nbc12phoenix",
+   "nbc13indianapolis": "nbc13indianapolis",
+   "nbc24fresno": "nbc24fresno",
+   "nbc2orlando": "nbc2orlando",
+   "nbc36austin": "nbc36austin",
+   "nbc3cleveland": "nbc3cleveland",
+   "nbc3lasvegas": "nbc3lasvegas",
+   "nbc41kansascity": "nbc41kansascity",
+   "nbc4albuquerque": "nbc4albuquerque",
+   "nbc4nashville": "nbc4nashville",
+   "nbc4washingtondc": "nbc4washingtondc",
+   "nbc5raleigh": "nbc5raleigh",
+   "nbcgolfchannel": "nbcgolfchannel",
+   "nbcmiami": "nbcmiami",
+   "nbcsportsbayarea": "nbcsportsbayarea",
+   "nbcsportsboston": "nbcsportsboston",
+   "nbcsportsphiladelphia": "nbcsportsphiladelphia",
+   "nbcsportswashington": "nbcsportswashington",
+   "nesnplus": "nesnplus",
+   "news12connecticut": "news12connecticut",
+   "news12longisland": "news12longisland",
+   "news12newjersey": "news12newjersey",
+   "news12newyork": "news12newyork",
+   "newsmax": "newsmax",
+   "newsy": "newsy",
+   "nhlnetwork": "nhlnetwork",
+   "nickelodeoneast": "nickelodeoneast",
+   "nickelodeonwest": "nickelodeonwest",
+   "nickjreast": "nickjreast",
+   "nickjrwest": "nickjrwest",
+   "oneamericanews": "oneamericanews",
+   "oxygen": "oxygen",
+   "oxygeneast": "oxygeneast",
+   "oxygenwest": "oxygenwest",
+   "pbs": "pbs",
+   "pbskids": "pbskids",
+   "pbsnewyork": "pbsnewyork",
+   "pixl": "pixl",
+   "pursuitchannel": "pursuitchannel",
+   "reelz": "reelz",
+   "science": "science",
+   "screenpixwesternsus": "screenpixwesternsus",
+   "scrippsnews": "scrippsnews",
+   "secnetwork": "secnetwork",
+   "showtime": "showtime",
+   "showtime2": "showtime2",
+   "showtime2west": "showtime2west",
+   "showtimebet": "showtimebet",
+   "showtimebetwest": "showtimebetwest",
+   "showtimeeast": "showtimeeast",
+   "showtimeextreme": "showtimeextreme",
+   "showtimefamilyzonewest": "showtimefamilyzonewest",
+   "showtimenext": "showtimenext",
+   "showtimeshowcase": "showtimeshowcase",
+   "showtimewest": "showtimewest",
+   "showtimewomen": "showtimewomen",
+   "shoxbet": "shoxbet",
+   "smithsonianeast": "smithsonianeast",
+   "smithsonianwest": "smithsonianwest",
+   "sonymoviechannel": "sonymoviechannel",
+   "sonymovies": "sonymovies",
+   "spectrumsportsnet": "spectrumsportsnet",
+   "spectrumsportsnetdodgers": "spectrumsportsnetdodgers",
+   "spectrumsportsnetla": "spectrumsportsnetla",
+   "spectrumsportsnetlakers": "spectrumsportsnetlakers",
+   "starttv": "starttv",
+   "starzcomedy": "starzcomedy",
+   "starzcomedywest": "starzcomedywest",
+   "starzeast": "starzeast",
+   "starzedge": "starzedge",
+   "starzedgewest": "starzedgewest",
+   "starzencoreaction": "starzencoreaction",
+   "starzencoreblack": "starzencoreblack",
+   "starzencoreclassic": "starzencoreclassic",
+   "starzencoresuspense": "starzencoresuspense",
+   "starzencorewesterns": "starzencorewesterns",
+   "starzinblack": "starzinblack",
+   "starzwest": "starzwest",
+   "tastemade": "tastemade",
+   "tbseast": "tbseast",
+   "tbswest": "tbswest",
+   "tcmwest": "tcmwest",
+   "telemundoelpaso": "telemundoelpaso",
+   "telemundohouston": "telemundohouston",
+   "telemundomiami": "telemundomiami",
+   "telemundonewyork": "telemundonewyork",
+   "tennischannel": "tennischannel",
+   "thecowboychannel": "thecowboychannel",
+   "theweatherchannel": "theweatherchannel",
+   "tlceast": "tlceast",
+   "tlcwest": "tlcwest",
+   "tnteast": "tnteast",
+   "truTV HD (Pacific)": "trutvwest",
+   "trutvwest": "trutvwest",
+   "tudn": "tudn",
+   "tvland": "tvland",
+   "tvlandwest": "tvlandwest",
+   "univisiondallasfortworth": "univisiondallasfortworth",
+   "univisionhouston": "univisionhouston",
+   "univisionmiami": "univisionmiami",
+   "vice": "vice",
+   "wetv": "wetv",
+   "willowcricket": "willowcricket",
+   "willowcricketextra": "willowcricketextra",
+   "worldfishingnetwork": "worldfishingnetwork",
+   "yesnetwork": "yesnetwork"
+  }
+ }
+}

@@ -22,6 +22,10 @@ const SECRET_PLACEHOLDERS: &[&str] = &[
     "session-secret",
 ];
 
+/// Aggregated iptv-org EPG (epgshare01).
+pub const DEFAULT_EXTERNAL_EPG_URL: &str =
+    "https://epgshare01.online/epgshare01/epg_ripper_ALL_SOURCES1.xml.gz";
+
 #[derive(Clone)]
 pub struct Config {
     pub host: String,
@@ -31,6 +35,10 @@ pub struct Config {
     pub xtream_password: String,
     pub iptv_db_path: String,
     pub iptv_epg_path: String,
+    /// Third-party XMLTV feeds layered under the provider's (iptv-org via
+    /// epgshare01). Unset or blank means the default; a list of only commas
+    /// means none.
+    pub iptv_external_epg_urls: Vec<String>,
     pub iptv_max_concurrent_streams: u64,
     pub iptv_max_upstream_connections: u64,
     pub iptv_feed_check: bool,
@@ -108,6 +116,15 @@ impl Config {
             xtream_password: raw("XTREAM_PASSWORD", ""),
             iptv_db_path: raw("IPTV_DB_PATH", "./data/iptv.db"),
             iptv_epg_path: opt("IPTV_EPG_PATH").unwrap_or_else(|| "/xmltv.php".into()),
+            iptv_external_epg_urls: match opt("IPTV_EXTERNAL_EPG_URLS") {
+                None => vec![DEFAULT_EXTERNAL_EPG_URL.to_string()],
+                Some(v) => v
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect(),
+            },
             iptv_max_concurrent_streams: pos("IPTV_MAX_CONCURRENT_STREAMS", 4)?,
             iptv_max_upstream_connections: pos("IPTV_MAX_UPSTREAM_CONNECTIONS", 2)?,
             iptv_feed_check: get("IPTV_FEED_CHECK").as_deref() != Some("0"),
@@ -167,7 +184,11 @@ fn check_secret(name: &str, value: &str) -> Result<(), String> {
 #[cfg(test)]
 pub(crate) fn test_config(pairs: &[(&str, &str)]) -> Config {
     let mut map: std::collections::HashMap<String, String> =
-        [("STREAM_TOKEN_SECRET", "s".repeat(40))]
+        // No test reaches epgshare01: external feeds are opt-in per test.
+        [
+            ("STREAM_TOKEN_SECRET", "s".repeat(40)),
+            ("IPTV_EXTERNAL_EPG_URLS", ",".to_string()),
+        ]
             .into_iter()
             .map(|(k, v)| (k.to_string(), v))
             .collect();
@@ -196,6 +217,22 @@ mod tests {
             ("XTREAM_PASSWORD", "p"),
         ]);
         assert!(c.sync_enabled());
+    }
+
+    #[test]
+    fn external_epg_urls_parse_like_env_ts() {
+        let urls = |v: &str| test_config(&[("IPTV_EXTERNAL_EPG_URLS", v)]).iptv_external_epg_urls;
+        assert_eq!(urls("   "), vec![DEFAULT_EXTERNAL_EPG_URL]);
+        assert_eq!(
+            urls(" https://a/x.xml , , https://b/y.xml.gz "),
+            vec!["https://a/x.xml", "https://b/y.xml.gz"]
+        );
+        assert!(urls(",").is_empty());
+        let unset = Config::from_lookup(|k| (k == "STREAM_TOKEN_SECRET").then(|| "s".repeat(40)));
+        assert_eq!(
+            unset.unwrap().iptv_external_epg_urls,
+            vec![DEFAULT_EXTERNAL_EPG_URL]
+        );
     }
 
     #[test]

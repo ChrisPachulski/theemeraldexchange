@@ -1,5 +1,5 @@
-//! Catalog sync (the catalog half of `syncOnce` in iptvSync.ts) and the admin
-//! sync-job table (iptvSyncJobs.ts).
+//! Catalog sync (`syncOnce` in iptvSync.ts; the EPG half is `epg::refresh`)
+//! and the admin sync-job table (iptvSyncJobs.ts).
 //!
 //! One run fetches categories and the three catalog lists, expands every series
 //! 4-wide, then writes everything in ONE transaction: upsert, delete what this
@@ -11,7 +11,7 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::SqlitePool;
 
@@ -92,6 +92,12 @@ impl CatalogSync {
     /// Single-flight: a call while another run is in progress returns `Busy`.
     /// Records `last_sync` = `ok` or `error:<message>` either way.
     pub async fn sync_once(&self) -> Result<SyncResult, String> {
+        self.sync_at(Utc::now()).await
+    }
+
+    /// `sync_once` with the clock started at `started`; later times are
+    /// `started` plus elapsed, so a test can pin the EPG window.
+    pub(crate) async fn sync_at(&self, started: DateTime<Utc>) -> Result<SyncResult, String> {
         if self
             .running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -100,9 +106,10 @@ impl CatalogSync {
             return Ok(SyncResult::Busy { busy: true });
         }
         let _release = Release(&self.running);
-        let started = Utc::now();
-        let outcome = self.run(&iso(started)).await;
-        let finished = Utc::now();
+        let t0 = std::time::Instant::now();
+        let now = || started + chrono::TimeDelta::from_std(t0.elapsed()).unwrap_or_default();
+        let outcome = self.run(started, now).await;
+        let finished = now();
         match outcome {
             Ok(mut stats) => {
                 put_state(&self.pool, "last_sync", "ok", &iso(finished))
@@ -129,7 +136,12 @@ impl CatalogSync {
         }
     }
 
-    async fn run(&self, fetched_at: &str) -> Result<SyncStats, String> {
+    async fn run(
+        &self,
+        started: DateTime<Utc>,
+        now: impl Fn() -> DateTime<Utc>,
+    ) -> Result<SyncStats, String> {
+        let fetched_at = &iso(started);
         let x = Client::new(
             Creds::from_config(&self.config)?,
             self.config.iptv_list_timeout_ms,
@@ -248,7 +260,9 @@ impl CatalogSync {
         exec(&mut tx, LINK_TITLES, &[]).await?;
         tx.commit().await.map_err(db_err)?;
 
-        // Planner stats only; never fails the sync.
+        let epg = crate::epg::refresh(&self.pool, &self.config, now()).await?;
+
+        // Planner stats for the guide's channel/time lookups; never fails the sync.
         if let Err(e) = sqlx::query("PRAGMA optimize").execute(&self.pool).await {
             tracing::warn!("pragma optimize failed: {e}");
         }
@@ -258,7 +272,7 @@ impl CatalogSync {
             vod: vod.len(),
             series: series.len(),
             episodes: episodes.len(),
-            epg: 0,
+            epg,
             categories: live_cats.len() + vod_cats.len() + series_cats.len(),
             duration_ms: 0,
             started_at: String::new(),
@@ -718,6 +732,83 @@ mod tests {
         );
         let (value, _) = get_state(&sync.pool, "last_sync").await.unwrap().unwrap();
         assert_eq!(value, "error:xtream_credentials_missing");
+    }
+
+    fn json_fixture(name: &str) -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name);
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    }
+
+    /// The scenario in tests/fixtures/epg-sync-scenario.json (panel catalog,
+    /// provider XMLTV, a plain and a gzipped external feed, two syncs) leaves
+    /// epg_programs and epg_resolved_id exactly as the TS sync did
+    /// (epg-goldens.json, from gen-epg-goldens.ts).
+    #[tokio::test]
+    async fn a_full_mock_sync_matches_the_ts_goldens() {
+        let scenario = json_fixture("epg-sync-scenario.json");
+        let golden = json_fixture("epg-goldens.json");
+        let dir = tempfile::tempdir().unwrap();
+        let pool = crate::db::open(dir.path().join("iptv.db").to_str().unwrap())
+            .await
+            .unwrap();
+        let panel = Panel::start().await;
+        panel.set("get_live_categories", scenario["live_categories"].clone());
+        panel.set("get_live_streams", scenario["live_streams"].clone());
+        let paths: Vec<&str> = scenario["external_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_str().unwrap())
+            .collect();
+        let urls: Vec<String> = paths.iter().map(|p| panel.url(p)).collect();
+        let config = crate::config::test_config(&[
+            ("XTREAM_HOST", &panel.base),
+            ("XTREAM_USERNAME", "u"),
+            ("XTREAM_PASSWORD", "p"),
+            ("IPTV_EXTERNAL_EPG_URLS", &urls.join(",")),
+        ]);
+        let sync = CatalogSync::new(pool, Arc::new(config));
+        let now: DateTime<Utc> = scenario["now"].as_str().unwrap().parse().unwrap();
+        for (i, step) in scenario["syncs"].as_array().unwrap().iter().enumerate() {
+            panel.set_feed("/xmltv.php", step["provider_xml"].as_str().unwrap());
+            for path in &paths {
+                let xml = step["external"][*path].as_str().unwrap();
+                if path.ends_with(".gz") {
+                    let mut e =
+                        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                    std::io::Write::write_all(&mut e, xml.as_bytes()).unwrap();
+                    panel.set_feed(path, e.finish().unwrap());
+                } else {
+                    panel.set_feed(path, xml);
+                }
+            }
+            let stats = done(sync.sync_at(now).await.unwrap());
+            let want = &golden["syncs"][i];
+            assert_eq!(
+                stats.epg as u64,
+                want["epg"].as_u64().unwrap(),
+                "sync {i} epg count"
+            );
+            for (sql, key) in [
+                (
+                    "SELECT json_group_array(json_object('channel_id', channel_id, 'start_utc', start_utc,
+                       'stop_utc', stop_utc, 'title', title, 'description', description, 'derived', derived))
+                     FROM (SELECT * FROM epg_programs ORDER BY channel_id, start_utc)",
+                    "epg_programs",
+                ),
+                (
+                    "SELECT json_group_array(json_object('stream_id', stream_id, 'epg_resolved_id', epg_resolved_id))
+                     FROM (SELECT * FROM channels ORDER BY stream_id)",
+                    "channels",
+                ),
+            ] {
+                let text: String = sqlx::query_scalar(sql).fetch_one(&sync.pool).await.unwrap();
+                let got: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(got, want[key], "sync {i} {key}");
+            }
+        }
     }
 
     async fn settle(sync: &CatalogSync, id: &str) -> SyncJob {
