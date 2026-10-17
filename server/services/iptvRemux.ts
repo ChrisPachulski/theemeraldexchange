@@ -241,6 +241,10 @@ export const TS_STORM_LINES = 30
 const TS_STORM_WINDOW_MS = 10_000
 /** A dial younger than this that storms is not relaunched in place; the session ends. */
 const TS_STORM_RELAUNCH_FLOOR_MS = 20_000
+/** One discontinuity bigger than this (AV_TIME_BASE µs = 1h) freezes segment output (prod 2026-10-03). */
+export const TS_JUMP_RELAUNCH_US = 3_600_000_000
+/** No new segment for this long after the first one = a wedged muxer. Provider burst gaps reach ~7.5s. */
+export const SEGMENT_STALL_MS = 12_000
 const DEAD_FEED_MEMORY_MS = 10 * 60_000
 const deadFeed = new Map<string, number>() // streamId -> expiresAt (ms)
 
@@ -604,10 +608,40 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
   // AVPlayer stalled on them, the app died recovering. A fresh dial re-bases
   // cleanly, so a storm is answered by SIGKILL (not a dead-feed strike) and the
   // manifest poll's respawn. Background rate on this provider is ~2 lines/10s.
+  //
+  // Single-jump freeze (prod 2026-10-03): ONE provider jump of >150h never trips
+  // the storm count, but ffmpeg stays alive writing no segments while A/V diverge
+  // (reproduced on prod ffmpeg 7.1), so the client starves. Any single jump over
+  // an hour, or a muxer that stops cutting segments, gets the same in-place relaunch.
   let stormCount = 0
   let stormWindowStart = 0
   let relaunch = false
+  let killed = false
+  let stallTimer: NodeJS.Timeout | undefined
+  const kill = (reason: string, extra: Record<string, unknown>) => {
+    if (killed) return
+    killed = true
+    clearTimeout(stallTimer)
+    // Relaunch in place only once this dial proved itself (produced output and
+    // ran past the floor); a fault on a young dial means the fresh connection is
+    // itself bad, and relaunching would just churn provider connections — let
+    // the session end and the reconnect throttle apply.
+    relaunch = sawOutput && Date.now() - spawnedAt >= TS_STORM_RELAUNCH_FLOOR_MS
+    log.warn(reason + ' — ' + (relaunch ? 'relaunching ffmpeg in place to re-base timestamps' : 'ending the session'), {
+      sessionId,
+      streamId: opts.streamId,
+      livedMs: Date.now() - spawnedAt,
+      ...extra,
+    })
+    proc.kill('SIGKILL')
+  }
+  const armStallWatchdog = () => {
+    clearTimeout(stallTimer)
+    stallTimer = setTimeout(() => kill('no new segment', { stallMs: SEGMENT_STALL_MS }), SEGMENT_STALL_MS)
+    stallTimer.unref()
+  }
   proc.stderr?.on('data', (chunk: Buffer) => {
+    if (killed) return
     const text = scrubXtreamCreds(chunk.toString())
     for (const raw of text.split('\n')) {
       const line = raw.trim()
@@ -633,26 +667,20 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
           }
         }
       }
+      if (/Opening '[^']*seg_\d+\.ts' for writing/.test(line)) armStallWatchdog()
       if (line.includes('timestamp discontinuity')) {
+        const jump = Number(line.match(/timestamp discontinuity \(stream id=\d+\): (-?\d+)/)?.[1] ?? 0)
+        if (Math.abs(jump) > TS_JUMP_RELAUNCH_US) {
+          kill('single timestamp jump over an hour', { jumpHours: Math.round(jump / 3.6e7) / 100 })
+          return
+        }
         const now = Date.now()
         if (now - stormWindowStart > TS_STORM_WINDOW_MS) {
           stormWindowStart = now
           stormCount = 0
         }
         if (++stormCount >= TS_STORM_LINES) {
-          // Relaunch in place only once this dial proved itself (produced output
-          // and ran past the floor); a storm on a young dial means the fresh
-          // connection is itself bad, and relaunching would just churn provider
-          // connections — let the session end and the reconnect throttle apply.
-          relaunch = sawOutput && Date.now() - spawnedAt >= TS_STORM_RELAUNCH_FLOOR_MS
-          log.warn('timestamp-discontinuity storm — ' + (relaunch ? 'relaunching ffmpeg in place to re-base timestamps' : 'ending the session'), {
-            sessionId,
-            streamId: opts.streamId,
-            lines: stormCount,
-            windowMs: TS_STORM_WINDOW_MS,
-            livedMs: Date.now() - spawnedAt,
-          })
-          proc.kill('SIGKILL')
+          kill('timestamp-discontinuity storm', { lines: stormCount, windowMs: TS_STORM_WINDOW_MS })
           return
         }
       }
@@ -660,11 +688,13 @@ export function startRemuxSession(opts: StartRemuxOpts): StartRemuxResult | null
     }
   })
   proc.on('error', (err) => {
+    clearTimeout(stallTimer)
     log.warn('ffmpeg error', { sessionId, message: scrubXtreamCreds(err.message) })
     sessions.delete(sessionId)
     removeDir(dir)
   })
   proc.on('exit', (code, signal) => {
+    clearTimeout(stallTimer)
     const livedMs = Date.now() - spawnedAt
     // A clean, fast EOF (code 0, not signalled, under the placeholder ceiling)
     // is a dead-channel stub, not a real live feed — tag it so the next tune
