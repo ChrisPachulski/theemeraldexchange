@@ -570,6 +570,28 @@ def test_ranker_learns_from_household_judgments(conn) -> None:
     assert after[CAND_NEAR] - after[CAND_FAR] > neutral[CAND_NEAR] - neutral[CAND_FAR]
 
 
+def test_ranker_scores_stay_finite_without_dislikes(conn) -> None:
+    # 2026-10-16 review item 2: an empty negative class made rate_n 0, the
+    # log-odds infinite, and every score null (then /events/impressions 422'd).
+    owned = [970 + i for i in range(10)]
+    for i, t in enumerate(owned):
+        add_title(conn, t, title=f"Owned Comedy {i}", vec=axis_vec({1: 1.0, 5 + i: 0.1}), genres=(35,))
+    ranker.warm(conn)
+    library = [{"tmdb_id": t, "title": f"Owned Comedy {i}"} for i, t in enumerate(owned)]
+    ctx = _ctx(conn, library=library, feedback=[], household_rejections=[])
+    result = ranker.score(ctx, conn, n=20, params={})
+    assert result.diag["path"] == "ranker" and result.items
+    assert all(np.isfinite(it.score) for it in result.items)
+
+
+def test_logodds_finite_with_zero_or_one_negative() -> None:
+    from scipy import sparse
+    m = sparse.csr_matrix(np.array([[1, 0], [1, 0], [0, 1], [1, 1]], dtype=np.float64))
+    for neg in (np.array([], dtype=np.int64), np.array([2])):
+        for lo in ranker._logodds(m, np.array([0, 1]), neg):
+            assert np.all(np.isfinite(lo)), (neg, lo)
+
+
 def test_ranker_cold_start_fallback(conn) -> None:
     ctx = _ctx(conn, library=[], feedback=[], household_rejections=[])
     result = ranker.score(ctx, conn, n=5, params={})

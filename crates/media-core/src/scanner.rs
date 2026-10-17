@@ -581,17 +581,20 @@ async fn prune_missing_files(
 }
 
 /// Remove watch-state rows whose `(media_kind, media_id)` no longer resolves to
-/// an existing movie/episode (orphans left by title deletion, or pre-existing
-/// forged rows). Returns the number of rows removed. The relationship is
-/// polymorphic (media_kind ∈ {movie, episode}), so a SQL foreign key cannot
-/// enforce it (§7-8); this GC — wired into the end of every scan pass — is how
-/// orphans are reaped.
+/// an existing item of that kind (orphans left by title deletion, or
+/// pre-existing forged rows). Returns the number of rows removed. The
+/// relationship is polymorphic (every kind the 0015 CHECK allows), so a SQL
+/// foreign key cannot enforce it (§7-8); this GC — wired into the end of every
+/// scan pass — is how orphans are reaped.
 pub async fn gc_orphan_watch_state(db: &Db) -> Result<u64, sqlx::Error> {
     let res = sqlx::query(
         "DELETE FROM media_watch_state \
-         WHERE (media_kind = 'movie'   AND media_id NOT IN (SELECT id FROM movies)) \
-            OR (media_kind = 'episode' AND media_id NOT IN (SELECT id FROM episodes)) \
-            OR media_kind NOT IN ('movie', 'episode')",
+         WHERE (media_kind = 'movie'           AND media_id NOT IN (SELECT id FROM movies)) \
+            OR (media_kind = 'episode'         AND media_id NOT IN (SELECT id FROM episodes)) \
+            OR (media_kind = 'track'           AND media_id NOT IN (SELECT id FROM tracks)) \
+            OR (media_kind = 'audiobook'       AND media_id NOT IN (SELECT id FROM audiobooks)) \
+            OR (media_kind = 'podcast_episode' AND media_id NOT IN (SELECT id FROM podcast_episodes)) \
+            OR (media_kind = 'video'           AND media_id NOT IN (SELECT id FROM youtube_videos))",
     )
     .execute(&db.pool)
     .await?;
@@ -1259,11 +1262,25 @@ async fn upsert_movie(
 
     match existing {
         Some(id) => {
+            // A renamed file arrives as a new media_files row; follow it once the
+            // old path is gone, or pruning that path cascade-deletes the movie.
+            // A second rip of a film whose first file is still there leaves it be.
+            let current: Option<String> = sqlx::query_scalar(
+                "SELECT f.path FROM movies m JOIN media_files f ON f.id = m.file_id WHERE m.id = ?",
+            )
+            .bind(id)
+            .fetch_optional(&db.pool)
+            .await?;
+            let follow = match current {
+                Some(path) => !tokio::fs::try_exists(&path).await.unwrap_or(true),
+                None => true,
+            };
             sqlx::query(
                 "UPDATE movies SET title = ?, year = ?, tmdb_id = COALESCE(?, tmdb_id), \
                  imdb_id = COALESCE(?, imdb_id), overview = COALESCE(?, overview), \
                  poster_path = COALESCE(?, poster_path), \
-                 content_rating = COALESCE(?, content_rating) WHERE id = ?",
+                 content_rating = COALESCE(?, content_rating), \
+                 file_id = CASE WHEN ? THEN ? ELSE file_id END WHERE id = ?",
             )
             .bind(final_title)
             .bind(final_year)
@@ -1272,6 +1289,8 @@ async fn upsert_movie(
             .bind(&overview)
             .bind(&poster_path)
             .bind(&content_rating)
+            .bind(follow)
+            .bind(file_id)
             .bind(id)
             .execute(&db.pool)
             .await?;
@@ -5280,6 +5299,167 @@ mod tests {
             "the skipped root is surfaced as an error"
         );
         assert_eq!(count(&db, "tracks").await, 1, "the track survives");
+    }
+}
+
+#[cfg(test)]
+mod movie_rename_tests {
+    use super::*;
+
+    async fn file_row(db: &Db, path: &std::path::Path) -> i64 {
+        sqlx::query(
+            "INSERT INTO media_files (path, size_bytes, mtime, audio_tracks_json, subtitle_tracks_json, scanned_at) \
+             VALUES (?, 1, 't', '[]', '[]', 't')",
+        )
+        .bind(path.to_str().unwrap())
+        .execute(&db.pool)
+        .await
+        .unwrap()
+        .last_insert_rowid()
+    }
+
+    fn heat() -> TmdbMatch {
+        TmdbMatch {
+            tmdb_id: 949,
+            title: "Heat".into(),
+            year: Some(1995),
+            imdb_id: None,
+            tvdb_id: None,
+            overview: None,
+            poster_path: None,
+            content_rating: None,
+        }
+    }
+
+    async fn movie_file(db: &Db) -> Option<i64> {
+        sqlx::query_scalar("SELECT file_id FROM movies WHERE tmdb_id = 949")
+            .fetch_optional(&db.pool)
+            .await
+            .unwrap()
+    }
+
+    // 2026-10-16 review item 8: the matched UPDATE never moved file_id, so the
+    // prune of the old path cascade-deleted the movie and its watch state.
+    #[tokio::test]
+    async fn renaming_a_matched_movie_keeps_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (old, new) = (
+            dir.path().join("Heat.1995.mkv"),
+            dir.path().join("Heat (1995).mkv"),
+        );
+        std::fs::write(&old, b"x").unwrap();
+        let db = Db::connect_memory().await.unwrap();
+        let f1 = file_row(&db, &old).await;
+        upsert_movie(&db, "Heat", Some(1995), f1, "t", Some(&heat()))
+            .await
+            .unwrap();
+
+        std::fs::rename(&old, &new).unwrap();
+        let f2 = file_row(&db, &new).await;
+        upsert_movie(&db, "Heat", Some(1995), f2, "t", Some(&heat()))
+            .await
+            .unwrap();
+        prune_missing_files(&db, &[dir.path().to_path_buf()])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            movie_file(&db).await,
+            Some(f2),
+            "the movie follows its file"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_second_rip_does_not_steal_the_movie() {
+        let dir = tempfile::tempdir().unwrap();
+        let (hd, uhd) = (
+            dir.path().join("Heat.1080p.mkv"),
+            dir.path().join("Heat.2160p.mkv"),
+        );
+        std::fs::write(&hd, b"x").unwrap();
+        std::fs::write(&uhd, b"x").unwrap();
+        let db = Db::connect_memory().await.unwrap();
+        let f1 = file_row(&db, &hd).await;
+        let f2 = file_row(&db, &uhd).await;
+        upsert_movie(&db, "Heat", Some(1995), f1, "t", Some(&heat()))
+            .await
+            .unwrap();
+        upsert_movie(&db, "Heat", Some(1995), f2, "t", Some(&heat()))
+            .await
+            .unwrap();
+        assert_eq!(movie_file(&db).await, Some(f1));
+    }
+}
+
+#[cfg(test)]
+mod watch_state_gc_tests {
+    use super::*;
+
+    // 2026-10-16 review item 7: the GC deleted every row whose kind was not
+    // movie/episode, so each scan erased music, audiobook, podcast and YouTube
+    // progress that migrations 0007/0015 allow.
+    #[tokio::test]
+    async fn gc_keeps_live_rows_of_every_kind_and_drops_orphans() {
+        let db = Db::connect_memory().await.unwrap();
+        for (i, path) in ["/m/a.flac", "/m/b.m4b", "/m/c.mp4"].iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO media_files (id, path, size_bytes, mtime, audio_tracks_json, subtitle_tracks_json, scanned_at) \
+                 VALUES (?, ?, 1, 't', '[]', '[]', 't')",
+            )
+            .bind(i as i64 + 1)
+            .bind(path)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO artists (id, name) VALUES (1, 'A'); \
+             INSERT INTO albums (id, artist_id, title) VALUES (1, 1, 'B'); \
+             INSERT INTO tracks (id, album_id, media_file_id, title) VALUES (10, 1, 1, 'T'); \
+             INSERT INTO audiobooks (id, media_file_id, author, title) VALUES (20, 2, 'X', 'Y'); \
+             INSERT INTO podcasts (id, feed_url, title, added_at) VALUES (1, 'https://f', 'P', 't'); \
+             INSERT INTO podcast_episodes (id, podcast_id, guid, title, audio_url) VALUES (30, 1, 'g', 'E', 'https://a'); \
+             INSERT INTO youtube_videos (id, media_file_id, channel, channel_dir, title) VALUES (40, 3, 'C', 'c', 'V');",
+        )
+        .execute(&db.pool)
+        .await
+        .unwrap();
+        let rows = [
+            ("track", 10),
+            ("audiobook", 20),
+            ("podcast_episode", 30),
+            ("video", 40),
+            ("track", 99),
+        ];
+        for (kind, id) in rows {
+            sqlx::query("INSERT INTO media_watch_state (sub, media_kind, media_id, position_secs, watched_at) VALUES ('plex:1', ?, ?, 5, 't')")
+                .bind(kind)
+                .bind(id)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            gc_orphan_watch_state(&db).await.unwrap(),
+            1,
+            "only the orphan track row goes"
+        );
+        let left: Vec<(String, i64)> =
+            sqlx::query_as("SELECT media_kind, media_id FROM media_watch_state ORDER BY media_id")
+                .fetch_all(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            left,
+            vec![
+                ("track".into(), 10),
+                ("audiobook".into(), 20),
+                ("podcast_episode".into(), 30),
+                ("video".into(), 40)
+            ]
+        );
     }
 }
 

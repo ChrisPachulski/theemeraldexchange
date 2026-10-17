@@ -190,14 +190,18 @@ export function revokeMemberSafely(opts: {
       }
     }
 
+    const now = new Date().toISOString()
     const changed = db
       .prepare(
         `UPDATE members
             SET revoked_at = ?
           WHERE sub = ? AND revoked_at IS NULL`,
       )
-      .run(new Date().toISOString(), opts.targetSub)
-    return changed.changes === 1 ? 'revoked' : 'not_found'
+      .run(now, opts.targetSub)
+    if (changed.changes !== 1) return 'not_found'
+    // Their invites go too, as on self-revocation.
+    db.prepare(`UPDATE invites SET revoked_at = ? WHERE issued_by = ? AND revoked_at IS NULL`).run(now, opts.targetSub)
+    return 'revoked'
   })
 
   return tx.immediate()

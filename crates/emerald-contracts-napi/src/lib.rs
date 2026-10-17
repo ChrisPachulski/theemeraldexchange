@@ -331,3 +331,42 @@ pub fn pii_scrub_value(json_str: String) -> Result<String> {
     scrub_value(&mut v);
     serde_json::to_string(&v).map_err(|e| Error::from_reason(format!("{}", e)))
 }
+
+// ---------------------------------------------------------------------------
+// XMLTV parsing (server/services/iptvEpg.ts streamXmltv)
+// ---------------------------------------------------------------------------
+
+mod xmltv;
+
+/// Incremental XMLTV parser. Each call returns the rows completed so far as a
+/// JSON string `{programmes, channels}`: one string crosses the boundary per
+/// chunk instead of millions of objects.
+#[napi]
+pub struct XmltvParser {
+    inner: xmltv::Parser,
+}
+
+#[napi]
+impl XmltvParser {
+    #[napi(constructor)]
+    pub fn new(sniff_channels: bool) -> Self {
+        XmltvParser {
+            inner: xmltv::Parser::new(sniff_channels),
+        }
+    }
+
+    #[napi]
+    pub fn push(&mut self, chunk: Buffer) -> Result<String> {
+        batch_json(self.inner.push(chunk.as_ref()))
+    }
+
+    #[napi]
+    pub fn finish(&mut self) -> Result<String> {
+        batch_json(self.inner.finish())
+    }
+}
+
+fn batch_json(batch: std::result::Result<xmltv::Batch, String>) -> Result<String> {
+    let batch = batch.map_err(Error::from_reason)?;
+    serde_json::to_string(&batch).map_err(|e| Error::from_reason(format!("{}", e)))
+}

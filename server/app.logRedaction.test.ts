@@ -28,6 +28,17 @@ describe('redactRequestSecrets (MED-18)', () => {
     )
   })
 
+  // 2026-10-16 review item 6: /api/auth/workos/start reads ?invite=, and the
+  // WorkOS callback ?code=; both printed in clear.
+  it('redacts the invite code and the WorkOS authorization code', () => {
+    expect(redactRequestSecrets('<-- GET /api/auth/workos/start?invite=INVITE-SECRET&intent=web')).toBe(
+      '<-- GET /api/auth/workos/start?invite=[redacted]&intent=web',
+    )
+    expect(redactRequestSecrets('<-- GET /api/auth/workos/callback?code=01JAUTHCODE&state=n0nce')).toBe(
+      '<-- GET /api/auth/workos/callback?code=[redacted]&state=n0nce',
+    )
+  })
+
   it('leaves non-token lines untouched', () => {
     const line = '--> GET /api/health 200 1ms'
     expect(redactRequestSecrets(line)).toBe(line)

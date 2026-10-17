@@ -805,6 +805,16 @@ export default function IptvPlayer({
   useEffect(() => {
     preferredAudioRef.current = preferredAudioLanguage
   }, [preferredAudioLanguage])
+  // Same for the engine's callbacks: a parent passing one inline (a new
+  // function every render) tore the engine down on every re-render. Only
+  // whether each is given changes how the engine is built.
+  const callbacksRef = useRef({ onDeliveryStruggling, onSeekableEndUpdate, onLiveLost })
+  useEffect(() => {
+    callbacksRef.current = { onDeliveryStruggling, onSeekableEndUpdate, onLiveLost }
+  }, [onDeliveryStruggling, onSeekableEndUpdate, onLiveLost])
+  const escalates = Boolean(onDeliveryStruggling)
+  const reportsSeekableEnd = Boolean(onSeekableEndUpdate)
+  const reportsLiveLost = Boolean(onLiveLost)
 
   // Hand the element to the owner (custom controls). Mount-scoped: the
   // <video> itself persists across engine swaps, so this fires once.
@@ -866,6 +876,11 @@ export default function IptvPlayer({
 
     let cancelled = false
     let cleanupEngine: (() => void) | undefined
+    const onDeliveryStruggling = escalates ? () => callbacksRef.current.onDeliveryStruggling?.() : undefined
+    const onSeekableEndUpdate = reportsSeekableEnd
+      ? (secs: number) => callbacksRef.current.onSeekableEndUpdate?.(secs)
+      : undefined
+    const onLiveLost = reportsLiveLost ? (reason: LiveLostReason) => callbacksRef.current.onLiveLost?.(reason) : undefined
 
     const resetTracks = () => {
       setAudioTracks([])
@@ -1263,7 +1278,7 @@ export default function IptvPlayer({
       resetVideo()
       resetTracks()
     }
-  }, [autoPlay, grant, vodHls, pinnedDurationSecs, onDeliveryStruggling, onSeekableEndUpdate, onLiveLost, finite, reloadNonce])
+  }, [autoPlay, grant, vodHls, pinnedDurationSecs, escalates, reportsSeekableEnd, reportsLiveLost, finite, reloadNonce])
 
   const chooseAudioTrack = (trackId: number) => {
     const applied = applyAudioTrack(

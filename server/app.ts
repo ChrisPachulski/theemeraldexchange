@@ -108,7 +108,7 @@ app.use('*', async (c, next) => {
 // artifacts in the URL. Any logger that prints the query string must scrub
 // them even when the route ultimately rejects the request.
 const SECRET_QUERY_RE =
-  /([?&](?:t|u|token|pinId|inviteCode|invite_code|idToken|id_token)=)[^&\s]+/gi
+  /([?&](?:t|u|token|pinId|invite|inviteCode|invite_code|code|idToken|id_token)=)[^&\s]+/gi
 export function redactRequestSecrets(line: string): string {
   return line.replace(SECRET_QUERY_RE, '$1[redacted]')
 }

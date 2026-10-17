@@ -203,21 +203,30 @@ async function getJson(url: string, label: string): Promise<unknown> {
   return res.json()
 }
 
+// The catalog lists are JSON arrays; anything else (an auth-error object, null,
+// an HTML page) must fail the sync. Parsed as [], it made reconcileCatalog
+// delete that whole kind.
+async function getList(url: string, label: string): Promise<unknown[]> {
+  const raw = await getJson(url, label)
+  if (!Array.isArray(raw)) throw new Error(`${label}_not_a_list`)
+  return raw
+}
+
 export async function fetchCategories(
   kind: 'live' | 'vod' | 'series',
   creds: XtreamCreds = credsFromEnv(),
 ): Promise<CategoryRow[]> {
   const action = kind === 'live' ? 'get_live_categories' : kind === 'vod' ? 'get_vod_categories' : 'get_series_categories'
-  return parseCategoriesPayload(await getJson(buildPlayerApiUrl(creds, action), `xtream.${action}`))
+  return parseCategoriesPayload(await getList(buildPlayerApiUrl(creds, action), `xtream.${action}`))
 }
 export async function fetchLiveStreams(fetchedAt: string, creds: XtreamCreds = credsFromEnv()): Promise<ChannelRow[]> {
-  return parseLiveStreams(await getJson(buildPlayerApiUrl(creds, 'get_live_streams'), 'xtream.get_live_streams'), fetchedAt)
+  return parseLiveStreams(await getList(buildPlayerApiUrl(creds, 'get_live_streams'), 'xtream.get_live_streams'), fetchedAt)
 }
 export async function fetchVodStreams(fetchedAt: string, creds: XtreamCreds = credsFromEnv()): Promise<VodRow[]> {
-  return parseVodStreams(await getJson(buildPlayerApiUrl(creds, 'get_vod_streams'), 'xtream.get_vod_streams'), fetchedAt)
+  return parseVodStreams(await getList(buildPlayerApiUrl(creds, 'get_vod_streams'), 'xtream.get_vod_streams'), fetchedAt)
 }
 export async function fetchSeriesList(fetchedAt: string, creds: XtreamCreds = credsFromEnv()): Promise<SeriesRow[]> {
-  return parseSeriesList(await getJson(buildPlayerApiUrl(creds, 'get_series'), 'xtream.get_series'), fetchedAt)
+  return parseSeriesList(await getList(buildPlayerApiUrl(creds, 'get_series'), 'xtream.get_series'), fetchedAt)
 }
 
 export interface EpisodeRow {

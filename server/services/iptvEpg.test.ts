@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { xmltvTimeToIso, streamXmltv, fetchAndStreamEpg, type EpgProgrammeRow } from './iptvEpg.js'
 import { SsrfBlockedError, __setSsrfLookupForTests } from './ssrfGuard.js'
 import { Readable } from 'node:stream'
+import { gzipSync } from 'node:zlib'
 
 describe('xmltv helpers', () => {
   it('preserves CDATA titles and descriptions in programme metadata', async () => {
@@ -258,5 +259,40 @@ describe('streamXmltv sniffBuf bound', () => {
     const defs: { id: string; names: string[] }[] = []
     await streamXmltv(Readable.from(gen()), () => {}, undefined, (d) => defs.push(d))
     expect(defs.find((d) => d.id === 'split.us')?.names).toEqual(['Split'])
+  })
+})
+
+// 2026-10-16 review item 1: the sax pipeline removed its error listener before
+// destroying the stream, and gunzip never saw a source error, so a reset or
+// malformed feed raised an unhandled 'error' and killed the backend.
+describe('streamXmltv rejects a broken feed instead of crashing', () => {
+  const programme = '<programme channel="a.us" start="20261016000000 +0000" stop="20261016010000 +0000"><title>T</title></programme>'
+  const gz = gzipSync(Buffer.from(`<?xml version="1.0"?><tv>${programme.repeat(5000)}</tv>`))
+
+  it('rejects when the connection resets mid-.xml.gz', async () => {
+    async function* gen() {
+      yield gz.subarray(0, gz.length >> 1)
+      throw new Error('ECONNRESET')
+    }
+    await expect(streamXmltv(Readable.from(gen()), () => {})).rejects.toThrow('ECONNRESET')
+  })
+
+  it('rejects a truncated .xml.gz', async () => {
+    await expect(streamXmltv(Readable.from([gz.subarray(0, gz.length >> 1)]), () => {})).rejects.toThrow(/xmltv_gunzip/)
+  })
+
+  it('rejects malformed XML', async () => {
+    const xml = `<tv><programme channel="a.us" start="20261016000000 +0000" stop="20261016010000 +0000"><title>A & B</title></programme></tv>`
+    await expect(streamXmltv(Readable.from([Buffer.from(xml)]), () => {})).rejects.toThrow(/xmltv_parse/)
+  })
+
+  it('rejects with the abort reason when aborted mid-stream', async () => {
+    const controller = new AbortController()
+    async function* gen() {
+      yield gz.subarray(0, 1024)
+      controller.abort(new Error('epg_idle_timeout'))
+      await new Promise(() => {}) // the upstream stalls
+    }
+    await expect(streamXmltv(Readable.from(gen()), () => {}, controller.signal)).rejects.toThrow('epg_idle_timeout')
   })
 })
