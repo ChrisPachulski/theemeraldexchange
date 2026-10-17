@@ -17,7 +17,7 @@ const { tmpDbDir } = vi.hoisted(() => {
 
 import { serverDb, closeServerDb } from './serverDb.js'
 import { issueInvite, redeemInvite, listInvites, revokeInvite } from './invites.js'
-import { isMember } from './members.js'
+import { isMember, revokeMemberSafely } from './members.js'
 
 const ADMIN = 'plex:42'
 const ALICE = 'apple:000001.0123456789abcdef0123456789abcdef.0001'
@@ -247,5 +247,33 @@ describe('invites service', () => {
     const successes = [r1, r2].filter(r => r.ok && r.created).length
     expect(successes).toBe(1)
     expect(inviteByPrefix(code_hash_prefix)?.used_count).toBe(1)
+  })
+
+  // 2026-10-16 review item 5: admin revoke left the target's invites live, and
+  // redemption clears revoked_at, so a revoked admin restored themselves.
+  describe('a revoked issuer', () => {
+    const MALLORY = 'plex:666'
+    const addAdmin = (sub: string) => serverDb().raw
+      .prepare(`INSERT INTO members (sub, display_name, role, auth_mode, invited_by, joined_at, revoked_at)
+                VALUES (?, NULL, 'admin', 'plex', NULL, ?, NULL)`)
+      .run(sub, new Date().toISOString())
+
+    it('cannot restore their own access with an invite they issued', () => {
+      addAdmin(MALLORY)
+      const { code } = issueInvite(MALLORY, { role: 'admin', maxUses: 5 })
+      expect(revokeMemberSafely({
+        targetSub: MALLORY, actorSub: ADMIN, actorUsername: null, immutableAdminSubs: [ADMIN], legacyAdminUsernames: [],
+      })).toBe('revoked')
+      expect(redeemInvite(code, MALLORY, 'Mallory', 'plex')).toEqual({ ok: false, reason: 'revoked' })
+      expect(isMember(MALLORY)).toBeNull()
+    })
+
+    it('no longer admits anyone, whatever revoked them', () => {
+      addAdmin(MALLORY)
+      const { code } = issueInvite(MALLORY)
+      serverDb().raw.prepare(`UPDATE members SET revoked_at = ? WHERE sub = ?`).run(new Date().toISOString(), MALLORY)
+      expect(redeemInvite(code, BOB, 'Bob', 'plex')).toEqual({ ok: false, reason: 'revoked' })
+      expect(isMember(BOB)).toBeNull()
+    })
   })
 })

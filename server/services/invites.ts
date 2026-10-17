@@ -183,6 +183,11 @@ export function redeemInvite(
     }
 
     if (invite.revoked_at !== null) return { ok: false, reason: 'revoked' }
+    // A revoked member's invites die with them (an env-only admin has no row).
+    const issuer = db.raw.prepare(`SELECT revoked_at FROM members WHERE sub = ?`).get(invite.issued_by) as
+      | { revoked_at: string | null }
+      | undefined
+    if (issuer && issuer.revoked_at !== null) return { ok: false, reason: 'revoked' }
     if (invite.expires_at !== null && invite.expires_at < nowIso) {
       return { ok: false, reason: 'expired' }
     }
