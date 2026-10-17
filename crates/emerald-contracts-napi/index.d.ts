@@ -148,5 +148,8 @@ export function piiScrubValue(jsonStr: string): string
 export class XmltvParser {
   constructor(sniffChannels: boolean)
   push(chunk: Buffer): string
+  /** From now on, emit only programmes on these normalized channel ids. Text
+   *  already parsed is unaffected; skipped programmes are still checked as XML. */
+  keepChannels(ids: Array<string>): void
   finish(): string
 }

@@ -48,6 +48,32 @@ describe('xmltv helpers', () => {
     expect(defs.find((d) => d.id === 'cnn.us')?.names).toEqual(['CNN', 'US: CNN'])
     expect(defs.find((d) => d.id === 'espn.us')?.names).toEqual(['ESPN'])
   })
+
+  it('keepChannels drops other channels in the parser once the first programmes arrive', async () => {
+    // Larger than one parser batch (8 MB), delivered in network-sized chunks.
+    let xml = '<tv>'
+    for (let i = 0; i < 120_000; i++) {
+      xml += `<programme channel="${i % 2 ? 'b.us' : 'a.us'}" start="20261016000000 +0000" stop="20261016010000 +0000"><title>Show ${i}</title></programme>\n`
+    }
+    xml += '</tv>'
+    const buf = Buffer.from(xml)
+    const chunks: Buffer[] = []
+    for (let i = 0; i < buf.length; i += 64 * 1024) chunks.push(buf.subarray(i, i + 64 * 1024))
+    const seen = { a: 0, b: 0 }
+    let asked = 0
+    await streamXmltv(
+      Readable.from(chunks),
+      (r) => { seen[r.channel_id === 'a.us' ? 'a' : 'b'] += 1 },
+      undefined,
+      undefined,
+      () => { asked += 1; return ['a.us'] },
+    )
+    expect(asked).toBe(1)
+    expect(seen.a).toBe(60_000)
+    // Only the batch parsed before the callback still carries b.us rows.
+    expect(seen.b).toBeGreaterThan(0)
+    expect(seen.b).toBeLessThan(60_000)
+  })
 })
 
 describe('xmltvTimeToIso offset normalization', () => {

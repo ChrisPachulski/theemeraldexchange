@@ -134,6 +134,12 @@ export async function ingestExternalEpg(
       (def) => {
         defs.push(def)
       },
+      // ~92% of this feed's programmes are on channels nobody here wants;
+      // the parser skips them instead of handing them over.
+      () => {
+        candidates ??= resolveAgainstExternal(db, defs)
+        return [...candidates.wanted, ...west].filter((id) => !fed.has(id))
+      },
     )
 
     const staged = stage.commit()

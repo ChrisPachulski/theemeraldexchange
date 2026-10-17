@@ -13,8 +13,9 @@
 //! `</programme>` or `</channel>` seen, so a text node is never split across
 //! two parses.
 
+use std::collections::HashSet;
 use std::io::Write;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 use flate2::write::MultiGzDecoder;
 use quick_xml::Reader;
@@ -80,6 +81,8 @@ struct Machine {
     in_title: bool,
     in_desc: bool,
     text: String,
+    // Normalized channel ids to keep; None keeps every channel.
+    keep: Option<Arc<HashSet<String>>>,
 }
 
 impl Parser {
@@ -119,6 +122,12 @@ impl Parser {
             }
         }
         Ok(batch)
+    }
+
+    /// From now on, emit only programmes on these (normalized) channel ids.
+    /// Text already parsed is unaffected; the rest is still checked as XML.
+    pub fn keep_channels(&mut self, ids: impl IntoIterator<Item = String>) {
+        self.machine.keep = Some(Arc::new(ids.into_iter().collect()));
     }
 
     pub fn finish(&mut self) -> Result<Batch, String> {
@@ -198,16 +207,16 @@ impl Machine {
             return self.parse_bytes(text, out);
         }
         let first = self.clone();
+        let blank = Machine {
+            keep: self.keep.clone(),
+            ..Machine::default()
+        };
         let results: Vec<(Machine, Result<Vec<Programme>, String>)> = std::thread::scope(|s| {
             let handles: Vec<_> = pieces
                 .iter()
                 .enumerate()
                 .map(|(i, piece)| {
-                    let mut m = if i == 0 {
-                        first.clone()
-                    } else {
-                        Machine::default()
-                    };
+                    let mut m = if i == 0 { first.clone() } else { blank.clone() };
                     s.spawn(move || {
                         let mut progs = Vec::new();
                         let r = m.parse_bytes(piece, &mut progs).map(|()| progs);
@@ -324,15 +333,20 @@ impl Machine {
         }
         match name.as_ref() {
             "programme" => {
+                let channel_id = channel
+                    .as_deref()
+                    .map(normalize_epg_channel_id)
+                    .unwrap_or_default();
+                if self.keep.as_ref().is_some_and(|k| !k.contains(&channel_id)) {
+                    self.cur = None;
+                    return Ok(());
+                }
                 self.cur = match (
                     start.as_deref().and_then(xmltv_time_to_iso),
                     stop.as_deref().and_then(xmltv_time_to_iso),
                 ) {
                     (Some(start_utc), Some(stop_utc)) => Some(Programme {
-                        channel_id: channel
-                            .as_deref()
-                            .map(normalize_epg_channel_id)
-                            .unwrap_or_default(),
+                        channel_id,
                         start_utc,
                         stop_utc,
                         title: None,
@@ -746,6 +760,34 @@ mod tests {
         assert!(feed.len() > PARALLEL_BATCH);
         let (progs, _) = run(feed.as_bytes(), 64 * 1024);
         assert_eq!(progs, serial(&feed).unwrap());
+    }
+
+    #[test]
+    fn kept_channels_match_a_filtered_parse_and_stay_strict() {
+        let keep = ["ch3.us", "ch40.us"];
+        let filtered = |feed: &str| {
+            let mut p = Parser::new(false);
+            p.keep_channels(keep.map(String::from));
+            let mut progs = Vec::new();
+            for c in feed.as_bytes().chunks(64 * 1024) {
+                progs.extend(p.push(c)?.programmes);
+            }
+            progs.extend(p.finish()?.programmes);
+            Ok::<_, String>(progs)
+        };
+        let feed = big_feed(150_000, None);
+        let want: Vec<Programme> = serial(&feed)
+            .unwrap()
+            .into_iter()
+            .filter(|p| keep.contains(&p.channel_id.as_str()))
+            .collect();
+        assert!(!want.is_empty());
+        assert_eq!(filtered(&feed).unwrap(), want);
+        // Programme 30001 is on ch28, which is skipped: bad text in it still fails.
+        for bad in ["Show 30001 &", "Show 30001 &nbsp;"] {
+            let broken = feed.replacen("Show 30001 &amp;", bad, 1);
+            assert!(filtered(&broken).is_err(), "{bad}");
+        }
     }
 
     #[test]

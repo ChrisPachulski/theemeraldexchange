@@ -360,6 +360,12 @@ impl XmltvParser {
         batch_json(self.inner.push(chunk.as_ref()))
     }
 
+    /// Emit only programmes on these normalized channel ids from now on.
+    #[napi]
+    pub fn keep_channels(&mut self, ids: Vec<String>) {
+        self.inner.keep_channels(ids);
+    }
+
     #[napi]
     pub fn finish(&mut self) -> Result<String> {
         batch_json(self.inner.finish())
