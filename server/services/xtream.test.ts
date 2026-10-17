@@ -255,6 +255,20 @@ describe('xtream network fetchers', () => {
     expect(String(fetchFn.mock.calls[0][0])).toContain('action=get_series_categories')
   })
 
+  // 2026-10-16 review item 9: a non-array answer parsed as [] and the sync's
+  // reconcile then deleted that whole kind (only all-six-empty was rejected).
+  it.each([
+    ['live categories', () => fetchCategories('live'), 'xtream.get_live_categories_not_a_list'],
+    ['live streams', () => fetchLiveStreams('t'), 'xtream.get_live_streams_not_a_list'],
+    ['vod streams', () => fetchVodStreams('t'), 'xtream.get_vod_streams_not_a_list'],
+    ['series', () => fetchSeriesList('t'), 'xtream.get_series_not_a_list'],
+  ])('rejects a malformed %s response instead of reading it as empty', async (_label, call, error) => {
+    for (const body of [{ user_info: { auth: 0 } }, null, 'oops']) {
+      stubFetchJson(body)
+      await expect(call()).rejects.toThrow(error)
+    }
+  })
+
   it('fetchLiveStreams parses + normalizes epg_channel_id', async () => {
     const fetchFn = stubFetchJson([{ stream_id: 5, name: 'C', epg_channel_id: 'X.us' }])
     const ch = await fetchLiveStreams('2026-05-24T00:00:00Z')
