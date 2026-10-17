@@ -30,6 +30,9 @@ for f in docker-compose.yml tailscale-serve.json .env.example; do
   [ -f "$f" ] || fetch "$RAW/$f" "$f"
 done
 
+# From here every file written holds secrets: .env.tmp, which replaces .env,
+# must be born 0600 rather than at the umask default (world-readable 0644).
+umask 077
 [ -f .env ] || cp .env.example .env
 chmod 600 .env
 
