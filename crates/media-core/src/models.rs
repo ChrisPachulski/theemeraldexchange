@@ -92,6 +92,9 @@ pub struct MovieRow {
     pub overview: Option<String>,
     #[serde(default)]
     pub poster_path: Option<String>,
+    /// Blurhash of the poster, NULL until the artwork backfill describes it.
+    #[serde(default)]
+    pub poster_blurhash: Option<String>,
     /// US certification (e.g. "PG-13"), NULL when TMDB carried none or the row
     /// is not yet enriched. The Apple parental gate filters on this.
     #[serde(default)]
@@ -112,6 +115,9 @@ pub struct ShowRow {
     pub overview: Option<String>,
     #[serde(default)]
     pub poster_path: Option<String>,
+    /// Blurhash of the poster, NULL until the artwork backfill describes it.
+    #[serde(default)]
+    pub poster_blurhash: Option<String>,
     /// US content rating (e.g. "TV-MA"), NULL when TMDB carried none or the row
     /// is not yet enriched. The Apple parental gate filters on this.
     #[serde(default)]

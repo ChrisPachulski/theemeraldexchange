@@ -14,6 +14,7 @@ pub(super) struct EpisodeMeta {
     pub(super) episode_title: Option<String>,
     pub(super) show_title: String,
     pub(super) poster_path: Option<String>,
+    pub(super) poster_blurhash: Option<String>,
     pub(super) season: i64,
     pub(super) episode: i64,
 }
@@ -46,18 +47,38 @@ where
         .collect())
 }
 
-/// Batch-resolve `movies.id → (title, poster_path)` for the watch shelf.
-pub(super) async fn fetch_movie_meta(
+/// `(title, poster_path, poster_blurhash)` of a movie or show.
+pub(super) type TitleMeta = (String, Option<String>, Option<String>);
+
+/// Batch-resolve `{table}.id → TitleMeta` for movies or shows, the poster's
+/// blurhash joined from `images` (NULL until the backfill describes it).
+pub(super) async fn fetch_title_meta(
     state: &AppState,
+    table: &'static str,
     ids: &[i64],
-) -> AppResult<std::collections::HashMap<i64, (String, Option<String>)>> {
+) -> AppResult<std::collections::HashMap<i64, TitleMeta>> {
     fetch_by_ids(
         state,
         ids,
-        |ph| format!("SELECT id, title, poster_path FROM movies WHERE id IN ({ph})"),
-        |(id, title, poster): (i64, String, Option<String>)| (id, (title, poster)),
+        |ph| {
+            format!(
+                "SELECT t.id, t.title, t.poster_path, i.blurhash FROM {table} t \
+                 LEFT JOIN images i ON i.key = 'tmdb' || t.poster_path WHERE t.id IN ({ph})"
+            )
+        },
+        |(id, title, poster, blurhash): (i64, String, Option<String>, Option<String>)| {
+            (id, (title, poster, blurhash))
+        },
     )
     .await
+}
+
+/// [`fetch_title_meta`] for movies (the watch, playlist and collection shelves).
+pub(super) async fn fetch_movie_meta(
+    state: &AppState,
+    ids: &[i64],
+) -> AppResult<std::collections::HashMap<i64, TitleMeta>> {
+    fetch_title_meta(state, "movies", ids).await
 }
 
 /// Batch-resolve `episodes.id → EpisodeMeta` (joined to the parent show for its
@@ -71,14 +92,16 @@ pub(super) async fn fetch_episode_meta(
         ids,
         |ph| {
             format!(
-                "SELECT e.id, e.title, s.title, s.poster_path, e.season, e.episode \
-                 FROM episodes e JOIN shows s ON e.show_id = s.id WHERE e.id IN ({ph})"
+                "SELECT e.id, e.title, s.title, s.poster_path, i.blurhash, e.season, e.episode \
+                 FROM episodes e JOIN shows s ON e.show_id = s.id \
+                 LEFT JOIN images i ON i.key = 'tmdb' || s.poster_path WHERE e.id IN ({ph})"
             )
         },
-        |(id, episode_title, show_title, poster_path, season, episode): (
+        |(id, episode_title, show_title, poster_path, poster_blurhash, season, episode): (
             i64,
             Option<String>,
             String,
+            Option<String>,
             Option<String>,
             i64,
             i64,
@@ -89,6 +112,7 @@ pub(super) async fn fetch_episode_meta(
                     episode_title,
                     show_title,
                     poster_path,
+                    poster_blurhash,
                     season,
                     episode,
                 },

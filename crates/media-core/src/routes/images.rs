@@ -649,6 +649,289 @@ mod tests {
         assert_eq!(fake.hits("evict1.jpg"), 2);
     }
 
+    async fn json_at(app: &axum::Router, uri: &str) -> serde_json::Value {
+        let resp = app.clone().oneshot(req("GET", uri)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+        body_json(resp).await
+    }
+
+    async fn post_json(
+        app: &axum::Router,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> serde_json::Value {
+        let resp = app
+            .clone()
+            .oneshot(json_req("POST", uri, body.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "{uri}");
+        body_json(resp).await
+    }
+
+    /// Every blurhash field the catalog rows carry, labelled by where it sits.
+    async fn blurhash_fields(app: &axum::Router, ids: &Ids) -> Vec<(String, serde_json::Value)> {
+        let mut out = Vec::new();
+        let mut take =
+            |label: &str, v: &serde_json::Value| out.push((label.to_string(), v.clone()));
+        let movies = json_at(app, "/api/media/movies").await;
+        take("movies list", &movies["items"][0]["poster_blurhash"]);
+        let movies = json_at(app, "/api/media/movies?q=Heat").await;
+        take("movies search", &movies["items"][0]["poster_blurhash"]);
+        let movie = json_at(app, &format!("/api/media/movies/{}", ids.movie)).await;
+        take("movie detail", &movie["poster_blurhash"]);
+        let shows = json_at(app, "/api/media/shows").await;
+        take("shows list", &shows["items"][0]["poster_blurhash"]);
+        let shows = json_at(app, "/api/media/shows?q=Lost").await;
+        take("shows search", &shows["items"][0]["poster_blurhash"]);
+        let show = json_at(app, &format!("/api/media/shows/{}", ids.show)).await;
+        take("show detail", &show["poster_blurhash"]);
+        let watch = json_at(app, "/api/media/watch?sub=local:1").await;
+        for item in watch["items"].as_array().unwrap() {
+            take(
+                &format!("watch {}", item["media_kind"]),
+                &item["poster_blurhash"],
+            );
+        }
+        let playlist = json_at(
+            app,
+            &format!("/api/media/playlists/{}?sub=local:1", ids.playlist),
+        )
+        .await;
+        for item in playlist["items"].as_array().unwrap() {
+            take(
+                &format!("playlist {}", item["media_kind"]),
+                &item["poster_blurhash"],
+            );
+        }
+        let collection = json_at(
+            app,
+            &format!("/api/media/collections/{}?sub=local:1", ids.collection),
+        )
+        .await;
+        for item in collection["items"].as_array().unwrap() {
+            take(
+                &format!("collection {}", item["media_kind"]),
+                &item["poster_blurhash"],
+            );
+        }
+        let albums = json_at(app, "/api/media/music/albums").await;
+        take("albums list", &albums["items"][0]["art_blurhash"]);
+        let books = json_at(app, "/api/media/audiobooks").await;
+        take("audiobooks list", &books["items"][0]["art_blurhash"]);
+        let book = json_at(app, &format!("/api/media/audiobooks/{}", ids.book)).await;
+        take("audiobook detail", &book["art_blurhash"]);
+        let photos = json_at(app, "/api/media/photos").await;
+        for item in photos["items"].as_array().unwrap() {
+            take(&format!("photo {}", item["id"]), &item["blurhash"]);
+        }
+        out
+    }
+
+    struct Ids {
+        movie: i64,
+        show: i64,
+        book: i64,
+        playlist: i64,
+        collection: i64,
+    }
+
+    fn decodable(hash: &serde_json::Value) -> bool {
+        hash.as_str()
+            .is_some_and(|h| blurhash::decode(h, 8, 8, 1.0).is_ok_and(|px| px.len() == 8 * 8 * 4))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn blurhash_fields_are_null_until_the_backfill_then_decodable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fake = FakeOrigin::default();
+        fake.route("heat.jpg", 200, "image/png", png(200, 300));
+        fake.route("lost.jpg", 200, "image/png", png(300, 200));
+        let state = tmdb_state(tmp.path(), fake.start().await, u64::MAX).await;
+
+        let file_id = seed_media_file(&state, "/lib/heat.mkv").await;
+        let movie: i64 = sqlx::query(
+            "INSERT INTO movies (title, added_at, file_id, poster_path) VALUES ('Heat', '2026-01-01', ?, '/heat.jpg')",
+        )
+        .bind(file_id)
+        .execute(&state.db.pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        let show: i64 = sqlx::query(
+            "INSERT INTO shows (title, added_at, poster_path) VALUES ('Lost', '2026-01-01', '/lost.jpg')",
+        )
+        .execute(&state.db.pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        let ep_file = seed_media_file(&state, "/lib/lost-s01e01.mkv").await;
+        let episode: i64 = sqlx::query(
+            "INSERT INTO episodes (show_id, season, episode, title, file_id) VALUES (?, 1, 1, 'Pilot', ?)",
+        )
+        .bind(show)
+        .bind(ep_file)
+        .execute(&state.db.pool)
+        .await
+        .unwrap()
+        .last_insert_rowid();
+        let cover = tmp.path().join("music/cover.png");
+        std::fs::write(&cover, png(400, 400)).unwrap();
+        album_with_art(&state, "LP", Some(&cover)).await;
+        let book_art = tmp.path().join("artwork/book.png");
+        std::fs::write(&book_art, png(300, 450)).unwrap();
+        let book = audiobook(&state, &book_art).await;
+        // Large enough that decodes overlap, so the pool is actually contended.
+        for n in 0..6 {
+            std::fs::write(tmp.path().join(format!("photos/p{n}.png")), png(1600, 1200)).unwrap();
+        }
+        crate::scanner::scan_photos_once(&state.db, &state.config.photo_roots, &state.artwork)
+            .await
+            .unwrap();
+
+        let probe = state.artwork.pool.probe.clone();
+        let app = crate::build_router(state.clone());
+        for (kind, id) in [("movie", movie), ("episode", episode)] {
+            post_json(
+                &app,
+                "/api/media/watch?sub=local:1",
+                serde_json::json!({ "media_kind": kind, "media_id": id, "position_secs": 60 }),
+            )
+            .await;
+        }
+        let playlist = post_json(
+            &app,
+            "/api/media/playlists?sub=local:1",
+            serde_json::json!({ "name": "P" }),
+        )
+        .await["id"]
+            .as_i64()
+            .unwrap();
+        for (kind, id) in [("movie", movie), ("episode", episode)] {
+            post_json(
+                &app,
+                &format!("/api/media/playlists/{playlist}/items?sub=local:1"),
+                serde_json::json!({ "media_kind": kind, "media_id": id }),
+            )
+            .await;
+        }
+        let collection = post_json(
+            &app,
+            "/api/media/collections?sub=local:1",
+            serde_json::json!({ "name": "C" }),
+        )
+        .await["id"]
+            .as_i64()
+            .unwrap();
+        for (kind, id) in [("movie", movie), ("show", show)] {
+            post_json(
+                &app,
+                &format!("/api/media/collections/{collection}/items?sub=local:1"),
+                serde_json::json!({ "media_kind": kind, "media_id": id }),
+            )
+            .await;
+        }
+        let ids = Ids {
+            movie,
+            show,
+            book,
+            playlist,
+            collection,
+        };
+
+        let before = blurhash_fields(&app, &ids).await;
+        // 6 movie/show rows + 2 watch + 2 playlist + 2 collection + 3 local
+        // rows + 6 photos.
+        assert_eq!(before.len(), 21, "{before:?}");
+        for (label, v) in &before {
+            assert!(v.is_null(), "{label} before the backfill: {v}");
+        }
+
+        crate::run_extra_passes(&state, "test").await;
+        for (label, v) in blurhash_fields(&app, &ids).await {
+            assert!(decodable(&v), "{label} after the backfill: {v}");
+        }
+        let dims: Vec<(String, i64, i64)> = sqlx::query_as(
+            "SELECT key, width, height FROM images WHERE key IN ('tmdb/lost.jpg', 'photo/1')",
+        )
+        .fetch_all(&state.db.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            dims,
+            [
+                ("photo/1".into(), 1600, 1200),
+                ("tmdb/lost.jpg".into(), 300, 200)
+            ]
+        );
+        // 2 posters + album + audiobook + 6 photos, never more than 2 at once.
+        let runs = probe.runs.load(std::sync::atomic::Ordering::SeqCst);
+        let peak = probe.peak.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(runs, 10);
+        assert!(
+            (1..=artwork::POOL_PERMITS as u64).contains(&peak),
+            "peak {peak}"
+        );
+
+        // A second pass describes nothing again.
+        crate::run_extra_passes(&state, "test").await;
+        assert_eq!(probe.runs.load(std::sync::atomic::Ordering::SeqCst), 10);
+    }
+
+    #[tokio::test]
+    async fn a_changed_photo_clears_and_recomputes_its_blurhash_and_variants() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = state_in(tmp.path()).await;
+        let shot = tmp.path().join("photos/shot.png");
+        std::fs::write(&shot, png(300, 200)).unwrap();
+        let scan = || {
+            crate::scanner::scan_photos_once(&state.db, &state.config.photo_roots, &state.artwork)
+        };
+        scan().await.unwrap();
+        crate::artwork::backfill(&state).await;
+        let app = crate::build_router(state.clone());
+        let blurhash =
+            || async { json_at(&app, "/api/media/photos").await["items"][0]["blurhash"].clone() };
+        let old = blurhash().await;
+        assert!(decodable(&old));
+        let id = json_at(&app, "/api/media/photos").await["items"][0]["id"]
+            .as_i64()
+            .unwrap();
+        assert_eq!(
+            get(&app, format!("/api/media/images/photo/{id}?w=92"))
+                .await
+                .0,
+            StatusCode::OK
+        );
+        let variants = tmp.path().join(format!("images/cache/photo/{id}"));
+        assert!(variants.is_dir());
+
+        // Same name, new picture, new mtime.
+        let solid = image::RgbImage::from_pixel(300, 200, image::Rgb([200, 10, 10]));
+        std::fs::write(
+            &shot,
+            encode(&DynamicImage::ImageRgb8(solid), ImageFormat::Png),
+        )
+        .unwrap();
+        std::fs::File::options()
+            .append(true)
+            .open(&shot)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + Duration::from_secs(3600))
+            .unwrap();
+        assert_eq!(scan().await.unwrap().files_updated, 1);
+        assert!(
+            blurhash().await.is_null(),
+            "the stale placeholder is dropped"
+        );
+        assert!(!variants.exists(), "the stale variants are dropped");
+
+        crate::artwork::backfill(&state).await;
+        let new = blurhash().await;
+        assert!(decodable(&new));
+        assert_ne!(new, old);
+    }
+
     #[tokio::test]
     async fn prefetch_after_a_scan_stores_every_library_poster_once() {
         let tmp = tempfile::tempdir().unwrap();

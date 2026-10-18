@@ -17,8 +17,9 @@ pub(super) async fn list_movies(
         Some(expr) => {
             let rows = sqlx::query_as::<_, MovieRow>(
                 "SELECT m.id, m.tmdb_id, m.imdb_id, m.title, m.year, m.added_at, m.file_id, \
-                 m.overview, m.poster_path, m.content_rating \
+                 m.overview, m.poster_path, i.blurhash AS poster_blurhash, m.content_rating \
                  FROM movies m JOIN movies_fts f ON f.rowid = m.id \
+                 LEFT JOIN images i ON i.key = 'tmdb' || m.poster_path \
                  WHERE movies_fts MATCH ? ORDER BY m.title LIMIT ? OFFSET ?",
             )
             .bind(&expr)
@@ -38,8 +39,9 @@ pub(super) async fn list_movies(
         _ => {
             let rows = sqlx::query_as::<_, MovieRow>(
                 "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id, overview, \
-                 poster_path, content_rating \
-                 FROM movies ORDER BY title LIMIT ? OFFSET ?",
+                 poster_path, i.blurhash AS poster_blurhash, content_rating \
+                 FROM movies LEFT JOIN images i ON i.key = 'tmdb' || poster_path \
+                 ORDER BY title LIMIT ? OFFSET ?",
             )
             .bind(limit)
             .bind(offset)
@@ -61,8 +63,8 @@ pub(super) async fn get_movie(
 ) -> AppResult<Json<Value>> {
     let row = sqlx::query_as::<_, MovieRow>(
         "SELECT id, tmdb_id, imdb_id, title, year, added_at, file_id, overview, poster_path, \
-         content_rating \
-         FROM movies WHERE id = ?",
+         i.blurhash AS poster_blurhash, content_rating \
+         FROM movies LEFT JOIN images i ON i.key = 'tmdb' || poster_path WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.db.pool)
@@ -82,8 +84,9 @@ pub(super) async fn list_shows(
         Some(expr) => {
             let rows = sqlx::query_as::<_, ShowRow>(
                 "SELECT s.id, s.tmdb_id, s.tvdb_id, s.title, s.year, s.added_at, s.imdb_id, \
-                 s.overview, s.poster_path, s.content_rating \
+                 s.overview, s.poster_path, i.blurhash AS poster_blurhash, s.content_rating \
                  FROM shows s JOIN shows_fts f ON f.rowid = s.id \
+                 LEFT JOIN images i ON i.key = 'tmdb' || s.poster_path \
                  WHERE shows_fts MATCH ? ORDER BY s.title LIMIT ? OFFSET ?",
             )
             .bind(&expr)
@@ -103,8 +106,9 @@ pub(super) async fn list_shows(
         _ => {
             let rows = sqlx::query_as::<_, ShowRow>(
                 "SELECT id, tmdb_id, tvdb_id, title, year, added_at, imdb_id, overview, \
-                 poster_path, content_rating \
-                 FROM shows ORDER BY title LIMIT ? OFFSET ?",
+                 poster_path, i.blurhash AS poster_blurhash, content_rating \
+                 FROM shows LEFT JOIN images i ON i.key = 'tmdb' || poster_path \
+                 ORDER BY title LIMIT ? OFFSET ?",
             )
             .bind(limit)
             .bind(offset)
@@ -126,8 +130,8 @@ pub(super) async fn get_show(
 ) -> AppResult<Json<Value>> {
     let row = sqlx::query_as::<_, ShowRow>(
         "SELECT id, tmdb_id, tvdb_id, title, year, added_at, imdb_id, overview, poster_path, \
-         content_rating \
-         FROM shows WHERE id = ?",
+         i.blurhash AS poster_blurhash, content_rating \
+         FROM shows LEFT JOIN images i ON i.key = 'tmdb' || poster_path WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.db.pool)

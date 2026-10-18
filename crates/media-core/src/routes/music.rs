@@ -64,11 +64,22 @@ pub(super) async fn list_albums(
     let (limit, offset) = paginate(q.limit, q.offset);
     // One SQL shape; `artist_id IS NULL OR al.artist_id = ?` lets the same query
     // serve both the filtered and unfiltered listing without duplication.
-    let rows = sqlx::query_as::<_, (i64, i64, String, String, Option<i64>, i64, i64)>(
+    type AlbumListRow = (
+        i64,
+        i64,
+        String,
+        String,
+        Option<i64>,
+        i64,
+        i64,
+        Option<String>,
+    );
+    let rows = sqlx::query_as::<_, AlbumListRow>(
         "SELECT al.id, al.artist_id, ar.name, al.title, al.year, COUNT(t.id) AS track_count, \
-         al.art_path IS NOT NULL \
+         al.art_path IS NOT NULL, img.blurhash \
          FROM albums al JOIN artists ar ON ar.id = al.artist_id \
          LEFT JOIN tracks t ON t.album_id = al.id \
+         LEFT JOIN images img ON img.key = 'album/' || al.id \
          WHERE (? IS NULL OR al.artist_id = ?) \
          GROUP BY al.id ORDER BY ar.name, al.title LIMIT ? OFFSET ?",
     )
@@ -87,7 +98,7 @@ pub(super) async fn list_albums(
     let items: Vec<Value> = rows
         .iter()
         .map(
-            |(id, artist_id, artist_name, title, year, track_count, has_art)| {
+            |(id, artist_id, artist_name, title, year, track_count, has_art, blurhash)| {
                 json!({
                     "id": id,
                     "artist_id": artist_id,
@@ -96,6 +107,7 @@ pub(super) async fn list_albums(
                     "year": year,
                     "track_count": track_count,
                     "art_url": (*has_art == 1).then(|| format!("/api/media/images/album/{id}")),
+                    "art_blurhash": blurhash,
                 })
             },
         )

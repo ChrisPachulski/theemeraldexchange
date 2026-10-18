@@ -1,4 +1,4 @@
-use super::catalog::{fetch_by_ids, fetch_movie_meta};
+use super::catalog::{fetch_movie_meta, fetch_title_meta};
 use super::stores::*;
 use super::*;
 
@@ -47,7 +47,7 @@ pub(super) async fn get_collection(
         .collect();
     let show_ids: Vec<i64> = rows.iter().filter(|r| r.0 == "show").map(|r| r.1).collect();
     let movie_meta = fetch_movie_meta(&state, &movie_ids).await?;
-    let show_meta = fetch_show_meta(&state, &show_ids).await?;
+    let show_meta = fetch_title_meta(&state, "shows", &show_ids).await?;
 
     let items: Vec<Value> = rows
         .iter()
@@ -63,9 +63,10 @@ pub(super) async fn get_collection(
                 "show" => show_meta.get(media_id),
                 _ => None,
             };
-            if let Some((title, poster)) = meta {
+            if let Some((title, poster, blurhash)) = meta {
                 obj.insert("title".into(), json!(title));
                 obj.insert("poster_path".into(), json!(poster));
+                obj.insert("poster_blurhash".into(), json!(blurhash));
             }
             v
         })
@@ -78,20 +79,6 @@ pub(super) async fn get_collection(
         "updated_at": updated_at,
         "items": items,
     })))
-}
-
-/// Batch-resolve `shows.id → (title, poster_path)` for collection detail.
-pub(super) async fn fetch_show_meta(
-    state: &AppState,
-    ids: &[i64],
-) -> AppResult<std::collections::HashMap<i64, (String, Option<String>)>> {
-    fetch_by_ids(
-        state,
-        ids,
-        |ph| format!("SELECT id, title, poster_path FROM shows WHERE id IN ({ph})"),
-        |(id, title, poster): (i64, String, Option<String>)| (id, (title, poster)),
-    )
-    .await
 }
 
 pub(super) async fn rename_collection(

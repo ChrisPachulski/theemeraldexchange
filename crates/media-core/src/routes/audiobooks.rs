@@ -7,8 +7,10 @@ pub(super) async fn list_audiobooks(
     Query(q): Query<PageQuery>,
 ) -> AppResult<Json<Value>> {
     let (limit, offset) = paginate(q.limit, q.offset);
-    let rows: Vec<(i64, String, String, Option<i64>, bool)> = sqlx::query_as(
-        "SELECT id, author, title, duration_secs, art_path IS NOT NULL FROM audiobooks \
+    type BookListRow = (i64, String, String, Option<i64>, bool, Option<String>);
+    let rows: Vec<BookListRow> = sqlx::query_as(
+        "SELECT a.id, author, title, duration_secs, art_path IS NOT NULL, img.blurhash \
+         FROM audiobooks a LEFT JOIN images img ON img.key = 'audiobook/' || a.id \
          ORDER BY author COLLATE NOCASE, title COLLATE NOCASE LIMIT ? OFFSET ?",
     )
     .bind(limit)
@@ -20,13 +22,14 @@ pub(super) async fn list_audiobooks(
         .await?;
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|(id, author, title, duration_secs, has_art)| {
+        .map(|(id, author, title, duration_secs, has_art, blurhash)| {
             json!({
                 "id": id,
                 "author": author,
                 "title": title,
                 "duration_secs": duration_secs,
                 "art_url": art_url(id, has_art),
+                "art_blurhash": blurhash,
                 "streamUrl": format!("/api/media/stream/audiobook/{id}"),
             })
         })
@@ -38,14 +41,17 @@ pub(super) async fn get_audiobook(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> AppResult<Json<Value>> {
-    let row: Option<(String, String, Option<i64>, String, bool)> = sqlx::query_as(
-        "SELECT author, title, duration_secs, chapters_json, art_path IS NOT NULL \
-         FROM audiobooks WHERE id = ?",
+    type BookRow = (String, String, Option<i64>, String, bool, Option<String>);
+    let row: Option<BookRow> = sqlx::query_as(
+        "SELECT author, title, duration_secs, chapters_json, art_path IS NOT NULL, img.blurhash \
+         FROM audiobooks a LEFT JOIN images img ON img.key = 'audiobook/' || a.id \
+         WHERE a.id = ?",
     )
     .bind(id)
     .fetch_optional(&state.db.pool)
     .await?;
-    let (author, title, duration_secs, chapters_json, has_art) = row.ok_or(AppError::NotFound)?;
+    let (author, title, duration_secs, chapters_json, has_art, blurhash) =
+        row.ok_or(AppError::NotFound)?;
     let chapters: Value = serde_json::from_str(&chapters_json).unwrap_or_else(|_| json!([]));
     Ok(Json(json!({
         "id": id,
@@ -54,6 +60,7 @@ pub(super) async fn get_audiobook(
         "duration_secs": duration_secs,
         "chapters": chapters,
         "art_url": art_url(id, has_art),
+        "art_blurhash": blurhash,
         "streamUrl": format!("/api/media/stream/audiobook/{id}"),
     })))
 }

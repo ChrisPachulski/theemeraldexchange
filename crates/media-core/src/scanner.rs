@@ -1809,7 +1809,7 @@ async fn scan_music_once_with_probe_bin(
                     &file.mtime,
                     &probed,
                     &file.stem,
-                    Some(art_dir),
+                    Some((art_dir, images)),
                 )
                 .await
                 {
@@ -1862,8 +1862,9 @@ pub async fn scan_music_isolated(
 /// Upsert one audio file into `media_files` + artists/albums/tracks. The track
 /// is keyed on its backing `media_file_id`, so a rescan of the same file never
 /// duplicates it; the artist/album upserts dedup on name / (artist, title).
-/// With `art_dir`, albums without art get it resolved (folder image first,
-/// the tag picture second, see [`resolve_art`]); `None` skips art (tests).
+/// With `art` (the artwork dir and image store), albums without art get it
+/// resolved (folder image first, the tag picture second, see
+/// [`resolve_art`]); `None` skips art (tests).
 #[allow(clippy::too_many_arguments)]
 async fn index_music_file(
     db: &Db,
@@ -1872,7 +1873,7 @@ async fn index_music_file(
     mtime: &str,
     probe: &FileProbe,
     stem: &str,
-    art_dir: Option<&std::path::Path>,
+    art: Option<(&std::path::Path, &crate::artwork::Store)>,
 ) -> Result<(), AppError> {
     let (file_id, _scanned_at) = upsert_media_file(db, path, size_bytes, mtime, probe).await?;
     let meta = classify_music(&probe.format_tags, stem);
@@ -1887,8 +1888,8 @@ async fn index_music_file(
         probe.duration_secs,
     )
     .await?;
-    if let Some(art_dir) = art_dir {
-        resolve_art(db, "album", album_id, path, art_dir).await?;
+    if let Some((art_dir, images)) = art {
+        resolve_art(db, "album", album_id, path, art_dir, images).await?;
     }
     Ok(())
 }
@@ -1897,13 +1898,15 @@ async fn index_music_file(
 /// `album` or `audiobook`): a folder image beside `media_path` wins
 /// (referenced in place, no copy); otherwise the tag picture is written once
 /// to `art_dir/{kind}_{id}.{jpg|png}`. Best-effort: a file with no readable
-/// picture just leaves the row artless.
+/// picture just leaves the row artless. Setting art drops any stale `images`
+/// row and variants for the id.
 async fn resolve_art(
     db: &Db,
     kind: &'static str,
     id: i64,
     media_path: &str,
     art_dir: &Path,
+    images: &crate::artwork::Store,
 ) -> Result<(), AppError> {
     let (select, update) = match kind {
         "album" => (
@@ -1938,11 +1941,14 @@ async fn resolve_art(
     .unwrap_or(None);
 
     if let Some(art) = art.as_deref().and_then(Path::to_str) {
-        sqlx::query(update)
+        let set = sqlx::query(update)
             .bind(art)
             .bind(id)
             .execute(&db.pool)
             .await?;
+        if set.rows_affected() > 0 {
+            crate::artwork::invalidate(db, images, &format!("{kind}/{id}")).await?;
+        }
     }
     Ok(())
 }
@@ -1996,13 +2002,21 @@ pub fn read_embedded_art(path: &Path) -> Option<(Vec<u8>, &'static str)> {
 }
 
 /// Remove what a pruned album/audiobook leaves behind: its extracted cover
-/// in `art_dir` (never folder art, which belongs to the library) and its
-/// resized variants under `cache/{kind}/{id}`. Blocking FS — call off-runtime.
-fn remove_art(art_dir: &Path, images: &crate::artwork::Store, kind: &str, id: i64) {
+/// in `art_dir` (never folder art, which belongs to the library), its
+/// `images` row and its resized variants under `cache/{kind}/{id}`. The
+/// unlinks run inline (a few files).
+async fn remove_art(
+    db: &Db,
+    art_dir: &Path,
+    images: &crate::artwork::Store,
+    kind: &str,
+    id: i64,
+) -> Result<(), AppError> {
     for ext in ["jpg", "png"] {
         let _ = std::fs::remove_file(art_dir.join(format!("{kind}_{id}.{ext}")));
     }
-    images.remove(&format!("{kind}/{id}"));
+    crate::artwork::invalidate(db, images, &format!("{kind}/{id}")).await?;
+    Ok(())
 }
 
 /// Get-or-create an artist by its UNIQUE name, returning its id.
@@ -2123,7 +2137,7 @@ async fn prune_missing_music(
         // ponytail: a few unlinks per swept album, inline on the runtime;
         // move into spawn_blocking if a prune ever sweeps thousands at once.
         for id in albums {
-            remove_art(art_dir, images, "album", id);
+            remove_art(db, art_dir, images, "album", id).await?;
         }
         sqlx::query("DELETE FROM artists WHERE id NOT IN (SELECT DISTINCT artist_id FROM albums)")
             .execute(&db.pool)
@@ -2239,6 +2253,7 @@ pub fn read_photo_meta(path: &std::path::Path) -> PhotoMeta {
 pub async fn scan_photos_once(
     db: &Db,
     roots: &[std::path::PathBuf],
+    images: &crate::artwork::Store,
 ) -> Result<PhotoScanReport, AppError> {
     let mut report = PhotoScanReport::default();
     if roots.is_empty() {
@@ -2255,12 +2270,12 @@ pub async fn scan_photos_once(
     report.errors = walk.errors;
 
     for file in &walk.files {
-        let existing: Option<(i64, String)> =
-            sqlx::query_as("SELECT size_bytes, mtime FROM photos WHERE path = ?")
+        let existing: Option<(i64, i64, String)> =
+            sqlx::query_as("SELECT id, size_bytes, mtime FROM photos WHERE path = ?")
                 .bind(&file.path_str)
                 .fetch_optional(&db.pool)
                 .await?;
-        if let Some((prev_size, prev_mtime)) = &existing
+        if let Some((_, prev_size, prev_mtime)) = &existing
             && *prev_size == file.size_bytes
             && *prev_mtime == file.mtime
         {
@@ -2286,7 +2301,9 @@ pub async fn scan_photos_once(
         .bind(chrono::Utc::now().to_rfc3339())
         .execute(&db.pool)
         .await?;
-        if existing.is_some() {
+        if let Some((id, ..)) = existing {
+            // The file changed: its placeholder and variants are stale.
+            crate::artwork::invalidate(db, images, &format!("photo/{id}")).await?;
             report.files_updated += 1;
         } else {
             report.files_added += 1;
@@ -2316,6 +2333,7 @@ pub async fn scan_photos_once(
                 .execute(&db.pool)
                 .await?
                 .rows_affected() as usize;
+            crate::artwork::invalidate(db, images, &format!("photo/{id}")).await?;
         }
     }
 
@@ -2326,8 +2344,9 @@ pub async fn scan_photos_once(
 pub async fn scan_photos_isolated(
     db: Db,
     roots: Vec<std::path::PathBuf>,
+    images: std::sync::Arc<crate::artwork::Store>,
 ) -> Result<PhotoScanReport, AppError> {
-    match tokio::spawn(async move { scan_photos_once(&db, &roots).await }).await {
+    match tokio::spawn(async move { scan_photos_once(&db, &roots, &images).await }).await {
         Ok(result) => result,
         Err(e) => Err(AppError::Internal(format!("photo scan task panicked: {e}"))),
     }
@@ -2474,7 +2493,7 @@ async fn scan_audiobooks_once_with_probe_bin(
                     .bind(&chapters_json)
                     .fetch_one(&db.pool)
                     .await?;
-                    resolve_art(db, "audiobook", book_id, path_str, art_dir).await?;
+                    resolve_art(db, "audiobook", book_id, path_str, art_dir, images).await?;
                     Ok::<(), AppError>(())
                 };
                 match index.await {
@@ -2526,7 +2545,7 @@ async fn scan_audiobooks_once_with_probe_bin(
                 .await?
                 .rows_affected() as usize;
             if removed > 0 {
-                remove_art(art_dir, images, "audiobook", book_id);
+                remove_art(db, art_dir, images, "audiobook", book_id).await?;
             }
             report.files_removed += removed;
         }
@@ -5028,7 +5047,7 @@ mod tests {
         std::fs::write(root.join("b.png"), b"fake-png").unwrap();
         std::fs::write(root.join("notes.txt"), b"skipped").unwrap();
 
-        let report = scan_photos_once(&db, std::slice::from_ref(&root))
+        let report = scan_photos_once(&db, std::slice::from_ref(&root), &test_images())
             .await
             .unwrap();
         assert_eq!(report.files_seen, 2);
@@ -5036,7 +5055,7 @@ mod tests {
         assert_eq!(count(&db, "photos").await, 2);
 
         // Unchanged rescan is a no-op.
-        let report = scan_photos_once(&db, std::slice::from_ref(&root))
+        let report = scan_photos_once(&db, std::slice::from_ref(&root), &test_images())
             .await
             .unwrap();
         assert_eq!(report.files_added, 0);
@@ -5044,7 +5063,7 @@ mod tests {
 
         // Deleting a file prunes its row (root still healthy).
         std::fs::remove_file(root.join("b.png")).unwrap();
-        let report = scan_photos_once(&db, std::slice::from_ref(&root))
+        let report = scan_photos_once(&db, std::slice::from_ref(&root), &test_images())
             .await
             .unwrap();
         assert_eq!(report.files_removed, 1);
@@ -5052,7 +5071,9 @@ mod tests {
 
         // A vanished ROOT must not wipe the catalog.
         drop(dir);
-        let report = scan_photos_once(&db, &[root]).await.unwrap();
+        let report = scan_photos_once(&db, &[root], &test_images())
+            .await
+            .unwrap();
         assert_eq!(report.files_removed, 0);
         assert_eq!(count(&db, "photos").await, 1);
     }
@@ -5080,6 +5101,11 @@ mod tests {
 
         let probe = music_probe(&[("artist", "Ghost"), ("album", "Haunt")], 100);
         let art_dir = tempfile::tempdir().unwrap();
+        // A stale row for the id the album will get: setting art drops it.
+        sqlx::query("INSERT INTO images (key, blurhash) VALUES ('album/1', 'stale')")
+            .execute(&db.pool)
+            .await
+            .unwrap();
         index_music_file(
             &db,
             track.to_str().unwrap(),
@@ -5087,7 +5113,7 @@ mod tests {
             "t",
             &probe,
             "01 Song",
-            Some(art_dir.path()),
+            Some((art_dir.path(), &test_images())),
         )
         .await
         .unwrap();
@@ -5097,6 +5123,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stored.as_deref(), art.to_str());
+        let stale: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM images")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(stale, 0);
         // No embedded art + already-set art → a rescan never overwrites.
         index_music_file(
             &db,
@@ -5105,7 +5136,7 @@ mod tests {
             "t2",
             &probe,
             "01 Song",
-            Some(art_dir.path()),
+            Some((art_dir.path(), &test_images())),
         )
         .await
         .unwrap();
@@ -5731,6 +5762,7 @@ mod art_tests {
     }
 
     async fn index(db: &Db, track: &Path, album: &str, art_dir: &Path) {
+        let images = Store::open(art_dir.join("images"), u64::MAX);
         let probe = FileProbe {
             format_tags: [("artist", "A"), ("album", album)]
                 .iter()
@@ -5747,7 +5779,7 @@ mod art_tests {
             &mtime,
             &probe,
             "t",
-            Some(art_dir),
+            Some((art_dir, &images)),
         )
         .await
         .unwrap();
@@ -5883,9 +5915,19 @@ mod art_tests {
             .put(&format!("album/{id}/342.webp"), b"variant")
             .unwrap();
         images.put("album/999/342.webp", b"other").unwrap();
+        sqlx::query("INSERT INTO images (key, blurhash) VALUES (?, 'x'), ('album/999', 'y')")
+            .bind(format!("album/{id}"))
+            .execute(&db.pool)
+            .await
+            .unwrap();
 
         std::fs::remove_file(&track).unwrap();
         assert_eq!(scan().await.unwrap().files_removed, 1);
+        let keys: Vec<String> = sqlx::query_scalar("SELECT key FROM images")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        assert_eq!(keys, ["album/999"], "the pruned album's row goes with it");
         assert!(!Path::new(&art).exists());
         assert!(
             images

@@ -2,8 +2,15 @@
 
 use super::*;
 
-/// `(id, width, height, taken_at, mtime)` from `photos`.
-pub(super) type PhotoListRow = (i64, Option<i64>, Option<i64>, Option<String>, String);
+/// `(id, width, height, taken_at, mtime, blurhash)` from `photos` + `images`.
+pub(super) type PhotoListRow = (
+    i64,
+    Option<i64>,
+    Option<i64>,
+    Option<String>,
+    String,
+    Option<String>,
+);
 
 pub(super) async fn list_photos(
     State(state): State<AppState>,
@@ -13,7 +20,8 @@ pub(super) async fn list_photos(
     // Timeline order: EXIF taken-at when present, file mtime otherwise (both
     // stored in lexicographically-chronological shapes).
     let rows: Vec<PhotoListRow> = sqlx::query_as(
-        "SELECT id, width, height, taken_at, mtime FROM photos \
+        "SELECT p.id, p.width, p.height, taken_at, mtime, img.blurhash FROM photos p \
+         LEFT JOIN images img ON img.key = 'photo/' || p.id \
          ORDER BY COALESCE(taken_at, mtime) DESC LIMIT ? OFFSET ?",
     )
     .bind(limit)
@@ -25,7 +33,7 @@ pub(super) async fn list_photos(
         .await?;
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|(id, width, height, taken_at, mtime)| {
+        .map(|(id, width, height, taken_at, mtime, blurhash)| {
             json!({
                 "id": id,
                 "width": width,
@@ -34,6 +42,7 @@ pub(super) async fn list_photos(
                 "mtime": mtime,
                 "url": format!("/api/media/photos/{id}/file"),
                 "thumb_url": format!("/api/media/images/photo/{id}"),
+                "blurhash": blurhash,
             })
         })
         .collect();

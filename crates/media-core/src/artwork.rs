@@ -106,13 +106,36 @@ pub fn blurhash(img: &DynamicImage) -> Result<String, ArtworkError> {
         .map_err(|e| ArtworkError::Blurhash(e.to_string()))
 }
 
+/// Blurhash and oriented size of an original.
+pub fn describe(bytes: &[u8]) -> Result<(String, u32, u32), ArtworkError> {
+    let img = decode(bytes)?;
+    Ok((blurhash(&img)?, img.width(), img.height()))
+}
+
 /// At most [`POOL_PERMITS`] blocking jobs at once.
 #[derive(Clone)]
-pub struct Pool(Arc<Semaphore>);
+pub struct Pool {
+    permits: Arc<Semaphore>,
+    /// Jobs inside the pool right now, the peak and the total, for tests.
+    #[cfg(test)]
+    pub(crate) probe: Arc<Probe>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct Probe {
+    inside: AtomicU64,
+    pub(crate) peak: AtomicU64,
+    pub(crate) runs: AtomicU64,
+}
 
 impl Default for Pool {
     fn default() -> Self {
-        Self(Arc::new(Semaphore::new(POOL_PERMITS)))
+        Self {
+            permits: Arc::new(Semaphore::new(POOL_PERMITS)),
+            #[cfg(test)]
+            probe: Arc::default(),
+        }
     }
 }
 
@@ -126,14 +149,25 @@ impl Pool {
         T: Send + 'static,
     {
         let permit = self
-            .0
+            .permits
             .clone()
             .acquire_owned()
             .await
             .map_err(|e| ArtworkError::Pool(e.to_string()))?;
+        #[cfg(test)]
+        let probe = self.probe.clone();
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            f()
+            #[cfg(test)]
+            {
+                let now = probe.inside.fetch_add(1, Ordering::SeqCst) + 1;
+                probe.peak.fetch_max(now, Ordering::SeqCst);
+                probe.runs.fetch_add(1, Ordering::SeqCst);
+            }
+            let out = f();
+            #[cfg(test)]
+            probe.inside.fetch_sub(1, Ordering::SeqCst);
+            out
         })
         .await
         .map_err(|e| ArtworkError::Pool(e.to_string()))
@@ -446,27 +480,17 @@ pub async fn tmdb_original(
             tokio::task::spawn_blocking(move || st.put_orig(&k, &b))
                 .await
                 .map_err(|e| ArtworkError::Pool(e.to_string()))??;
-            sqlx::query(
-                "INSERT INTO images (key, fetched_at, attempts) VALUES (?, ?, 1) \
-                 ON CONFLICT(key) DO UPDATE SET fetched_at = excluded.fetched_at, \
-                 failed_at = NULL, attempts = attempts + 1",
-            )
-            .bind(&key)
-            .bind(now_stamp())
-            .execute(&db.pool)
-            .await?;
+            // The placeholder is computed once, right after the fetch.
+            let b = bytes.clone();
+            let described = store.pool.run(move || describe(&b)).await?;
+            if let Err(e) = &described {
+                tracing::warn!(key, "tmdb image blurhash failed: {e}");
+            }
+            mark_fetched(db, &key, described.ok()).await?;
             Ok(bytes)
         }
         Err(FetchError::NotFound) => {
-            sqlx::query(
-                "INSERT INTO images (key, failed_at, attempts) VALUES (?, ?, 1) \
-                 ON CONFLICT(key) DO UPDATE SET failed_at = excluded.failed_at, \
-                 attempts = attempts + 1",
-            )
-            .bind(&key)
-            .bind(now_stamp())
-            .execute(&db.pool)
-            .await?;
+            mark_failed(db, &key).await?;
             Err(FetchError::NotFound)
         }
         Err(e) => {
@@ -474,6 +498,60 @@ pub async fn tmdb_original(
             Err(e)
         }
     }
+}
+
+/// Record a fetched (or described) original with its placeholder, if any.
+async fn mark_fetched(
+    db: &crate::db::Db,
+    key: &str,
+    described: Option<(String, u32, u32)>,
+) -> Result<(), sqlx::Error> {
+    let (blurhash, width, height) = match described {
+        Some((b, w, h)) => (Some(b), Some(w), Some(h)),
+        None => (None, None, None),
+    };
+    sqlx::query(
+        "INSERT INTO images (key, blurhash, width, height, fetched_at, attempts) \
+         VALUES (?, ?, ?, ?, ?, 1) \
+         ON CONFLICT(key) DO UPDATE SET blurhash = excluded.blurhash, \
+         width = excluded.width, height = excluded.height, \
+         fetched_at = excluded.fetched_at, failed_at = NULL, attempts = attempts + 1",
+    )
+    .bind(key)
+    .bind(blurhash)
+    .bind(width)
+    .bind(height)
+    .bind(now_stamp())
+    .execute(&db.pool)
+    .await?;
+    Ok(())
+}
+
+/// Stamp a failure: an origin 404, or a local file that cannot be read or
+/// decoded.
+async fn mark_failed(db: &crate::db::Db, key: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO images (key, failed_at, attempts) VALUES (?, ?, 1) \
+         ON CONFLICT(key) DO UPDATE SET failed_at = excluded.failed_at, \
+         attempts = attempts + 1",
+    )
+    .bind(key)
+    .bind(now_stamp())
+    .execute(&db.pool)
+    .await?;
+    Ok(())
+}
+
+/// Drop the `images` row and the cached variants of a local image
+/// (`{kind}/{id}`) whose source changed or went away, so the next backfill
+/// describes it afresh. The cache removal is a few unlinks, done inline.
+pub async fn invalidate(db: &crate::db::Db, store: &Store, key: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM images WHERE key = ?")
+        .bind(key)
+        .execute(&db.pool)
+        .await?;
+    store.remove(key);
+    Ok(())
 }
 
 /// One GET: 404 is [`FetchError::NotFound`]; any other non-2xx (redirects
@@ -567,6 +645,83 @@ pub async fn prefetch_library(state: &crate::AppState) {
     }
 }
 
+/// Rows per backfill query.
+const BACKFILL_BATCH: i64 = 200;
+
+/// Describe (blurhash, width, height) every album cover, audiobook cover and
+/// photo that has no `images` row yet, in batches of [`BACKFILL_BATCH`]
+/// through the 2-permit pool. Runs after each scan, after the poster
+/// prefetch (TMDB posters are described right after their fetch). A file
+/// that cannot be read or decoded is stamped failed and left until a rescan
+/// changes it ([`invalidate`]).
+pub async fn backfill(state: &crate::AppState) {
+    let (mut after_kind, mut after_id) = (String::new(), 0i64);
+    let (mut described, mut failed) = (0usize, 0usize);
+    loop {
+        let batch: Vec<(String, i64, String)> = match sqlx::query_as(
+            "SELECT kind, id, path FROM ( \
+               SELECT 'album' AS kind, id, art_path AS path FROM albums WHERE art_path IS NOT NULL \
+               UNION ALL SELECT 'audiobook', id, art_path FROM audiobooks WHERE art_path IS NOT NULL \
+               UNION ALL SELECT 'photo', id, path FROM photos) \
+             WHERE (kind, id) > (?, ?) \
+             AND NOT EXISTS (SELECT 1 FROM images WHERE key = kind || '/' || id) \
+             ORDER BY kind, id LIMIT ?",
+        )
+        .bind(&after_kind)
+        .bind(after_id)
+        .bind(BACKFILL_BATCH)
+        .fetch_all(&state.db.pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("blurhash backfill query failed: {e}");
+                return;
+            }
+        };
+        let Some((kind, id, _)) = batch.last() else {
+            break;
+        };
+        (after_kind, after_id) = (kind.clone(), *id);
+        let mut jobs = tokio::task::JoinSet::new();
+        for (kind, id, path) in &batch {
+            let (db, store) = (state.db.clone(), state.artwork.clone());
+            let (key, path) = (format!("{kind}/{id}"), path.clone());
+            jobs.spawn(async move {
+                let result = store
+                    .pool
+                    .run(move || describe(&std::fs::read(path)?))
+                    .await
+                    .and_then(|r| r);
+                let ok = result.is_ok();
+                let written = match result {
+                    Ok(d) => mark_fetched(&db, &key, Some(d)).await,
+                    Err(e) => {
+                        tracing::debug!(key, "blurhash backfill failed: {e}");
+                        mark_failed(&db, &key).await
+                    }
+                };
+                if let Err(e) = written {
+                    tracing::warn!(key, "blurhash backfill write failed: {e}");
+                }
+                ok
+            });
+        }
+        while let Some(done) = jobs.join_next().await {
+            match done {
+                Ok(true) => described += 1,
+                _ => failed += 1,
+            }
+        }
+        if (batch.len() as i64) < BACKFILL_BATCH {
+            break;
+        }
+    }
+    if described + failed > 0 {
+        tracing::info!(described, failed, "blurhash backfill complete");
+    }
+}
+
 /// Fixture images built in-test, shared with the route tests.
 #[cfg(test)]
 pub(crate) mod fixtures {
@@ -609,7 +764,6 @@ mod tests {
     use super::fixtures::*;
     use super::*;
     use image::{ImageFormat, Rgba, RgbaImage};
-    use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
 
     fn webp_dims(bytes: &[u8]) -> (u32, u32) {
@@ -685,27 +839,21 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn pool_never_runs_more_than_two_jobs() {
         let pool = Pool::default();
-        let inside = Arc::new(AtomicUsize::new(0));
-        let peak = Arc::new(AtomicUsize::new(0));
         let jobs: Vec<_> = (0..8)
             .map(|_| {
-                let (pool, inside, peak) = (pool.clone(), inside.clone(), peak.clone());
+                let pool = pool.clone();
                 tokio::spawn(async move {
-                    pool.run(move || {
-                        let now = inside.fetch_add(1, Ordering::SeqCst) + 1;
-                        peak.fetch_max(now, Ordering::SeqCst);
-                        std::thread::sleep(Duration::from_millis(30));
-                        inside.fetch_sub(1, Ordering::SeqCst);
-                    })
-                    .await
-                    .unwrap()
+                    pool.run(|| std::thread::sleep(Duration::from_millis(30)))
+                        .await
+                        .unwrap()
                 })
             })
             .collect();
         for job in jobs {
             job.await.unwrap();
         }
-        assert_eq!(peak.load(Ordering::SeqCst), POOL_PERMITS);
+        assert_eq!(pool.probe.peak.load(Ordering::SeqCst), POOL_PERMITS as u64);
+        assert_eq!(pool.probe.runs.load(Ordering::SeqCst), 8);
     }
 
     fn age(path: &Path, secs_ago: u64) {
