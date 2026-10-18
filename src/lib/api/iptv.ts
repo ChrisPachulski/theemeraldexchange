@@ -312,7 +312,6 @@ export function preferAvplayer(): boolean {
 }
 
 export const iptvApi = Object.assign({
-  health: () => get<{ expiresAt: string | null; maxConnections: number; status: string }>('/health'),
   categories: (kind: IptvKind) => get<CategoryDto[]>('/categories', { kind }),
   listLive: (params: ListParams = {}) => get<PagedDto<ChannelDto>>('/live', params),
   listVod: (params: ListParams = {}) => get<PagedDto<VodDto>>('/vod', params),
