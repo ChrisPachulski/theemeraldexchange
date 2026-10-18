@@ -280,10 +280,6 @@ fn parse_ffprobe_json(doc: &Value) -> FileProbe {
         })
         .unwrap_or_default();
 
-    let has_embedded_art = streams
-        .iter()
-        .any(|s| stream_type(s) == Some("video") && is_attached_pic(s));
-
     FileProbe {
         container,
         duration_secs,
@@ -295,7 +291,6 @@ fn parse_ffprobe_json(doc: &Value) -> FileProbe {
         subtitle_tracks,
         format_tags,
         chapters,
-        has_embedded_art,
     }
 }
 
@@ -628,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn embedded_cover_art_sets_flag_without_becoming_the_video_stream() {
+    fn embedded_cover_art_never_becomes_the_video_stream() {
         let doc = json!({
             "streams": [
                 {
@@ -645,7 +640,6 @@ mod tests {
             ]
         });
         let probe = parse_ffprobe_json(&doc);
-        assert!(probe.has_embedded_art);
         // The attached pic must not masquerade as the file's video stream.
         assert_eq!(probe.video_codec, None);
     }

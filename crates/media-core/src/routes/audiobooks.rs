@@ -7,8 +7,8 @@ pub(super) async fn list_audiobooks(
     Query(q): Query<PageQuery>,
 ) -> AppResult<Json<Value>> {
     let (limit, offset) = paginate(q.limit, q.offset);
-    let rows: Vec<(i64, String, String, Option<i64>)> = sqlx::query_as(
-        "SELECT id, author, title, duration_secs FROM audiobooks \
+    let rows: Vec<(i64, String, String, Option<i64>, bool)> = sqlx::query_as(
+        "SELECT id, author, title, duration_secs, art_path IS NOT NULL FROM audiobooks \
          ORDER BY author COLLATE NOCASE, title COLLATE NOCASE LIMIT ? OFFSET ?",
     )
     .bind(limit)
@@ -20,12 +20,13 @@ pub(super) async fn list_audiobooks(
         .await?;
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|(id, author, title, duration_secs)| {
+        .map(|(id, author, title, duration_secs, has_art)| {
             json!({
                 "id": id,
                 "author": author,
                 "title": title,
                 "duration_secs": duration_secs,
+                "art_url": art_url(id, has_art),
                 "streamUrl": format!("/api/media/stream/audiobook/{id}"),
             })
         })
@@ -37,13 +38,14 @@ pub(super) async fn get_audiobook(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> AppResult<Json<Value>> {
-    let row: Option<(String, String, Option<i64>, String)> = sqlx::query_as(
-        "SELECT author, title, duration_secs, chapters_json FROM audiobooks WHERE id = ?",
+    let row: Option<(String, String, Option<i64>, String, bool)> = sqlx::query_as(
+        "SELECT author, title, duration_secs, chapters_json, art_path IS NOT NULL \
+         FROM audiobooks WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.db.pool)
     .await?;
-    let (author, title, duration_secs, chapters_json) = row.ok_or(AppError::NotFound)?;
+    let (author, title, duration_secs, chapters_json, has_art) = row.ok_or(AppError::NotFound)?;
     let chapters: Value = serde_json::from_str(&chapters_json).unwrap_or_else(|_| json!([]));
     Ok(Json(json!({
         "id": id,
@@ -51,14 +53,21 @@ pub(super) async fn get_audiobook(
         "title": title,
         "duration_secs": duration_secs,
         "chapters": chapters,
+        "art_url": art_url(id, has_art),
         "streamUrl": format!("/api/media/stream/audiobook/{id}"),
     })))
+}
+
+/// The resized cover route for a book with art, else null.
+fn art_url(id: i64, has_art: bool) -> Option<String> {
+    has_art.then(|| format!("/api/media/images/audiobook/{id}"))
 }
 
 #[cfg(test)]
 mod tests {
 
     use crate::routes::testsupport::*;
+    use serde_json::Value;
 
     use tower::ServiceExt;
 
@@ -78,7 +87,7 @@ mod tests {
         .execute(&state.db.pool)
         .await
         .unwrap();
-        let app = crate::build_router(state);
+        let app = crate::build_router(state.clone());
 
         let list = body_json(
             app.clone()
@@ -90,6 +99,7 @@ mod tests {
         assert_eq!(list["total"], 1);
         let id = list["items"][0]["id"].as_i64().unwrap();
         assert_eq!(list["items"][0]["author"], "Le Guin");
+        assert_eq!(list["items"][0]["art_url"], Value::Null);
 
         let detail = body_json(
             app.clone()
@@ -99,6 +109,29 @@ mod tests {
         )
         .await;
         assert_eq!(detail["chapters"][0]["title"], "Chapter 1");
+        assert_eq!(detail["art_url"], Value::Null);
+
+        sqlx::query("UPDATE audiobooks SET art_path = '/art/audiobook_1.png'")
+            .execute(&state.db.pool)
+            .await
+            .unwrap();
+        let url = format!("/api/media/images/audiobook/{id}");
+        let list = body_json(
+            app.clone()
+                .oneshot(req("GET", "/api/media/audiobooks?sub=plex:1"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(list["items"][0]["art_url"], url.as_str());
+        let detail = body_json(
+            app.clone()
+                .oneshot(req("GET", format!("/api/media/audiobooks/{id}?sub=plex:1")))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(detail["art_url"], url.as_str());
         assert_eq!(
             detail["streamUrl"],
             format!("/api/media/stream/audiobook/{id}")

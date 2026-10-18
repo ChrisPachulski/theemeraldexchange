@@ -1759,14 +1759,16 @@ pub async fn scan_music_once(
     db: &Db,
     roots: &[std::path::PathBuf],
     art_dir: &std::path::Path,
+    images: &crate::artwork::Store,
 ) -> Result<MusicScanReport, AppError> {
-    scan_music_once_with_probe_bin(db, roots, art_dir, "ffprobe").await
+    scan_music_once_with_probe_bin(db, roots, art_dir, images, "ffprobe").await
 }
 
 async fn scan_music_once_with_probe_bin(
     db: &Db,
     roots: &[std::path::PathBuf],
     art_dir: &std::path::Path,
+    images: &crate::artwork::Store,
     ffprobe_bin: &str,
 ) -> Result<MusicScanReport, AppError> {
     let mut report = MusicScanReport::default();
@@ -1832,7 +1834,7 @@ async fn scan_music_once_with_probe_bin(
         }
     }
 
-    match prune_missing_music(db, &walk.prunable_roots).await {
+    match prune_missing_music(db, &walk.prunable_roots, art_dir, images).await {
         Ok(removed) => report.files_removed = removed,
         Err(e) => {
             tracing::warn!("music prune failed: {e}");
@@ -1849,8 +1851,9 @@ pub async fn scan_music_isolated(
     db: Db,
     roots: Vec<std::path::PathBuf>,
     art_dir: std::path::PathBuf,
+    images: std::sync::Arc<crate::artwork::Store>,
 ) -> Result<MusicScanReport, AppError> {
-    match tokio::spawn(async move { scan_music_once(&db, &roots, &art_dir).await }).await {
+    match tokio::spawn(async move { scan_music_once(&db, &roots, &art_dir, &images).await }).await {
         Ok(result) => result,
         Err(e) => Err(AppError::Internal(format!("music scan task panicked: {e}"))),
     }
@@ -1860,7 +1863,7 @@ pub async fn scan_music_isolated(
 /// is keyed on its backing `media_file_id`, so a rescan of the same file never
 /// duplicates it; the artist/album upserts dedup on name / (artist, title).
 /// With `art_dir`, albums without art get it resolved (folder image first,
-/// embedded cover extraction second); `None` skips art entirely (tests).
+/// the tag picture second, see [`resolve_art`]); `None` skips art (tests).
 #[allow(clippy::too_many_arguments)]
 async fn index_music_file(
     db: &Db,
@@ -1885,60 +1888,59 @@ async fn index_music_file(
     )
     .await?;
     if let Some(art_dir) = art_dir {
-        resolve_album_art(db, album_id, path, probe, art_dir).await?;
+        resolve_art(db, "album", album_id, path, art_dir).await?;
     }
     Ok(())
 }
 
-/// Fill `albums.art_path` for `album_id` if it is still NULL: a folder image
-/// beside the track wins (referenced in place, no copy); otherwise an
-/// embedded attached_pic is extracted once into `art_dir/album_{id}.jpg`.
-/// Best-effort — an extraction failure just leaves the album artless.
-async fn resolve_album_art(
+/// Fill `{kind}s.art_path` for row `id` if it is still NULL (`kind` is
+/// `album` or `audiobook`): a folder image beside `media_path` wins
+/// (referenced in place, no copy); otherwise the tag picture is written once
+/// to `art_dir/{kind}_{id}.{jpg|png}`. Best-effort: a file with no readable
+/// picture just leaves the row artless.
+async fn resolve_art(
     db: &Db,
-    album_id: i64,
-    track_path: &str,
-    probe: &FileProbe,
-    art_dir: &std::path::Path,
+    kind: &'static str,
+    id: i64,
+    media_path: &str,
+    art_dir: &Path,
 ) -> Result<(), AppError> {
-    let current: Option<Option<String>> =
-        sqlx::query_scalar("SELECT art_path FROM albums WHERE id = ?")
-            .bind(album_id)
-            .fetch_optional(&db.pool)
-            .await?;
+    let (select, update) = match kind {
+        "album" => (
+            "SELECT art_path FROM albums WHERE id = ?",
+            "UPDATE albums SET art_path = ? WHERE id = ? AND art_path IS NULL",
+        ),
+        _ => (
+            "SELECT art_path FROM audiobooks WHERE id = ?",
+            "UPDATE audiobooks SET art_path = ? WHERE id = ? AND art_path IS NULL",
+        ),
+    };
+    let current: Option<Option<String>> = sqlx::query_scalar(select)
+        .bind(id)
+        .fetch_optional(&db.pool)
+        .await?;
     if !matches!(current, Some(None)) {
-        return Ok(()); // already has art (or the album vanished)
+        return Ok(()); // already has art (or the row vanished)
     }
 
-    let track_dir = std::path::Path::new(track_path)
-        .parent()
-        .map(std::path::PathBuf::from);
-    let folder_art = match track_dir {
-        Some(dir) => tokio::task::spawn_blocking(move || find_folder_art(&dir))
-            .await
-            .unwrap_or(None),
-        None => None,
-    };
+    let media = std::path::PathBuf::from(media_path);
+    let art_dir = art_dir.to_path_buf();
+    let art = tokio::task::spawn_blocking(move || {
+        media.parent().and_then(find_folder_art).or_else(|| {
+            let (bytes, ext) = read_embedded_art(&media)?;
+            let dest = art_dir.join(format!("{kind}_{id}.{ext}"));
+            std::fs::create_dir_all(&art_dir).ok()?;
+            std::fs::write(&dest, bytes).ok()?;
+            Some(dest)
+        })
+    })
+    .await
+    .unwrap_or(None);
 
-    let art_path: Option<String> = if let Some(p) = folder_art {
-        p.to_str().map(str::to_string)
-    } else if probe.has_embedded_art {
-        let dest = art_dir.join(format!("album_{album_id}.jpg"));
-        if tokio::fs::create_dir_all(art_dir).await.is_ok()
-            && extract_embedded_art(std::path::Path::new(track_path), &dest).await
-        {
-            dest.to_str().map(str::to_string)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    if let Some(art) = art_path {
-        sqlx::query("UPDATE albums SET art_path = ? WHERE id = ? AND art_path IS NULL")
+    if let Some(art) = art.as_deref().and_then(Path::to_str) {
+        sqlx::query(update)
             .bind(art)
-            .bind(album_id)
+            .bind(id)
             .execute(&db.pool)
             .await?;
     }
@@ -1965,26 +1967,42 @@ pub fn find_folder_art(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     None
 }
 
-/// One-shot embedded-cover extraction: first attached video stream → a JPEG
-/// at `dest`. Re-encodes to mjpeg so a PNG cover still lands as .jpg. Returns
-/// success; failures are logged by the caller's silence (artless album).
-async fn extract_embedded_art(input: &std::path::Path, dest: &std::path::Path) -> bool {
-    let ffmpeg_bin = std::env::var("MEDIA_FFMPEG_BIN").unwrap_or_else(|_| "ffmpeg".to_string());
-    let output = tokio::process::Command::new(ffmpeg_bin)
-        .arg("-y")
-        .arg("-v")
-        .arg("error")
-        .arg("-i")
-        .arg(input)
-        .arg("-map")
-        .arg("0:v:0")
-        .arg("-frames:v")
-        .arg("1")
-        .arg(dest)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .await;
-    matches!(output, Ok(o) if o.status.success()) && dest.exists()
+/// The cover picture in `path`'s tags (CoverFront first, else the first
+/// picture of any tag) as raw bytes plus the extension its MIME type maps to:
+/// `png` for PNG, `jpg` otherwise (the image route sniffs content, not the
+/// extension). `None` when lofty cannot read the file or it has no picture.
+/// Blocking file I/O; audio properties are not parsed.
+pub fn read_embedded_art(path: &Path) -> Option<(Vec<u8>, &'static str)> {
+    use lofty::config::ParseOptions;
+    use lofty::file::TaggedFileExt;
+    use lofty::picture::{MimeType, PictureType};
+    let tagged = lofty::probe::Probe::open(path)
+        .ok()?
+        .options(ParseOptions::new().read_properties(false))
+        .guess_file_type()
+        .ok()?
+        .read()
+        .ok()?;
+    let pictures = || tagged.tags().iter().flat_map(|t| t.pictures());
+    let pic = pictures()
+        .find(|p| p.pic_type() == PictureType::CoverFront)
+        .or_else(|| pictures().next())?;
+    let ext = if pic.mime_type() == Some(&MimeType::Png) {
+        "png"
+    } else {
+        "jpg"
+    };
+    Some((pic.data().to_vec(), ext))
+}
+
+/// Remove what a pruned album/audiobook leaves behind: its extracted cover
+/// in `art_dir` (never folder art, which belongs to the library) and its
+/// resized variants under `cache/{kind}/{id}`. Blocking FS — call off-runtime.
+fn remove_art(art_dir: &Path, images: &crate::artwork::Store, kind: &str, id: i64) {
+    for ext in ["jpg", "png"] {
+        let _ = std::fs::remove_file(art_dir.join(format!("{kind}_{id}.{ext}")));
+    }
+    images.remove(&format!("{kind}/{id}"));
 }
 
 /// Get-or-create an artist by its UNIQUE name, returning its id.
@@ -2056,10 +2074,13 @@ async fn upsert_track(
 /// disk, restricted to healthy `prunable_roots` (a missing/unmounted music root
 /// must never wipe the catalog). The delete cascades tracks; now-empty albums
 /// then artists are swept. The `JOIN tracks` guarantees only audio rows are
-/// touched — video `media_files` are never in scope. Returns rows removed.
+/// touched — video `media_files` are never in scope. A swept album's art
+/// goes with it ([`remove_art`]). Returns rows removed.
 async fn prune_missing_music(
     db: &Db,
     prunable_roots: &[std::path::PathBuf],
+    art_dir: &Path,
+    images: &crate::artwork::Store,
 ) -> Result<usize, AppError> {
     if prunable_roots.is_empty() {
         tracing::warn!("no healthy music roots this pass; skipping music prune");
@@ -2094,9 +2115,16 @@ async fn prune_missing_music(
     }
     if removed > 0 {
         // tracks cascade via media_file_id; sweep the now-empty catalog rows.
-        sqlx::query("DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks)")
-            .execute(&db.pool)
-            .await?;
+        let albums: Vec<i64> = sqlx::query_scalar(
+            "DELETE FROM albums WHERE id NOT IN (SELECT DISTINCT album_id FROM tracks) RETURNING id",
+        )
+        .fetch_all(&db.pool)
+        .await?;
+        // ponytail: a few unlinks per swept album, inline on the runtime;
+        // move into spawn_blocking if a prune ever sweeps thousands at once.
+        for id in albums {
+            remove_art(art_dir, images, "album", id);
+        }
         sqlx::query("DELETE FROM artists WHERE id NOT IN (SELECT DISTINCT artist_id FROM albums)")
             .execute(&db.pool)
             .await?;
@@ -2369,17 +2397,22 @@ pub fn classify_audiobook(
     AudiobookMeta { author, title }
 }
 
-/// One audiobook scan pass over `roots` (mirrors [`scan_music_once`]).
+/// One audiobook scan pass over `roots` (mirrors [`scan_music_once`]),
+/// including the cover ([`resolve_art`]) and its removal on prune.
 pub async fn scan_audiobooks_once(
     db: &Db,
     roots: &[std::path::PathBuf],
+    art_dir: &Path,
+    images: &crate::artwork::Store,
 ) -> Result<AudiobookScanReport, AppError> {
-    scan_audiobooks_once_with_probe_bin(db, roots, "ffprobe").await
+    scan_audiobooks_once_with_probe_bin(db, roots, art_dir, images, "ffprobe").await
 }
 
 async fn scan_audiobooks_once_with_probe_bin(
     db: &Db,
     roots: &[std::path::PathBuf],
+    art_dir: &Path,
+    images: &crate::artwork::Store,
     ffprobe_bin: &str,
 ) -> Result<AudiobookScanReport, AppError> {
     let mut report = AudiobookScanReport::default();
@@ -2426,20 +2459,22 @@ async fn scan_audiobooks_once_with_probe_bin(
                             .await?;
                     let chapters_json = serde_json::to_string(&probed.chapters)
                         .unwrap_or_else(|_| "[]".to_string());
-                    sqlx::query(
+                    let book_id: i64 = sqlx::query_scalar(
                         "INSERT INTO audiobooks (media_file_id, author, title, duration_secs, chapters_json) \
                          VALUES (?, ?, ?, ?, ?) \
                          ON CONFLICT(media_file_id) DO UPDATE SET author = excluded.author, \
                          title = excluded.title, duration_secs = excluded.duration_secs, \
-                         chapters_json = excluded.chapters_json",
+                         chapters_json = excluded.chapters_json \
+                         RETURNING id",
                     )
                     .bind(file_id)
                     .bind(&meta.author)
                     .bind(&meta.title)
                     .bind(probed.duration_secs)
                     .bind(&chapters_json)
-                    .execute(&db.pool)
+                    .fetch_one(&db.pool)
                     .await?;
+                    resolve_art(db, "audiobook", book_id, path_str, art_dir).await?;
                     Ok::<(), AppError>(())
                 };
                 match index.await {
@@ -2464,31 +2499,36 @@ async fn scan_audiobooks_once_with_probe_bin(
     }
 
     // Prune media_files rows backing audiobooks whose file vanished (cascades
-    // the audiobooks row), restricted to healthy roots — same guard as music.
+    // the audiobooks row, then its art), restricted to healthy roots — same
+    // guard as music.
     if !walk.prunable_roots.is_empty() {
-        let rows: Vec<(i64, String)> = sqlx::query_as(
-            "SELECT mf.id, mf.path FROM media_files mf JOIN audiobooks a ON a.media_file_id = mf.id",
+        let rows: Vec<(i64, String, i64)> = sqlx::query_as(
+            "SELECT mf.id, mf.path, a.id FROM media_files mf JOIN audiobooks a ON a.media_file_id = mf.id",
         )
         .fetch_all(&db.pool)
         .await?;
         let roots = walk.prunable_roots.clone();
-        let missing: Vec<i64> = tokio::task::spawn_blocking(move || {
+        let missing: Vec<(i64, i64)> = tokio::task::spawn_blocking(move || {
             rows.into_iter()
-                .filter(|(_, path)| {
+                .filter(|(_, path, _)| {
                     let p = std::path::Path::new(path);
                     roots.iter().any(|root| p.starts_with(root)) && !p.exists()
                 })
-                .map(|(id, _)| id)
+                .map(|(file_id, _, book_id)| (file_id, book_id))
                 .collect()
         })
         .await
         .map_err(|e| AppError::Internal(format!("audiobook prune task failed: {e}")))?;
-        for id in missing {
-            report.files_removed += sqlx::query("DELETE FROM media_files WHERE id = ?")
-                .bind(id)
+        for (file_id, book_id) in missing {
+            let removed = sqlx::query("DELETE FROM media_files WHERE id = ?")
+                .bind(file_id)
                 .execute(&db.pool)
                 .await?
                 .rows_affected() as usize;
+            if removed > 0 {
+                remove_art(art_dir, images, "audiobook", book_id);
+            }
+            report.files_removed += removed;
         }
     }
 
@@ -2499,8 +2539,12 @@ async fn scan_audiobooks_once_with_probe_bin(
 pub async fn scan_audiobooks_isolated(
     db: Db,
     roots: Vec<std::path::PathBuf>,
+    art_dir: std::path::PathBuf,
+    images: std::sync::Arc<crate::artwork::Store>,
 ) -> Result<AudiobookScanReport, AppError> {
-    match tokio::spawn(async move { scan_audiobooks_once(&db, &roots).await }).await {
+    match tokio::spawn(async move { scan_audiobooks_once(&db, &roots, &art_dir, &images).await })
+        .await
+    {
         Ok(result) => result,
         Err(e) => Err(AppError::Internal(format!(
             "audiobook scan task panicked: {e}"
@@ -2782,7 +2826,6 @@ mod tests {
             }],
             format_tags: Default::default(),
             chapters: Vec::new(),
-            has_embedded_art: false,
         }
     }
 
@@ -4777,8 +4820,15 @@ mod tests {
                 .map(|(k, v)| (k.to_string(), v.to_string()))
                 .collect(),
             chapters: Vec::new(),
-            has_embedded_art: false,
         }
+    }
+
+    /// An image store for scans whose tests never look at it.
+    fn test_images() -> crate::artwork::Store {
+        crate::artwork::Store::open(
+            std::env::temp_dir().join("media-core-test-images-unused"),
+            u64::MAX,
+        )
     }
 
     // ── Photos & audiobooks ────────────────────────────────────────────
@@ -5226,6 +5276,7 @@ mod tests {
             &db,
             &roots,
             std::env::temp_dir().as_path(),
+            &test_images(),
             stub.to_str().unwrap(),
         )
         .await
@@ -5244,6 +5295,7 @@ mod tests {
             &db,
             &roots,
             std::env::temp_dir().as_path(),
+            &test_images(),
             stub.to_str().unwrap(),
         )
         .await
@@ -5257,7 +5309,7 @@ mod tests {
     #[tokio::test]
     async fn scan_music_empty_roots_is_noop() {
         let db = Db::connect_memory().await.unwrap();
-        let report = scan_music_once(&db, &[], std::env::temp_dir().as_path())
+        let report = scan_music_once(&db, &[], std::env::temp_dir().as_path(), &test_images())
             .await
             .unwrap();
         assert_eq!(report.files_seen, 0);
@@ -5301,7 +5353,7 @@ mod tests {
         assert_eq!(count(&db, "artists").await, 2);
 
         let roots = vec![tmp.path().to_path_buf()];
-        let report = scan_music_once(&db, &roots, std::env::temp_dir().as_path())
+        let report = scan_music_once(&db, &roots, std::env::temp_dir().as_path(), &test_images())
             .await
             .unwrap();
         assert_eq!(
@@ -5344,7 +5396,7 @@ mod tests {
         let roots = vec![std::path::PathBuf::from(
             "/definitely-not-mounted-eex-music",
         )];
-        let report = scan_music_once(&db, &roots, std::env::temp_dir().as_path())
+        let report = scan_music_once(&db, &roots, std::env::temp_dir().as_path(), &test_images())
             .await
             .unwrap();
         assert_eq!(report.files_removed, 0, "missing root prunes nothing");
@@ -5616,5 +5668,299 @@ mod youtube_tests {
             .await
             .unwrap();
         assert_eq!(left, 0, "the cascade removed the video row");
+    }
+}
+
+#[cfg(test)]
+mod art_tests {
+    use super::*;
+    use crate::artwork::Store;
+    use crate::artwork::fixtures::{encode, gradient};
+    use image::{DynamicImage, ImageFormat};
+    use lofty::picture::{MimeType, Picture, PictureType};
+    use lofty::prelude::*;
+    use std::path::PathBuf;
+
+    fn png() -> Vec<u8> {
+        encode(&DynamicImage::ImageRgb8(gradient(40, 40)), ImageFormat::Png)
+    }
+
+    fn jpeg() -> Vec<u8> {
+        encode(
+            &DynamicImage::ImageRgb8(gradient(48, 32)),
+            ImageFormat::Jpeg,
+        )
+    }
+
+    /// Copy the committed untagged fixture `tiny.{ext}` to `dest`.
+    fn fixture(ext: &str, dest: &Path) -> PathBuf {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/audio")
+            .join(format!("tiny.{ext}"));
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::fs::copy(src, dest).unwrap();
+        dest.to_path_buf()
+    }
+
+    /// Write `pictures` into the file's primary tag through lofty.
+    fn tag_pictures(path: &Path, pictures: &[(PictureType, MimeType, Vec<u8>)]) {
+        let file = lofty::read_from_path(path).unwrap();
+        let mut tag = lofty::tag::Tag::new(file.primary_tag_type());
+        for (pic_type, mime, data) in pictures {
+            tag.push_picture(
+                Picture::unchecked(data.clone())
+                    .pic_type(*pic_type)
+                    .mime_type(mime.clone())
+                    .build(),
+            );
+        }
+        tag.save_to_path(path, lofty::config::WriteOptions::default())
+            .unwrap();
+    }
+
+    fn cover(mime: MimeType, data: &[u8]) -> Vec<(PictureType, MimeType, Vec<u8>)> {
+        vec![(PictureType::CoverFront, mime, data.to_vec())]
+    }
+
+    async fn album_art(db: &Db, album: &str) -> Option<String> {
+        sqlx::query_scalar("SELECT art_path FROM albums WHERE title = ?")
+            .bind(album)
+            .fetch_one(&db.pool)
+            .await
+            .unwrap()
+    }
+
+    async fn index(db: &Db, track: &Path, album: &str, art_dir: &Path) {
+        let probe = FileProbe {
+            format_tags: [("artist", "A"), ("album", album)]
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..FileProbe::default()
+        };
+        let size = std::fs::metadata(track).unwrap().len() as i64;
+        let mtime = format!("{size}-{}", track.display());
+        index_music_file(
+            db,
+            track.to_str().unwrap(),
+            size,
+            &mtime,
+            &probe,
+            "t",
+            Some(art_dir),
+        )
+        .await
+        .unwrap();
+    }
+
+    #[test]
+    fn cover_front_is_preferred_else_the_first_picture() {
+        let dir = tempfile::tempdir().unwrap();
+        let (a, b) = (png(), jpeg());
+
+        let mp3 = fixture("mp3", &dir.path().join("a.mp3"));
+        tag_pictures(
+            &mp3,
+            &[
+                (PictureType::Other, MimeType::Png, a.clone()),
+                (PictureType::CoverFront, MimeType::Jpeg, b.clone()),
+            ],
+        );
+        assert_eq!(read_embedded_art(&mp3), Some((b.clone(), "jpg")));
+
+        let mp3 = fixture("mp3", &dir.path().join("b.mp3"));
+        tag_pictures(
+            &mp3,
+            &[
+                (PictureType::CoverBack, MimeType::Png, a.clone()),
+                (PictureType::Artist, MimeType::Jpeg, b),
+            ],
+        );
+        assert_eq!(read_embedded_art(&mp3), Some((a, "png")));
+
+        // Untagged and unreadable files have none.
+        assert_eq!(
+            read_embedded_art(&fixture("flac", &dir.path().join("c.flac"))),
+            None
+        );
+        std::fs::write(dir.path().join("junk.mp3"), b"not audio").unwrap();
+        assert_eq!(read_embedded_art(&dir.path().join("junk.mp3")), None);
+    }
+
+    #[tokio::test]
+    async fn embedded_only_mp3_m4b_and_flac_each_yield_album_art() {
+        let db = Db::connect_memory().await.unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        let art_dir = tempfile::tempdir().unwrap();
+        for (ext, name, mime, data, want_ext) in [
+            ("mp3", "01 a.mp3", MimeType::Jpeg, jpeg(), "jpg"),
+            ("m4a", "book.m4b", MimeType::Png, png(), "png"),
+            ("flac", "01 a.flac", MimeType::Png, png(), "png"),
+        ] {
+            let track = fixture(ext, &lib.path().join(ext).join(name));
+            tag_pictures(&track, &cover(mime, &data));
+            index(&db, &track, ext, art_dir.path()).await;
+
+            let id: i64 = sqlx::query_scalar("SELECT id FROM albums WHERE title = ?")
+                .bind(ext)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+            let want = art_dir.path().join(format!("album_{id}.{want_ext}"));
+            assert_eq!(album_art(&db, ext).await.as_deref(), want.to_str(), "{ext}");
+            assert_eq!(std::fs::read(&want).unwrap(), data, "{ext} bytes");
+        }
+    }
+
+    #[tokio::test]
+    async fn folder_art_wins_over_embedded_art() {
+        let db = Db::connect_memory().await.unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        let art_dir = tempfile::tempdir().unwrap();
+        let folder = lib.path().join("Folder.PNG");
+        std::fs::write(&folder, png()).unwrap();
+        let track = fixture("mp3", &lib.path().join("01.mp3"));
+        tag_pictures(&track, &cover(MimeType::Jpeg, &jpeg()));
+
+        index(&db, &track, "Haunt", art_dir.path()).await;
+        assert_eq!(album_art(&db, "Haunt").await.as_deref(), folder.to_str());
+        assert_eq!(std::fs::read_dir(art_dir.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn no_art_stays_null_and_set_art_is_never_rewritten() {
+        let db = Db::connect_memory().await.unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        let art_dir = tempfile::tempdir().unwrap();
+
+        let bare = fixture("flac", &lib.path().join("bare/01.flac"));
+        index(&db, &bare, "Bare", art_dir.path()).await;
+        index(&db, &bare, "Bare", art_dir.path()).await;
+        assert_eq!(album_art(&db, "Bare").await, None);
+
+        let track = fixture("mp3", &lib.path().join("art/01.mp3"));
+        tag_pictures(&track, &cover(MimeType::Jpeg, &jpeg()));
+        index(&db, &track, "Art", art_dir.path()).await;
+        let art = album_art(&db, "Art").await.unwrap();
+        std::fs::write(&art, b"sentinel").unwrap();
+        tag_pictures(&track, &cover(MimeType::Png, &png()));
+        index(&db, &track, "Art", art_dir.path()).await;
+        assert_eq!(album_art(&db, "Art").await.as_deref(), Some(art.as_str()));
+        assert_eq!(std::fs::read(&art).unwrap(), b"sentinel");
+        assert_eq!(std::fs::read_dir(art_dir.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn pruned_album_takes_its_art_and_cached_variants() {
+        let stub_dir = tempfile::tempdir().unwrap();
+        let stub = crate::probe::write_echoing_stub_path(stub_dir.path());
+        let db = Db::connect_memory().await.unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        let art_dir = tempfile::tempdir().unwrap();
+        let images_dir = tempfile::tempdir().unwrap();
+        let images = Store::open(images_dir.path().to_path_buf(), u64::MAX);
+        let track = fixture("mp3", &lib.path().join("01.mp3"));
+        tag_pictures(&track, &cover(MimeType::Jpeg, &jpeg()));
+        let roots = vec![lib.path().to_path_buf()];
+        let scan = || {
+            scan_music_once_with_probe_bin(
+                &db,
+                &roots,
+                art_dir.path(),
+                &images,
+                stub.to_str().unwrap(),
+            )
+        };
+
+        scan().await.unwrap();
+        let (id, art): (i64, String) = sqlx::query_as("SELECT id, art_path FROM albums")
+            .fetch_one(&db.pool)
+            .await
+            .unwrap();
+        assert!(Path::new(&art).starts_with(art_dir.path()));
+        images
+            .put(&format!("album/{id}/342.webp"), b"variant")
+            .unwrap();
+        images.put("album/999/342.webp", b"other").unwrap();
+
+        std::fs::remove_file(&track).unwrap();
+        assert_eq!(scan().await.unwrap().files_removed, 1);
+        assert!(!Path::new(&art).exists());
+        assert!(
+            images
+                .cache_path(&format!("album/{id}"))
+                .is_some_and(|p| !p.exists())
+        );
+        assert!(
+            images.get("album/999/342.webp").is_some(),
+            "other albums keep theirs"
+        );
+        assert_eq!(images.used_bytes(), 5);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn audiobook_folder_and_embedded_art_and_prune() {
+        let stub_dir = tempfile::tempdir().unwrap();
+        let stub = crate::probe::write_echoing_stub_path(stub_dir.path());
+        let db = Db::connect_memory().await.unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        let art_dir = tempfile::tempdir().unwrap();
+        let images_dir = tempfile::tempdir().unwrap();
+        let images = Store::open(images_dir.path().to_path_buf(), u64::MAX);
+
+        let folder = lib.path().join("Le Guin/cover.jpg");
+        let shelved = fixture("mp3", &lib.path().join("Le Guin/Dispossessed.mp3"));
+        std::fs::write(&folder, jpeg()).unwrap();
+        tag_pictures(&shelved, &cover(MimeType::Png, &png()));
+        let embedded = fixture("m4a", &lib.path().join("Herbert/Dune.m4b"));
+        let pic = png();
+        tag_pictures(&embedded, &cover(MimeType::Png, &pic));
+        let bare = fixture("flac", &lib.path().join("Nobody/Bare.flac"));
+
+        let roots = vec![lib.path().to_path_buf()];
+        let scan = || {
+            scan_audiobooks_once_with_probe_bin(
+                &db,
+                &roots,
+                art_dir.path(),
+                &images,
+                stub.to_str().unwrap(),
+            )
+        };
+        let art = |title: &'static str| {
+            let db = db.clone();
+            async move {
+                sqlx::query_as::<_, (i64, Option<String>)>(
+                    "SELECT id, art_path FROM audiobooks WHERE title = ?",
+                )
+                .bind(title)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap()
+            }
+        };
+
+        assert_eq!(scan().await.unwrap().files_added, 3);
+        assert_eq!(art("Dispossessed").await.1.as_deref(), folder.to_str());
+        let (dune, dune_art) = art("Dune").await;
+        let want = art_dir.path().join(format!("audiobook_{dune}.png"));
+        assert_eq!(dune_art.as_deref(), want.to_str());
+        assert_eq!(std::fs::read(&want).unwrap(), pic);
+        assert_eq!(art("Bare").await.1, None);
+
+        // Prune: the extracted cover and the variants go; folder art stays.
+        images
+            .put(&format!("audiobook/{dune}/500.webp"), b"v")
+            .unwrap();
+        std::fs::remove_file(&embedded).unwrap();
+        std::fs::remove_file(&shelved).unwrap();
+        drop(bare);
+        assert_eq!(scan().await.unwrap().files_removed, 2);
+        assert!(!want.exists());
+        assert!(images.get(&format!("audiobook/{dune}/500.webp")).is_none());
+        assert_eq!(images.used_bytes(), 0);
+        assert!(folder.exists(), "folder art belongs to the library");
     }
 }

@@ -223,6 +223,21 @@ impl Store {
         Ok(path)
     }
 
+    /// Delete everything cached under `key`: one variant or a whole
+    /// `{kind}/{id}` directory. The byte counter drops by what was removed.
+    pub fn remove(&self, key: &str) {
+        let Some(path) = self.cache_path(key) else {
+            return;
+        };
+        let mut used = self.used.lock().unwrap_or_else(|e| e.into_inner());
+        for (file, size, _) in walk_files(&path) {
+            if std::fs::remove_file(&file).is_ok() && !is_temp(&file) {
+                *used -= size.min(*used);
+            }
+        }
+        let _ = std::fs::remove_dir_all(&path);
+    }
+
     /// Delete oldest-mtime files until usage is back under 90% of the cap.
     /// `keep` (the file just written) is never evicted.
     // ponytail: full walk per eviction; the 10% low-water mark keeps it rare.

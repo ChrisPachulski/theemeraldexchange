@@ -133,6 +133,7 @@ pub async fn run_guarded_scan(state: &AppState, trigger: &str) -> bool {
         state.db.clone(),
         state.config.music_roots.clone(),
         state.config.artwork_dir.clone(),
+        state.artwork.clone(),
     )
     .await
     {
@@ -168,8 +169,13 @@ pub(crate) async fn run_extra_passes(state: &AppState, trigger: &str) {
         ),
         Err(e) => tracing::warn!(trigger, "photo scan failed: {e}"),
     }
-    match scanner::scan_audiobooks_isolated(state.db.clone(), state.config.audiobook_roots.clone())
-        .await
+    match scanner::scan_audiobooks_isolated(
+        state.db.clone(),
+        state.config.audiobook_roots.clone(),
+        state.config.artwork_dir.clone(),
+        state.artwork.clone(),
+    )
+    .await
     {
         Ok(report) => tracing::info!(
             trigger,
