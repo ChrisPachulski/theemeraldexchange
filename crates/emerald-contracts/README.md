@@ -1,15 +1,12 @@
 # emerald-contracts
 
 Canonical source of truth for the tokens, key derivation, `sub` parsing, and PII
-scrub keys shared across runtimes (`src/lib.rs:1-4`). Rust is the implementation;
-TypeScript consumes it through `@emerald/contracts-napi`
-(`../emerald-contracts-napi/package.json:2`), Python through the `emerald_contracts`
-PyO3 module (`../emerald-contracts-pyo3/src/lib.rs:215-224`).
+scrub keys shared across runtimes (`src/lib.rs:1-5`). Rust is the implementation;
+every server crate links it directly, and the Apple app carries a Swift port.
 
 `tests/vectors/` is the interop oracle. This crate's suite loads six — stream-token-canonical,
 sub-namespace, telemetry-pii-scrub, device-token-kid-rotation, internal-principal, hkdf-parity
-(`tests/vectors.rs:43,81,116,133,205,288`) — and CI gates the Rust side
-(`.github/workflows/ci.yml:314`) and the N-API↔PyO3 cross-binding (`:250-257`) on them.
+(`tests/vectors.rs:43,81,116,133,205,288`) — and CI's `rust` job gates on them.
 
 ## Frozen wire values
 
@@ -43,15 +40,11 @@ exactly (`src/sub.rs:4-6`).
   bare-Plex-ID subs is TS-side; it depends on a per-deployment timer (`src/sub.rs:70-73`).
 - **Unknown `StreamKind` wire values are rejected, not ignored**
   (`src/stream_token.rs:29-31`, `:48-59`).
-- **TypeScript must load the addon via `createRequire`.** A star-import resolves
-  every export to `undefined`, and the failure surfaces at the first token
-  operation rather than at import (`../../server/services/contractsBinding.ts:3-14`).
 
 ## Test
 
 ```bash
 cargo test -p emerald-contracts   # vectors resolve from the repo root, not the crate
-npm run build:napi                # rebuild the N-API binding (package.json:28)
 ```
 
 The `§N` markers in the sources (§3 device tokens, §5 stream tokens, §8 `sub`
@@ -59,6 +52,6 @@ namespaces, §15.3 telemetry scrub) index a cross-service contract that is not
 tracked in this repo. Its governing decision: the wire formats are fixed once
 and shared, never renegotiated per runtime — so the frozen table above plus
 `tests/vectors/` are that contract in executable form, and a change is a vector
-change CI gates across Rust, TS and Python, not a per-language tweak.
+change CI gates, not a per-language tweak.
 
 <!-- seed:gap — author: when the untracked §-contract and this crate disagree, which wins? `device_token.rs:22-23` says "contract wins" over design.md; `sub.rs:4-5` says the regex literals here are the contract. State the tiebreaker. -->

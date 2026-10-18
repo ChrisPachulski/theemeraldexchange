@@ -3,18 +3,23 @@
 //! Scans local media roots, owns `media.db`, and serves a direct-play
 //! library + watch state to Hono over the internal-principal boundary
 //! (§4 Hybrid D). Hono proxies `/api/media/*`; media-core never speaks to
-//! the SPA directly. ffprobe/ffmpeg are runtime deps invoked via
-//! `tokio::process::Command` — no FFI bindings.
+//! the SPA directly. ffprobe (and ffmpeg, for a configured Whisper CLI) are
+//! runtime deps invoked via `tokio::process::Command` — no FFI bindings.
+//! Artwork is decoded, resized and WebP-encoded in process (`artwork`).
 
+pub mod artwork;
 pub mod auth;
+pub mod backup;
 pub mod capability;
 pub mod config;
+pub mod cron;
 pub mod db;
 pub mod error;
 pub mod filename;
 pub mod models;
 pub mod podcasts;
 pub mod probe;
+pub mod rate_limit;
 pub mod routes;
 pub mod scanner;
 pub mod ssrf_guard;
@@ -65,6 +70,8 @@ pub struct AppState {
     /// tasks against a possibly-degraded volume. Cloning `AppState` shares the
     /// same `Semaphore` (Arc), so the cap is process-wide.
     pub stream_semaphore: Arc<Semaphore>,
+    /// Artwork store: disk-capped variant cache plus the 2-permit CPU pool.
+    pub artwork: Arc<artwork::Store>,
 }
 
 /// Build the full axum router (public `/health` + `/version`, authed
@@ -127,6 +134,7 @@ pub async fn run_guarded_scan(state: &AppState, trigger: &str) -> bool {
         state.db.clone(),
         state.config.music_roots.clone(),
         state.config.artwork_dir.clone(),
+        state.artwork.clone(),
     )
     .await
     {
@@ -147,12 +155,20 @@ pub async fn run_guarded_scan(state: &AppState, trigger: &str) -> bool {
     true
 }
 
-/// The photo, audiobook and YouTube passes, shared by the scheduled scan and
-/// the manual POST /scan so neither runs a narrower scan than the other. The
-/// caller holds the `scanning` guard. Best-effort: each logs its own failure
-/// and is a no-op when its roots env is unset.
+/// The photo, audiobook and YouTube passes, then the library poster prefetch
+/// and the blurhash backfill,
+/// shared by the scheduled scan and the manual POST /scan so neither runs a
+/// narrower scan than the other. The caller holds the `scanning` guard.
+/// Best-effort: each logs its own failure and is a no-op when its roots env
+/// is unset.
 pub(crate) async fn run_extra_passes(state: &AppState, trigger: &str) {
-    match scanner::scan_photos_isolated(state.db.clone(), state.config.photo_roots.clone()).await {
+    match scanner::scan_photos_isolated(
+        state.db.clone(),
+        state.config.photo_roots.clone(),
+        state.artwork.clone(),
+    )
+    .await
+    {
         Ok(report) => tracing::info!(
             trigger,
             files_seen = report.files_seen,
@@ -162,8 +178,13 @@ pub(crate) async fn run_extra_passes(state: &AppState, trigger: &str) {
         ),
         Err(e) => tracing::warn!(trigger, "photo scan failed: {e}"),
     }
-    match scanner::scan_audiobooks_isolated(state.db.clone(), state.config.audiobook_roots.clone())
-        .await
+    match scanner::scan_audiobooks_isolated(
+        state.db.clone(),
+        state.config.audiobook_roots.clone(),
+        state.config.artwork_dir.clone(),
+        state.artwork.clone(),
+    )
+    .await
     {
         Ok(report) => tracing::info!(
             trigger,
@@ -186,6 +207,8 @@ pub(crate) async fn run_extra_passes(state: &AppState, trigger: &str) {
         ),
         Err(e) => tracing::warn!(trigger, "youtube scan failed: {e}"),
     }
+    artwork::prefetch_library(state).await;
+    artwork::backfill(state).await;
 }
 
 /// Spawn the background scan scheduler: an optional boot scan plus a periodic
@@ -257,8 +280,13 @@ mod tests {
         let mut config = config::Config::from_env().unwrap();
         config.boot_scan = boot_scan;
         config.scan_interval_secs = scan_interval_secs;
+        config.tmdb_image_base = crate::routes::testsupport::DEAD_ORIGIN.into();
         AppState {
             db,
+            artwork: Arc::new(artwork::Store::open(
+                config.images_dir.clone(),
+                config.image_cache_bytes,
+            )),
             config: Arc::new(config),
             tmdb: tmdb::TmdbClient::new(None),
             scanning: Arc::new(AtomicBool::new(false)),

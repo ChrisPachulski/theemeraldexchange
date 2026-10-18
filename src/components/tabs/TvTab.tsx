@@ -17,6 +17,7 @@ import { LoadingPulse } from '../feedback/LoadingPulse'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
+import { pickPoster } from '../../lib/hooks/useRecentlyAdded'
 import { useSeriesSearch } from '../../lib/hooks/useSeriesSearch'
 import { useRatings } from '../../lib/hooks/useRatings'
 import { ratingPieces, type RatingPiece, type RatingsMap } from '../../lib/api/ratings'
@@ -58,16 +59,7 @@ import { pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
 import './TvTab.css'
 
 function pickSearchPoster(item: SeriesSearchResult): string | undefined {
-  if (item.remotePoster) return item.remotePoster
-  const img = item.images?.find((i) => i.coverType === 'poster')
-  return img?.remoteUrl ?? img?.url
-}
-
-// ponytail: same 3-line pickers exist in MoviesTab with Movie types —
-// duplicated on purpose; a shared generic isn't worth the coupling.
-function pickLibraryPoster(item: Series): string | undefined {
-  const img = item.images?.find((i) => i.coverType === 'poster')
-  return img?.remoteUrl ?? img?.url
+  return item.remotePoster || pickPoster(item.images)
 }
 
 function pickFanart(item: SeriesSearchResult | Series): string | undefined {
@@ -394,7 +386,7 @@ export function TvTab() {
       key: String(s.id),
       title: s.title,
       meta: meta ?? (s.year ? String(s.year) : null),
-      poster: pickLibraryPoster(s),
+      poster: pickPoster(s.images),
       progress,
       onOpen: () => setViewing(s),
     })
@@ -654,7 +646,7 @@ export function TvTab() {
         title={viewing?.title ?? ''}
         year={viewing?.year}
         poster={viewing ? (
-          ('id' in viewing ? pickLibraryPoster(viewing) : pickSearchPoster(viewing))
+          ('id' in viewing ? pickPoster(viewing.images) : pickSearchPoster(viewing))
         ) : undefined}
         backdrop={viewing ? pickFanart(viewing) : undefined}
         metaStrip={viewing ? [
@@ -898,7 +890,7 @@ function LibraryResults({ query, letter, genre, loading, error, items, onCardCli
         return (
           <MediaCard
             key={s.id}
-            poster={pickLibraryPoster(s)}
+            poster={pickPoster(s.images)}
             title={s.title}
             year={s.year}
             meta={meta || undefined}

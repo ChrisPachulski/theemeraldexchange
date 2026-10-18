@@ -1,6 +1,7 @@
 import { createRequire } from 'module'
 import { readFileSync } from 'fs'
 import { test, expect } from '@playwright/test'
+import { loginAsAdmin } from '../helpers/session'
 
 // Real-codec MSE playback gate (playwright project `playback-chrome`).
 //
@@ -10,7 +11,7 @@ import { test, expect } from '@playwright/test'
 // e.g. Chrome rejecting a 6-channel AAC SourceBuffer append killed whole
 // fragments while every HTTP exchange looked healthy. This spec plays a
 // COMMITTED real H.264+AAC HLS fixture (tests/fixtures/hls, see its
-// README for the ffmpeg provenance) through the REAL backend transcode
+// README for the ffmpeg provenance) through the REAL gateway transcode
 // proxy (/api/transcode → stub transcoder serving the fixture) in REAL
 // Chrome, and fails on any MSE/media error or a stalled clock.
 //
@@ -37,16 +38,16 @@ type PlaybackProbe = {
 
 test('real Chrome plays the H.264+AAC HLS fixture through the backend proxy with zero MSE errors', async ({
   page,
+  baseURL,
 }) => {
-  // Real session cookie via the helper-layer test-only login; hls.js's
-  // same-origin XHRs then authenticate against the real transcode proxy
-  // exactly like the SPA player's segment fetches do.
-  const login = await page.request.post('/api/test/login', { data: { role: 'admin' } })
-  expect(login.ok()).toBeTruthy()
+  // Real session cookie (tests/e2e/helpers/session.ts); hls.js's same-origin
+  // XHRs then authenticate against the real transcode proxy exactly like the
+  // SPA player's segment fetches do.
+  await loginAsAdmin(page, baseURL)
 
   // Any same-origin page works as the MSE host; the SPA shell itself is
   // covered by the integration project. The fixture manifest is served by
-  // the REAL backend: browser → vite proxy → Hono /api/transcode auth +
+  // the REAL backend: browser → vite proxy → gateway /api/transcode auth +
   // proxy + manifest handling → stub transcoder → committed fixture.
   await page.goto('/')
   await page.addScriptTag({ content: HLS_JS_SOURCE })

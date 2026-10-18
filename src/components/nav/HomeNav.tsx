@@ -1,6 +1,6 @@
 import { useNavTransition } from '../../lib/navTransition'
 import { UserMenu } from '../auth/UserMenu'
-import { usePlexUser } from '../../lib/hooks/usePlexLinks'
+import { PLEX_URL, usePlexUser } from '../../lib/hooks/usePlexLinks'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import './HomeNav.css'
 
@@ -8,11 +8,6 @@ import './HomeNav.css'
 // Section entries (including admin-only Users) live in HomeTab so they
 // sit at the bottom alongside the other entry buttons, mirroring the
 // floor row pattern.
-
-// app.plex.tv is Plex's hosted web client — works on AND off network.
-// The LAN URL (http://theemeraldexchange.local:32400/web) was mDNS-only
-// and broke for every household member outside the house.
-const PLEX_URL = 'https://app.plex.tv/desktop'
 
 export function HomeNav() {
   const { navigate } = useNavTransition()

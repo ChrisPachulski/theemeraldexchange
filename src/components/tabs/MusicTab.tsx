@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { mediaApi, type MusicAlbum, type MusicArtist } from '../../lib/api/media'
+import { blurhashStyle } from '../../lib/api/images'
 import { countLabel, metaLine } from '../../lib/libraryFormat'
 import { formatPlaybackTime } from '../media/playbackSession'
 import { MediaPlayer } from '../media/MediaPlayer'
@@ -12,16 +13,24 @@ type RowProps = {
   /** Album art: a URL, null for "no art" (placeholder tile), or undefined for
    *  rows that never carry art (artists, tracks). */
   art?: string | null
+  artBlurhash?: string | null
   onClick: () => void
 }
 
-function MusicRow({ title, meta, art, onClick }: RowProps) {
+function MusicRow({ title, meta, art, artBlurhash, onClick }: RowProps) {
   return (
     <li>
       <button type="button" className="music-row" onClick={onClick}>
         {art !== undefined &&
           (art ? (
-            <img className="music-row__art" src={art} alt="" loading="lazy" decoding="async" />
+            <img
+              className="music-row__art"
+              src={art}
+              style={blurhashStyle(artBlurhash)}
+              alt=""
+              loading="lazy"
+              decoding="async"
+            />
           ) : (
             <span className="music-row__art" aria-hidden="true" />
           ))}
@@ -115,6 +124,7 @@ export function MusicTab() {
                   title={al.title}
                   meta={metaLine([al.year != null ? String(al.year) : null, countLabel(al.trackCount, 'track')])}
                   art={al.artUrl}
+                  artBlurhash={al.artBlurhash}
                   onClick={() => setAlbum(al)}
                 />
               ))}

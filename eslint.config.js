@@ -16,7 +16,6 @@ export default defineConfig([
     'dist',
     'coverage',
     'target',
-    'recommender/.venv*',
     '.claude',
     '.planning',
     '.netlify',

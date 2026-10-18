@@ -8,9 +8,9 @@
 Plex-style experience for live and on-demand media, built to ship as native iOS/tvOS apps.
 
 ![Web](https://img.shields.io/badge/web-React_19_+_Vite-61dafb?style=flat-square)
-&nbsp;![API](https://img.shields.io/badge/api-Hono_+_TypeScript-f59e0b?style=flat-square)
+&nbsp;![API](https://img.shields.io/badge/api-Rust_(axum)-dea584?style=flat-square)
 &nbsp;![Core](https://img.shields.io/badge/media--core-Rust-dea584?style=flat-square)
-&nbsp;![Recs](https://img.shields.io/badge/recommender-FastAPI-009688?style=flat-square)
+&nbsp;![Recs](https://img.shields.io/badge/recommender-Rust-dea584?style=flat-square)
 &nbsp;![License](https://img.shields.io/badge/license-Proprietary-111111?style=flat-square)
 
 </div>
@@ -27,10 +27,10 @@ the transcoder — is implementation detail, never visible from inside the exper
 - **You own the box** — self-hosted on your NAS; household signals never leave it.
 - **Live + on-demand** — an IPTV core with smoothed live cable, alongside a scanned,
   metadata-rich media library.
-- **Four ways in, one allowlist** — WorkOS AuthKit (Google/Apple), Plex OAuth, Sign in with
+- **Three ways in, one allowlist** — WorkOS AuthKit (Google/Apple/email), Sign in with
   Apple, and Sign in with Google, all converging on a single owner-controlled invite list.
 - **Hardware transcoding** — HEVC→H.264 via Intel VAAPI on the NAS iGPU, software fallback off-box.
-- **Local-first recommendations** — a FastAPI + sqlite-vec scoring sidecar; your taste never
+- **Local-first recommendations** — a Rust + sqlite-vec scoring sidecar; your taste never
   leaves the NAS.
 - **Built to ship native** — the web client is the reference surface; native iOS/tvOS is the
   distribution target.
@@ -61,7 +61,6 @@ Everything else is opt-in, one flag each:
 | IMDb / Rotten Tomatoes / Metacritic scores on cards | `OMDB_API_KEY` (free key) |
 | Requests & downloads (existing Sonarr / Radarr / SAB) | `SONARR_API_KEY` / `RADARR_API_KEY` / `SAB_API_KEY` |
 | Live TV (your Xtream/IPTV provider) | `XTREAM_HOST` / `XTREAM_USERNAME` / `XTREAM_PASSWORD` |
-| Plex login as an extra sign-in provider | `PLEX_CLIENT_ID` (+ `PLEX_SERVER_ID`) |
 | Sign in with Apple | `APPLE_CLIENT_ID` (`ENABLE_APPLE_SIGN_IN=1` is an optional fail-fast assertion) |
 | Sign in with Google | `GOOGLE_CLIENT_ID` (`ENABLE_GOOGLE_SIGN_IN=1` is an optional fail-fast assertion) |
 | WorkOS AuthKit (hosted login page) | `WORKOS_CLIENT_ID` + `WORKOS_API_KEY` + `WORKOS_REDIRECT_URI` (`ENABLE_WORKOS_SIGN_IN=1` optional assertion) |
@@ -69,6 +68,12 @@ Everything else is opt-in, one flag each:
 
 With everything off you still get the core product: library browsing + playback, owner-controlled
 invites, and local-first recommendations — but at least one sign-in provider must be configured.
+
+**Artwork.** media-core serves every poster, cover and photo thumbnail itself as a resized
+WebP, from a store on its data volume capped at `MEDIA_IMAGE_CACHE_MB` (default 2048; covers
+taken from your files sit outside the cap). The first scan downloads each library poster once
+from TMDB, two at a time, so on a large library it runs for minutes; later scans fetch only
+new titles.
 
 **Platforms.** Images are multi-arch (linux/amd64 + linux/arm64) and boot-verified on both
 after every publish (`verify-images`):
@@ -110,55 +115,62 @@ Four runtimes, one product:
 
 - **Web client** (`src/`) — React 19 + Vite + TypeScript SPA. Entry `src/main.tsx`, shell in
   `src/App.tsx`. Static bundle (Netlify in prod) talking to the backend over `/api/*`.
-- **Backend** (`server/`) — Hono + TypeScript (run with `tsx`). Entry `server/index.ts`,
-  assembled in `server/app.ts`. Owns auth, authorization, the IPTV core, the \*arr/SAB bridges,
-  recommender and media-core proxies, telemetry distribution, and the SQLite data layer.
-- **Rust workspace** (`crates/`) — `emerald-contracts` (cross-language token crypto, with
-  `-napi` and `-pyo3` bindings), `media-core` (library scan / metadata / serve), and
-  `transcoder` (ffmpeg-HLS sessions).
-- **Recommender** (`recommender/`) — Python FastAPI + sqlite-vec scoring sidecar. Local-first:
-  household signals never leave the NAS.
+- **Backend** (`crates/gateway`, binary `eex-gateway`) — Rust (axum + tokio + sqlx). Entry
+  `crates/gateway/src/main.rs`, assembled in `crates/gateway/src/app.rs`. Owns the public
+  `/api`, the \*arr/SAB bridges, recommender, media-core, transcoder and IPTV proxies, telemetry
+  distribution and the JSON stores; links `crates/auth` (sessions, sign-in, authorization,
+  server.db) in-process.
+- **Rust workspace** (`crates/`) — `gateway` and `auth` (above), `emerald-contracts`
+  (cross-language token crypto), `media-core` (library scan / metadata / serve, and every
+  poster, cover and thumbnail as a resized WebP with a blurhash placeholder), `iptv` (live
+  TV, guide, DVR), `transcoder` (ffmpeg-HLS sessions) and `recommender`.
+- **Recommender** (`crates/recommender`, binary `eex-recommender`) — sqlite-vec retrieval, a
+  per-household learned ranker and MiniLM embeddings (candle), with its TMDB ingest, featurize
+  and nightly optimizer jobs scheduled in process. Local-first: household signals never leave
+  the NAS.
 
 ## Authentication
 
-No homegrown password store. Identity comes from four parallel providers, all converging on a
+No homegrown password store. Identity comes from three parallel providers, all converging on a
 single invite/members allowlist:
 
-- **Plex OAuth** (PIN flow)
 - **Sign in with Apple** (RS256, alg/aud/iss/nonce-pinned)
 - **Sign in with Google** (RS256, issuer/audience-pinned across configured web/native clients)
 - **WorkOS AuthKit** (redirect to a hosted login page; `workos:` subs)
 
-Normal login requires an active member/admin identity or invite redemption. A verified share on
-the configured Plex server is the explicit provider-backed admission path. Fresh-install state
+Normal login requires an active member/admin identity or invite redemption. Fresh-install state
 never grants normal login; ownership begins with the operator's own sub in `ADMIN_SUBS`.
-The Plex token is encrypted at rest (JWE); invite redemption is atomic and race-safe, and provider
+Sessions are encrypted cookies (JWE); invite redemption is atomic and race-safe, and provider
 success is confirmed against the browser's `/api/me` session before the dashboard trusts it.
 
 ## Backend surface (`/api`)
 
-Everything the SPA needs hangs off `/api`, mounted in `server/app.ts` (the authoritative route
-list): auth (`auth`, `auth/workos`, `auth/device`) and identity (`me`, `devices`, `admin/*`),
+Everything the SPA needs hangs off `/api`, mounted in `crates/gateway/src/app.rs` (the
+authoritative route list, with `crates/auth`'s router merged in): auth (`auth`, `auth/workos`, `auth/device`) and identity (`me`, `devices`, `admin/*`),
 the \*arr / SAB / IPTV / DVR bridges, TMDB and recommender proxies, telemetry, and — when
 `USE_MEDIA_CORE=1` — `media` + `transcode` (the HLS playback proxy for non-direct-play files).
-CORS is an explicit allowlist (`env.allowedOrigins`); state-changing requests are Origin-gated
-(`requireSafeOrigin`).
+CORS is an explicit allowlist (`ALLOWED_ORIGINS`); state-changing requests are Origin-gated
+(`auth::csrf`).
 
 ## Full-stack development
 
-The sidecars are opt-in. With their flags off, `npm run dev` gives you the SPA + backend with
-the \*arr bridges pointed at whatever `.env.local` says. To run the full stack locally:
+The sidecars are opt-in. With their flags off, `npm run dev` gives you the SPA + backend
+(`cargo run -p gateway`) with the \*arr bridges pointed at whatever `.env.local` says; the gateway
+reads its environment, so export the file first (`set -a; . ./.env.local; set +a`). To run the
+full stack locally:
 
 <details>
-<summary><strong>Recommender</strong> — FastAPI, port 8000</summary>
+<summary><strong>Recommender</strong> — Rust, port 8000</summary>
 
 ```bash
-cd recommender
-make install && make migrate            # creates ./data/exchange.db
-TMDB_API_KEY=... make ingest-bootstrap  # one-time catalog ingest
-make featurize
-RECOMMENDER_EVENT_SECRET=local-dev-secret make serve
+# DB defaults to ./data/exchange.db and migrates on first open.
+TMDB_API_KEY=... cargo run --release -p recommender -- ingest --mode bootstrap   # one-time
+RECOMMENDER_MODEL_DIR=/path/to/all-MiniLM-L6-v2 cargo run --release -p recommender -- featurize
+RECOMMENDER_EVENT_SECRET=local-dev-secret cargo run --release -p recommender     # serves :8000
 ```
+
+`RECOMMENDER_MODEL_DIR` holds `config.json`, `tokenizer.json` and `model.safetensors` of
+all-MiniLM-L6-v2 at revision `c9745ed` (the image bakes them in at `/srv/minilm`).
 
 Wire the backend via `.env.local`: `USE_LOCAL_RECOMMENDER=1`,
 `RECOMMENDER_URL=http://localhost:8000`, and the same `RECOMMENDER_EVENT_SECRET` (required
@@ -187,11 +199,10 @@ npm run dev:media-mock        # localhost:8095, run alongside npm run dev
 ```
 
 A fixture-backed stub that speaks media-core's HTTP surface (12 movies, 3 shows, a seeded watch
-store; direct-play only). Backend wiring: `USE_MEDIA_CORE=1`,
+store; direct-play only; every artwork route answers a flat placeholder tile). Backend wiring: `USE_MEDIA_CORE=1`,
 `MEDIA_CORE_URL=http://127.0.0.1:8095`, and any 32+ char `INTERNAL_PRINCIPAL_SECRET`
-placeholder — without one the proxy sends no internal principal at all (the off posture,
-`server/routes/media.ts:141`) rather than refusing, so set the placeholder to exercise the
-prod-shaped path; the mock ignores its value. Builds the library UI without the Rust binary
+placeholder — the gateway's media proxy fails closed (502 `principal_mint_failed`) without
+one; the mock ignores its value. Builds the library UI without the Rust binary
 or a real `/media` library.
 </details>
 
@@ -214,12 +225,10 @@ upstreams, the Glitchtip stack, and the Cloudflare tunnel. The compose file
 ## Build & test
 
 ```bash
-npm run build      # tsc -b && vite build && tsc -p server/tsconfig.json
-npm test           # vitest run
-npm run build:napi # build the emerald-contracts N-API binding
+npm run build      # tsc -b && vite build
+npm test           # vitest run (SPA + repo contracts)
 
-cargo test -p emerald-contracts -p media-core -p transcoder
-( cd recommender && uv sync --extra dev && uv pip install --python .venv/bin/python maturin && .venv/bin/maturin develop --release -m ../crates/emerald-contracts-pyo3/Cargo.toml && uv run pytest )
+cargo test --workspace
 ```
 
 ## Node runtime policy
@@ -228,22 +237,20 @@ The project targets **one** Node line at a time — currently **Node 26**. `engi
 floor equal to the line we ship, not a wider compatibility promise: it says `>=26` because nothing
 below 26 is tested.
 
-Seven declarations must always agree:
+These declarations must always agree:
 
 | Where | What |
 | --- | --- |
 | [`.nvmrc`](./.nvmrc) | local dev, and the version `actions/setup-node` reads |
 | [`package.json`](./package.json) → `engines.node` | the supported floor |
 | [`package.json`](./package.json) → `@types/node` | typings major |
-| [`Dockerfile`](./Dockerfile) | three `FROM node:<n>-slim@sha256:…` stages |
-| [`Dockerfile`](./Dockerfile) | the NodeSource `setup_<n>.x` line in `napi-builder` |
-| [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) | four `node-version:` inputs |
+| [`Dockerfile`](./Dockerfile) | the `FROM node:<n>-slim@sha256:…` SPA build stage (`spa-on`) |
+| [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) | the `node-version:` inputs |
 | [`.github/workflows/e2e-integration.yml`](./.github/workflows/e2e-integration.yml) | one `node-version:` input |
 
 **A Dependabot base-image bump is half an upgrade.** The `docker` ecosystem rewrites only the
-`FROM` tags — `.nvmrc`, `engines`, both workflows, and the NodeSource line are left behind. The
-24→25 move shipped with `napi-builder` still installing Node 24, so the N-API addon was compiled
-under one major and loaded under another.
+`FROM` tags — `.nvmrc`, `engines` and both workflows are left behind. Node only builds the SPA
+now (the backend image has no Node runtime), but the declarations still have to agree.
 
 Upgrade when the current line reaches EOL or the next LTS lands; check the
 [release schedule](https://nodejs.org/en/about/previous-releases) rather than assuming. Node 26 is
@@ -259,7 +266,7 @@ Two tracks (see **[DEPLOY.md](./DEPLOY.md)**):
 - **Owner full deployment** — the same images/compose with every profile on: NAS
   (`docker-compose` with `COMPOSE_PROFILES=remote-cloudflare,telemetry` → backend, recommender,
   media-core, transcoder, cloudflared, and the 4-container Glitchtip stack) behind a Cloudflare
-  Tunnel, SPA on Netlify, Plex login enabled. One configuration of the same product — nothing
+  Tunnel, SPA on Netlify. One configuration of the same product — nothing
   the self-host track gives up is lost here.
 
 ## Docs
@@ -293,7 +300,7 @@ Two tracks (see **[DEPLOY.md](./DEPLOY.md)**):
 ## Status
 
 The **backend track is shipped and running on the NAS**: the IPTV core, the locked cross-service
-contract (Rust↔TS↔Python byte parity enforced in CI), the Rust media-core (library scan /
+contract (byte-parity test vectors enforced in CI), the Rust media-core (library scan /
 metadata / serve), and the ffmpeg transcoder (HEVC→H.264, hardware-encoded via Intel VAAPI).
 The **Apple client track** (native iOS/tvOS, `EmeraldMobile` + `EmeraldTV`) lives in a
 separate repo and ships through TestFlight; this repo carries its server half — the

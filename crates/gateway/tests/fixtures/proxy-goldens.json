@@ -1,0 +1,6069 @@
+{
+  "env": {
+    "SESSION_SECRET": "proxy-goldens-session-secret-0123456789abcdef",
+    "STREAM_TOKEN_SECRET": "proxy-goldens-stream-secret-0123456789abcdef",
+    "DEVICE_TOKEN_SECRET": "proxy-goldens-device-secret-0123456789abcdef",
+    "INTERNAL_PRINCIPAL_SECRET": "proxy-goldens-internal-principal-placeholder-zzz",
+    "RECOMMENDER_EVENT_SECRET": "proxy-goldens-recommender-placeholder-zzz",
+    "RADARR_API_KEY": "placeholder-radarr-key",
+    "SONARR_API_KEY": "placeholder-sonarr-key",
+    "ALLOWED_ORIGINS": "https://app.example",
+    "SERVE_SPA": "0",
+    "USE_MEDIA_CORE": "1",
+    "USE_LOCAL_RECOMMENDER": "1",
+    "DVR_ENABLED": "1",
+    "EEX_RELEASE": "sha-golden"
+  },
+  "members": {
+    "alice": {
+      "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+      "username": "alice",
+      "role": "user"
+    },
+    "bob": {
+      "sub": "google:1234567890",
+      "username": "bob",
+      "role": "user"
+    },
+    "admin": {
+      "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "username": "admin",
+      "role": "admin"
+    }
+  },
+  "media_sql": [
+    "CREATE TABLE movies (id INTEGER PRIMARY KEY, tmdb_id INTEGER, title TEXT NOT NULL, year INTEGER)",
+    "CREATE TABLE shows (id INTEGER PRIMARY KEY, tmdb_id INTEGER, tvdb_id INTEGER, title TEXT NOT NULL, year INTEGER)",
+    "CREATE TABLE episodes (id INTEGER PRIMARY KEY, show_id INTEGER NOT NULL)",
+    "CREATE TABLE media_watch_state (sub TEXT NOT NULL, media_kind TEXT NOT NULL, media_id INTEGER NOT NULL, position_secs INTEGER NOT NULL, duration_secs INTEGER, completed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (sub, media_kind, media_id))",
+    "INSERT INTO movies VALUES (7, 550, 'Fight Club', 1999), (8, 551, 'Rated G', 2001), (9, NULL, 'No identity', 2002), (10, 552, 'No cert', 2003)",
+    "INSERT INTO shows VALUES (1, 1399, 121361, 'GoT', 2011), (2, 1400, 999, 'Kids', 2020)",
+    "INSERT INTO episodes VALUES (101, 1), (102, 2)",
+    "INSERT INTO media_watch_state VALUES ('apple:000001.0123456789abcdef0123456789abcdef.0001', 'movie', 8, 500, 1000, 0), ('apple:000001.0123456789abcdef0123456789abcdef.0001', 'episode', 101, 100, 3000, 0)"
+  ],
+  "account_stores": {
+    "policies": {
+      "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+        "kid": true
+      },
+      "google:1234567890": {
+        "maxContentRating": "PG-13"
+      }
+    },
+    "feedback": {
+      "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+        "movie": {
+          "liked": [
+            {
+              "id": 550,
+              "title": "Fight Club"
+            }
+          ],
+          "disliked": []
+        },
+        "tv": {
+          "liked": [],
+          "disliked": []
+        }
+      },
+      "google:1234567890": {
+        "movie": {
+          "liked": [
+            {
+              "id": 551,
+              "title": "Kept"
+            }
+          ],
+          "disliked": []
+        },
+        "tv": {
+          "liked": [],
+          "disliked": []
+        }
+      }
+    },
+    "watchlist": {
+      "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+        "movie": [
+          {
+            "id": 550,
+            "title": "Fight Club",
+            "added_at": "2026-01-01T00:00:00.000Z"
+          }
+        ],
+        "tv": []
+      },
+      "google:1234567890": {
+        "movie": [
+          {
+            "id": 551,
+            "title": "Kept",
+            "added_at": "2026-01-01T00:00:00.000Z"
+          }
+        ],
+        "tv": []
+      }
+    }
+  },
+  "scenarios": [
+    {
+      "name": "media proxy forwards with the principal and the allowlists",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/mc/api/media/movies",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "etag": "\"v1\"",
+            "cache-control": "private",
+            "x-secret": "dropped"
+          },
+          "body": "{\"items\":[{\"id\":7}],\"total\":1}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/music/artists",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"items\":[],\"total\":0}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/art/7",
+          "status": 200,
+          "headers": {},
+          "body": "raw-bytes"
+        },
+        {
+          "method": "POST",
+          "path": "/mc/api/media/scan",
+          "status": 202,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"started\":true}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/whoami",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"unauthenticated\"}"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "anon GET /api/media/movies",
+          "path": "/api/media/movies",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/media/movies?page=2&t=drop-me&q=a+b%20c",
+          "as": "alice",
+          "path": "/api/media/movies?page=2&t=drop-me&q=a+b%20c",
+          "headers_in": {
+            "range": "bytes=0-1",
+            "if-none-match": "\"v0\"",
+            "user-agent": "AppleCoreMedia/1",
+            "x-forwarded-for": "198.51.100.1"
+          },
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "etag": "\"v1\"",
+            "cache-control": "private"
+          },
+          "body": "{\"items\":[{\"id\":7}],\"total\":1}",
+          "body_len": 30,
+          "body_sum": 2505,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/movies",
+              "query": "page=2&q=a+b+c",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "range": "bytes=0-1",
+                "if-none-match": "\"v0\""
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "bob GET /api/media/music/artists",
+          "as": "bob",
+          "path": "/api/media/music/artists",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"items\":[],\"total\":0}",
+          "body_len": 22,
+          "body_sum": 1870,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/music/artists",
+              "query": "",
+              "principal": {
+                "sub": "google:1234567890",
+                "role": "user",
+                "auth_mode": "google"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/media/art/7",
+          "as": "alice",
+          "path": "/api/media/art/7",
+          "status": 200,
+          "headers": {
+            "content-type": "application/octet-stream"
+          },
+          "body": null,
+          "body_len": 9,
+          "body_sum": 926,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/art/7",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "admin POST /api/media/scan",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/media/scan",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"full\":true}",
+          "status": 202,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"started\":true}",
+          "body_len": 16,
+          "body_sum": 1581,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/scan",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"full\":true}"
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/media/whoami",
+          "as": "alice",
+          "path": "/api/media/whoami",
+          "status": 502,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"media_core_auth_failed\"}",
+          "body_len": 34,
+          "body_sum": 3265,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/whoami",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/media/%E0%A4%A",
+          "as": "alice",
+          "path": "/api/media/%E0%A4%A",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"bad_path\"}",
+          "body_len": 20,
+          "body_sum": 1815,
+          "calls": []
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "media range and conditional round trips",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/movie/7",
+          "status": 206,
+          "headers": {
+            "content-type": "video/mp4",
+            "content-range": "bytes 0-3/100",
+            "accept-ranges": "bytes",
+            "last-modified": "Wed, 01 Jan 2025 00:00:00 GMT",
+            "x-accel-buffering": "no"
+          },
+          "body": "abcd"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/track/3",
+          "status": 304,
+          "headers": {
+            "etag": "\"t3\""
+          },
+          "body": ""
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "admin GET /api/media/stream/movie/7",
+          "as": "admin",
+          "path": "/api/media/stream/movie/7",
+          "headers_in": {
+            "range": "bytes=0-3",
+            "if-range": "\"x\""
+          },
+          "status": 206,
+          "headers": {
+            "content-type": "video/mp4",
+            "content-range": "bytes 0-3/100",
+            "accept-ranges": "bytes",
+            "last-modified": "Wed, 01 Jan 2025 00:00:00 GMT",
+            "x-accel-buffering": "no"
+          },
+          "body": null,
+          "body_len": 4,
+          "body_sum": 394,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/movie/7",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "range": "bytes=0-3",
+                "if-range": "\"x\""
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "admin GET /api/media/stream/track/3",
+          "as": "admin",
+          "path": "/api/media/stream/track/3",
+          "headers_in": {
+            "if-modified-since": "Wed, 01 Jan 2025 00:00:00 GMT"
+          },
+          "status": 304,
+          "headers": {
+            "content-type": "application/octet-stream",
+            "etag": "\"t3\""
+          },
+          "body": null,
+          "body_len": 0,
+          "body_sum": 0,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/track/3",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "if-modified-since": "Wed, 01 Jan 2025 00:00:00 GMT"
+              },
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "media rating gate on cookie streams, subtitles, chapters and youtube",
+      "env": {},
+      "unset": [],
+      "policies": {
+        "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+          "maxContentRating": "PG-13"
+        },
+        "google:1234567890": {
+          "kid": true
+        }
+      },
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/radarr/api/v3/movie",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "[{\"tmdbId\":550,\"title\":\"Fight Club\",\"certification\":\"R\"},{\"tmdbId\":551,\"title\":\"Rated G\",\"certification\":\"G\"},{\"tmdbId\":552,\"title\":\"No cert\"}]"
+        },
+        {
+          "method": "GET",
+          "path": "/sonarr/api/v3/series",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "[{\"tvdbId\":121361,\"title\":\"GoT\",\"certification\":\"TV-MA\"},{\"tvdbId\":999,\"title\":\"Kids\",\"certification\":\"TV-Y\"}]"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/movie/8",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4"
+          },
+          "body": "g-movie"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/track/3",
+          "status": 200,
+          "headers": {
+            "content-type": "audio/mpeg"
+          },
+          "body": "audio"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/episode/102",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4"
+          },
+          "body": "kids-ep"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/subtitles/movie/8/file",
+          "status": 200,
+          "headers": {
+            "content-type": "text/vtt"
+          },
+          "body": "WEBVTT"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/subtitles/status",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/chapters/movie/8",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"chapters\":[]}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/youtube/videos",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"items\":[]}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/movies",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"items\":[]}"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "alice GET /api/media/stream/movie/7",
+          "as": "alice",
+          "path": "/api/media/stream/movie/7",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/radarr/api/v3/movie",
+              "query": "",
+              "principal": null,
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/media/stream/movie/8",
+          "as": "alice",
+          "path": "/api/media/stream/movie/8",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4"
+          },
+          "body": null,
+          "body_len": 7,
+          "body_sum": 692,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/movie/8",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/media/stream/movie/9",
+          "as": "alice",
+          "path": "/api/media/stream/movie/9",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/media/stream/movie/10",
+          "as": "alice",
+          "path": "/api/media/stream/movie/10",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/media/stream/movie/abc",
+          "as": "alice",
+          "path": "/api/media/stream/movie/abc",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/media/stream/episode/101",
+          "as": "alice",
+          "path": "/api/media/stream/episode/101",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/sonarr/api/v3/series",
+              "query": "",
+              "principal": null,
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/media/stream/episode/102",
+          "as": "alice",
+          "path": "/api/media/stream/episode/102",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4"
+          },
+          "body": null,
+          "body_len": 7,
+          "body_sum": 685,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/episode/102",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/media/stream/track/3",
+          "as": "alice",
+          "path": "/api/media/stream/track/3",
+          "status": 200,
+          "headers": {
+            "content-type": "audio/mpeg"
+          },
+          "body": null,
+          "body_len": 5,
+          "body_sum": 530,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/track/3",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/media/stream/video/5",
+          "as": "alice",
+          "path": "/api/media/stream/video/5",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/media/subtitles/movie/7/file",
+          "as": "alice",
+          "path": "/api/media/subtitles/movie/7/file",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/media/subtitles/movie/8/file",
+          "as": "alice",
+          "path": "/api/media/subtitles/movie/8/file",
+          "status": 200,
+          "headers": {
+            "content-type": "text/vtt"
+          },
+          "body": "WEBVTT",
+          "body_len": 6,
+          "body_sum": 476,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/subtitles/movie/8/file",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/media/subtitles/status",
+          "as": "alice",
+          "path": "/api/media/subtitles/status",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}",
+          "body_len": 11,
+          "body_sum": 1040,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/subtitles/status",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/media/chapters/movie/7",
+          "as": "alice",
+          "path": "/api/media/chapters/movie/7",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/media/chapters/%6dovie/7",
+          "as": "alice",
+          "path": "/api/media/chapters/%6dovie/7",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/media/chapters/movie/8",
+          "as": "alice",
+          "path": "/api/media/chapters/movie/8",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"chapters\":[]}",
+          "body_len": 15,
+          "body_sum": 1416,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/chapters/movie/8",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/media/chapters/video/5",
+          "as": "alice",
+          "path": "/api/media/chapters/video/5",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/media/youtube/videos",
+          "as": "alice",
+          "path": "/api/media/youtube/videos",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/media/%79outube/videos",
+          "as": "alice",
+          "path": "/api/media/%79outube/videos",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "admin GET /api/media/youtube/videos",
+          "as": "admin",
+          "path": "/api/media/youtube/videos",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"items\":[]}",
+          "body_len": 12,
+          "body_sum": 1104,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/youtube/videos",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "bob GET /api/media/stream/movie/8",
+          "as": "bob",
+          "path": "/api/media/stream/movie/8",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4"
+          },
+          "body": null,
+          "body_len": 7,
+          "body_sum": 692,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/movie/8",
+              "query": "",
+              "principal": {
+                "sub": "google:1234567890",
+                "role": "user",
+                "auth_mode": "google"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "bob GET /api/media/movies",
+          "as": "bob",
+          "path": "/api/media/movies",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"items\":[]}",
+          "body_len": 12,
+          "body_sum": 1104,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/movies",
+              "query": "",
+              "principal": {
+                "sub": "google:1234567890",
+                "role": "user",
+                "auth_mode": "google"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "anon GET /api/media/stream/movie/8",
+          "path": "/api/media/stream/movie/8",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": []
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "media rating gate with radarr down and no media.db identity",
+      "env": {},
+      "unset": [],
+      "policies": {
+        "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+          "maxContentRating": "PG-13"
+        }
+      },
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/radarr/api/v3/movie",
+          "status": 500,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"boom\"}"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "alice GET /api/media/stream/movie/8",
+          "as": "alice",
+          "path": "/api/media/stream/movie/8",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/radarr/api/v3/movie",
+              "query": "",
+              "principal": null,
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/media/subtitles/episode/101/file",
+          "as": "alice",
+          "path": "/api/media/subtitles/episode/101/file",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/sonarr/api/v3/series",
+              "query": "",
+              "principal": null,
+              "headers": {},
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "media-core unreachable",
+      "env": {
+        "MEDIA_CORE_URL": "http://127.0.0.1:9"
+      },
+      "unset": [],
+      "policies": {},
+      "upstream": [],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "alice GET /api/media/movies",
+          "as": "alice",
+          "path": "/api/media/movies",
+          "status": 504,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"upstream_unreachable\",\"service\":\"media-core\",\"message\":\"fetch failed\"}",
+          "body_len": 80,
+          "body_sum": 7237,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/media/playback/movie/7",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/playback/movie/7",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{}",
+          "status": 502,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"grant_failed\"}",
+          "body_len": 24,
+          "body_sum": 2244,
+          "calls": []
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "media streams a multi-MB body",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/movie/7",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4"
+          },
+          "body": "",
+          "bytes": 3158073,
+          "seed": 7
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "admin GET /api/media/stream/movie/7",
+          "as": "admin",
+          "path": "/api/media/stream/movie/7",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4"
+          },
+          "body": null,
+          "body_len": 3158073,
+          "body_sum": 402649035,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/movie/7",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "media client abort closes the upstream socket",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/movie/7",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4"
+          },
+          "body": "",
+          "slow": true
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "admin GET /api/media/stream/movie/7",
+          "as": "admin",
+          "path": "/api/media/stream/movie/7",
+          "abort": {
+            "status": 200,
+            "open_during": 1,
+            "open_after": 0
+          },
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/movie/7",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "playback direct play then the tokened stream",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "POST",
+          "path": "/mc/api/media/play/movie/7/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"directPlay\":true,\"file\":{\"duration_secs\":7200}}"
+        },
+        {
+          "method": "POST",
+          "path": "/mc/api/media/play/track/3/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"directPlay\":false,\"file\":{}}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/movie/7",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4",
+            "accept-ranges": "bytes"
+          },
+          "body": "movie-bytes"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/track/3",
+          "status": 200,
+          "headers": {
+            "content-type": "audio/mpeg"
+          },
+          "body": "audio"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "alice POST /api/media/playback/movie/7",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/playback/movie/7",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"containers\":[\"mp4\",\"mkv\"],\"video_codecs\":[\"h264\",\"hevc\"],\"max_height\":1080,\"hdr\":1,\"audio_codecs\":[\"aac\",\"eac3\"],\"aac_max_channels\":6.7,\"hls_fmp4_hevc\":true,\"dolby_vision\":\"yes\",\"max_bitrate\":8000000.9,\"start_secs\":12.5}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"delivery\":\"progressive\",\"url\":\"/api/media/stream/movie/7?t=<token>\",\"durationSecs\":7200}",
+          "body_len": 373,
+          "body_sum": 32555,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/play/movie/7/grant",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"containers\":[\"mp4\",\"mkv\"],\"video_codecs\":[\"h264\",\"hevc\"],\"max_height\":1080,\"hdr\":true,\"audio_codecs\":[\"aac\",\"eac3\"],\"aac_max_channels\":6,\"hls_fmp4_hevc\":true,\"dolby_vision\":true,\"max_bitrate\":8000000}"
+            }
+          ]
+        },
+        {
+          "name": "cookieless tokened stream",
+          "from_url": true,
+          "headers_in": {
+            "range": "bytes=0-"
+          },
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4",
+            "accept-ranges": "bytes"
+          },
+          "body": null,
+          "body_len": 11,
+          "body_sum": 1140,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/movie/7",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "range": "bytes=0-"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "tokened stream for another title",
+          "path": "/api/media/stream/movie/8?t={token}",
+          "token": {
+            "kind": "vod",
+            "rid": "media:movie:7",
+            "who": "alice"
+          },
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"token_mismatch\"}",
+          "body_len": 26,
+          "body_sum": 2490,
+          "calls": []
+        },
+        {
+          "name": "remux token on a stream",
+          "path": "/api/media/stream/movie/7?t={token}",
+          "token": {
+            "kind": "remux",
+            "rid": "media:movie:7",
+            "who": "alice"
+          },
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"token_kind\"}",
+          "body_len": 22,
+          "body_sum": 2058,
+          "calls": []
+        },
+        {
+          "name": "iptv-namespace token",
+          "path": "/api/media/stream/movie/7?t={token}",
+          "token": {
+            "kind": "vod",
+            "rid": "movie:7",
+            "who": "alice"
+          },
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"token_kind\"}",
+          "body_len": 22,
+          "body_sum": 2058,
+          "calls": []
+        },
+        {
+          "name": "garbage token",
+          "path": "/api/media/stream/movie/7?t=garbage",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_token\"}",
+          "body_len": 25,
+          "body_sum": 2379,
+          "calls": []
+        },
+        {
+          "name": "revoked holder",
+          "path": "/api/media/stream/movie/7?t={token}",
+          "token": {
+            "kind": "vod",
+            "rid": "media:movie:7",
+            "who": "bob"
+          },
+          "revoke": "bob",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"access_revoked\"}",
+          "body_len": 26,
+          "body_sum": 2469,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/media/playback/track/3",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/playback/track/3",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"force_hls\":true,\"containers\":[],\"aac_max_channels\":1}",
+          "status": 502,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"transcoder_unreachable\"}",
+          "body_len": 34,
+          "body_sum": 3314,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/play/track/3/grant",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"containers\":[\"mp4\"],\"video_codecs\":[\"h264\"],\"max_height\":2160,\"hdr\":false,\"audio_codecs\":[\"aac\"],\"aac_max_channels\":2,\"hls_fmp4_hevc\":false,\"dolby_vision\":false}"
+            },
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/track/3",
+              "query": "containers=mp4&video_codecs=h264&max_height=2160&hdr=false&audio_codecs=aac&aac_max_channels=2&hls_fmp4_hevc=false",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "playback transcode with trickplay and a subtitle",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "POST",
+          "path": "/mc/api/media/play/episode/101/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"directPlay\":false,\"file\":{\"duration_secs\":3000}}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/episode/101",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"sessionId\":\"s1\",\"manifestUrl\":\"/api/transcode/session/s1/index.m3u8\",\"masterUrl\":null,\"heartbeatUrl\":\"/api/transcode/session/s1/heartbeat\",\"subtitle\":{\"url\":\"/api/transcode/session/s1/subtitles.vtt\",\"language\":\"en\"}}"
+        },
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/session/s1/index.m3u8",
+          "status": 200,
+          "headers": {
+            "content-type": "application/vnd.apple.mpegurl"
+          },
+          "body": "#EXTM3U\n#EXTINF:6.0,\nseg_00000.ts\n"
+        },
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/session/s1/iframe.m3u8",
+          "status": 200,
+          "headers": {
+            "content-type": "application/vnd.apple.mpegurl"
+          },
+          "body": "#EXTM3U\n#EXT-X-I-FRAMES-ONLY\n"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "admin POST /api/media/playback/episode/101",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/media/playback/episode/101",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"native_hls\":true,\"alt_audio\":true,\"start_secs\":90,\"max_height\":\"tall\"}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"delivery\":\"hls\",\"url\":\"/api/transcode/session/s1/index.m3u8?t=<token>\",\"heartbeatUrl\":\"/api/transcode/session/s1/heartbeat?t=<token>\",\"stopUrl\":\"/api/transcode/session/s1/stop?t=<token>\",\"sessionId\":\"s1\",\"durationSecs\":3000,\"subtitle\":{\"url\":\"/api/transcode/session/s1/subtitles.vtt?t=<token>\",\"language\":\"en\",\"forced\":false},\"trickplayUrl\":\"/api/transcode/session/s1/iframe.m3u8?t=<token>\"}",
+          "body_len": 1718,
+          "body_sum": 149295,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/play/episode/101/grant",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"containers\":[\"mp4\"],\"video_codecs\":[\"h264\"],\"max_height\":2160,\"hdr\":false,\"audio_codecs\":[\"aac\"],\"aac_max_channels\":2,\"hls_fmp4_hevc\":false,\"dolby_vision\":false}"
+            },
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/episode/101",
+              "query": "containers=mp4&video_codecs=h264&max_height=2160&hdr=false&audio_codecs=aac&aac_max_channels=2&hls_fmp4_hevc=false&native_hls=true&alt_audio=true&start_secs=90",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            },
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/session/s1/index.m3u8",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            },
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/session/s1/iframe.m3u8",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "playback transcode without an I-frame rendition and with a master",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "POST",
+          "path": "/mc/api/media/play/movie/7/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"directPlay\":true,\"file\":{\"duration_secs\":null}}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/movie/7",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"sessionId\":\"s1\",\"manifestUrl\":\"/api/transcode/session/s1/index.m3u8\",\"masterUrl\":\"/api/transcode/session/s1/master.m3u8?v=2\",\"heartbeatUrl\":\"\",\"subtitle\":{\"url\":\"\"}}"
+        },
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/session/s1/index.m3u8",
+          "status": 200,
+          "headers": {},
+          "body": "#EXTM3U\n#EXTINF:6.0,\nseg_00000.m4s?x=1\n"
+        },
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/session/s1/iframe.m3u8",
+          "status": 404,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"not_found\"}"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "admin POST /api/media/playback/movie/7",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/media/playback/movie/7",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"force_hls\":true}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"delivery\":\"hls\",\"url\":\"/api/transcode/session/s1/master.m3u8?v=2&t=<token>\",\"heartbeatUrl\":null,\"stopUrl\":\"/api/transcode/session/s1/stop?t=<token>\",\"sessionId\":\"s1\",\"durationSecs\":null,\"subtitle\":null,\"trickplayUrl\":null}",
+          "body_len": 754,
+          "body_sum": 65631,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/play/movie/7/grant",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"containers\":[\"mp4\"],\"video_codecs\":[\"h264\"],\"max_height\":2160,\"hdr\":false,\"audio_codecs\":[\"aac\"],\"aac_max_channels\":2,\"hls_fmp4_hevc\":false,\"dolby_vision\":false}"
+            },
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/movie/7",
+              "query": "containers=mp4&video_codecs=h264&max_height=2160&hdr=false&audio_codecs=aac&aac_max_channels=2&hls_fmp4_hevc=false&force_transcode=true",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            },
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/session/s1/index.m3u8",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            },
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/session/s1/iframe.m3u8",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "playback failures",
+      "env": {},
+      "unset": [],
+      "policies": {
+        "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+          "maxContentRating": "PG-13"
+        }
+      },
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/radarr/api/v3/movie",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "[{\"tmdbId\":550,\"title\":\"Fight Club\",\"certification\":\"R\"},{\"tmdbId\":551,\"title\":\"Rated G\",\"certification\":\"G\"},{\"tmdbId\":552,\"title\":\"No cert\"}]"
+        },
+        {
+          "method": "POST",
+          "path": "/mc/api/media/play/movie/404/grant",
+          "status": 404,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"nope\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/mc/api/media/play/movie/500/grant",
+          "status": 500,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"boom\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/mc/api/media/play/movie/501/grant",
+          "status": 200,
+          "headers": {},
+          "body": "not json"
+        },
+        {
+          "method": "POST",
+          "path": "/mc/api/media/play/movie/502/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"directPlay\":false}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/movie/502",
+          "status": 503,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"busy\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/mc/api/media/play/movie/503/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"directPlay\":false}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/movie/503",
+          "status": 500,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"boom\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/mc/api/media/play/movie/504/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"directPlay\":false}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/movie/504",
+          "status": 200,
+          "headers": {},
+          "body": "<html>"
+        },
+        {
+          "method": "POST",
+          "path": "/mc/api/media/play/movie/505/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"directPlay\":false}"
+        },
+        {
+          "method": "GET",
+          "path": "/mc/api/media/stream/movie/505",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"manifestUrl\":\"/api/transcode/session/x/index.m3u8\"}"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "alice POST /api/media/playback/show/7",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/playback/show/7",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{}",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"unknown media kind\"}",
+          "body_len": 30,
+          "body_sum": 2778,
+          "calls": []
+        },
+        {
+          "name": "anon POST /api/media/playback/movie/7",
+          "method": "POST",
+          "path": "/api/media/playback/movie/7",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/media/playback/movie/7",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/playback/movie/7",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{}",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/radarr/api/v3/movie",
+              "query": "",
+              "principal": null,
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice POST /api/media/playback/video/5",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/playback/video/5",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{}",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "admin POST /api/media/playback/movie/404",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/media/playback/movie/404",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"not_found\"}",
+          "body_len": 21,
+          "body_sum": 1968,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/play/movie/404/grant",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"containers\":[\"mp4\"],\"video_codecs\":[\"h264\"],\"max_height\":2160,\"hdr\":false,\"audio_codecs\":[\"aac\"],\"aac_max_channels\":2,\"hls_fmp4_hevc\":false,\"dolby_vision\":false}"
+            }
+          ]
+        },
+        {
+          "name": "admin POST /api/media/playback/movie/500",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/media/playback/movie/500",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{}",
+          "status": 502,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"grant_failed\"}",
+          "body_len": 24,
+          "body_sum": 2244,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/play/movie/500/grant",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"containers\":[\"mp4\"],\"video_codecs\":[\"h264\"],\"max_height\":2160,\"hdr\":false,\"audio_codecs\":[\"aac\"],\"aac_max_channels\":2,\"hls_fmp4_hevc\":false,\"dolby_vision\":false}"
+            }
+          ]
+        },
+        {
+          "name": "admin POST /api/media/playback/movie/501",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/media/playback/movie/501",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{}",
+          "status": 502,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"media_core_unreachable\"}",
+          "body_len": 34,
+          "body_sum": 3269,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/play/movie/501/grant",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"containers\":[\"mp4\"],\"video_codecs\":[\"h264\"],\"max_height\":2160,\"hdr\":false,\"audio_codecs\":[\"aac\"],\"aac_max_channels\":2,\"hls_fmp4_hevc\":false,\"dolby_vision\":false}"
+            }
+          ]
+        },
+        {
+          "name": "admin POST /api/media/playback/movie/502",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/media/playback/movie/502",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{}",
+          "status": 503,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"transcoder_unavailable\"}",
+          "body_len": 34,
+          "body_sum": 3324,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/play/movie/502/grant",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"containers\":[\"mp4\"],\"video_codecs\":[\"h264\"],\"max_height\":2160,\"hdr\":false,\"audio_codecs\":[\"aac\"],\"aac_max_channels\":2,\"hls_fmp4_hevc\":false,\"dolby_vision\":false}"
+            },
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/movie/502",
+              "query": "containers=mp4&video_codecs=h264&max_height=2160&hdr=false&audio_codecs=aac&aac_max_channels=2&hls_fmp4_hevc=false",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "admin POST /api/media/playback/movie/503",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/media/playback/movie/503",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{}",
+          "status": 502,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"transcode_start_failed\"}",
+          "body_len": 34,
+          "body_sum": 3320,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/play/movie/503/grant",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"containers\":[\"mp4\"],\"video_codecs\":[\"h264\"],\"max_height\":2160,\"hdr\":false,\"audio_codecs\":[\"aac\"],\"aac_max_channels\":2,\"hls_fmp4_hevc\":false,\"dolby_vision\":false}"
+            },
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/movie/503",
+              "query": "containers=mp4&video_codecs=h264&max_height=2160&hdr=false&audio_codecs=aac&aac_max_channels=2&hls_fmp4_hevc=false",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "admin POST /api/media/playback/movie/504",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/media/playback/movie/504",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{}",
+          "status": 502,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"transcoder_unreachable\"}",
+          "body_len": 34,
+          "body_sum": 3314,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/play/movie/504/grant",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"containers\":[\"mp4\"],\"video_codecs\":[\"h264\"],\"max_height\":2160,\"hdr\":false,\"audio_codecs\":[\"aac\"],\"aac_max_channels\":2,\"hls_fmp4_hevc\":false,\"dolby_vision\":false}"
+            },
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/movie/504",
+              "query": "containers=mp4&video_codecs=h264&max_height=2160&hdr=false&audio_codecs=aac&aac_max_channels=2&hls_fmp4_hevc=false",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "admin POST /api/media/playback/movie/505",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/media/playback/movie/505",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{}",
+          "status": 503,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"transcoder_unavailable\"}",
+          "body_len": 34,
+          "body_sum": 3324,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/play/movie/505/grant",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"containers\":[\"mp4\"],\"video_codecs\":[\"h264\"],\"max_height\":2160,\"hdr\":false,\"audio_codecs\":[\"aac\"],\"aac_max_channels\":2,\"hls_fmp4_hevc\":false,\"dolby_vision\":false}"
+            },
+            {
+              "method": "GET",
+              "path": "/mc/api/media/stream/movie/505",
+              "query": "containers=mp4&video_codecs=h264&max_height=2160&hdr=false&audio_codecs=aac&aac_max_channels=2&hls_fmp4_hevc=false",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "admin GET /api/media/playback/movie/7",
+          "as": "admin",
+          "method": "GET",
+          "path": "/api/media/playback/movie/7",
+          "status": 404,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"no fixture\"}",
+          "body_len": 22,
+          "body_sum": 2024,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/mc/api/media/playback/movie/7",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "watch writes earn one watched signal",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "POST",
+          "path": "/mc/api/media/watch",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "alice POST /api/media/watch",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/watch",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"media_kind\":\"movie\",\"media_id\":7,\"position_secs\":4000,\"duration_secs\":7200}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}",
+          "body_len": 11,
+          "body_sum": 1040,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/watch",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"media_kind\":\"movie\",\"media_id\":7,\"position_secs\":4000,\"duration_secs\":7200}"
+            },
+            {
+              "method": "POST",
+              "path": "/rec/events/feedback",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json",
+                "x-recommender-secret": "proxy-goldens-recommender-placeholder-zzz"
+              },
+              "body": "{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"kind\":\"movie\",\"tmdb_id\":550,\"signal\":\"watched\"}"
+            }
+          ]
+        },
+        {
+          "name": "alice POST /api/media/watch",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/watch",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"media_kind\":\"movie\",\"media_id\":8,\"position_secs\":900,\"duration_secs\":1000}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}",
+          "body_len": 11,
+          "body_sum": 1040,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/watch",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"media_kind\":\"movie\",\"media_id\":8,\"position_secs\":900,\"duration_secs\":1000}"
+            }
+          ]
+        },
+        {
+          "name": "alice POST /api/media/watch",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/watch",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"media_kind\":\"episode\",\"media_id\":101,\"position_secs\":\"1300\",\"duration_secs\":3000}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}",
+          "body_len": 11,
+          "body_sum": 1040,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/watch",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"media_kind\":\"episode\",\"media_id\":101,\"position_secs\":\"1300\",\"duration_secs\":3000}"
+            },
+            {
+              "method": "POST",
+              "path": "/rec/events/feedback",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json",
+                "x-recommender-secret": "proxy-goldens-recommender-placeholder-zzz"
+              },
+              "body": "{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"kind\":\"tv\",\"tmdb_id\":1399,\"signal\":\"watched\"}"
+            }
+          ]
+        },
+        {
+          "name": "alice POST /api/media/watch",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/watch",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"media_kind\":\"episode\",\"media_id\":101,\"position_secs\":10,\"completed\":true}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}",
+          "body_len": 11,
+          "body_sum": 1040,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/watch",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"media_kind\":\"episode\",\"media_id\":101,\"position_secs\":10,\"completed\":true}"
+            },
+            {
+              "method": "POST",
+              "path": "/rec/events/feedback",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json",
+                "x-recommender-secret": "proxy-goldens-recommender-placeholder-zzz"
+              },
+              "body": "{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"kind\":\"tv\",\"tmdb_id\":1399,\"signal\":\"watched\"}"
+            }
+          ]
+        },
+        {
+          "name": "alice POST /api/media/watch",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/watch",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"media_kind\":\"movie\",\"media_id\":9,\"completed\":1}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}",
+          "body_len": 11,
+          "body_sum": 1040,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/watch",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"media_kind\":\"movie\",\"media_id\":9,\"completed\":1}"
+            }
+          ]
+        },
+        {
+          "name": "alice POST /api/media/watch",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/watch",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"media_kind\":\"movie\",\"media_id\":7,\"position_secs\":100,\"duration_secs\":7200}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}",
+          "body_len": 11,
+          "body_sum": 1040,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/watch",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"media_kind\":\"movie\",\"media_id\":7,\"position_secs\":100,\"duration_secs\":7200}"
+            }
+          ]
+        },
+        {
+          "name": "alice POST /api/media/watch",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/watch",
+          "headers_in": {
+            "content-type": "text/plain"
+          },
+          "body_in": "{\"media_kind\":\"movie\",\"media_id\":7,\"completed\":true}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}",
+          "body_len": 11,
+          "body_sum": 1040,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/watch",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "text/plain"
+              },
+              "body": "{\"media_kind\":\"movie\",\"media_id\":7,\"completed\":true}"
+            }
+          ]
+        },
+        {
+          "name": "alice POST /api/media/watch",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/watch",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{not json",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}",
+          "body_len": 11,
+          "body_sum": 1040,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/watch",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{not json"
+            }
+          ]
+        },
+        {
+          "name": "alice POST /api/media/watch",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/watch",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"media_kind\":\"movie\",\"media_id\":\"7\",\"completed\":true}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}",
+          "body_len": 11,
+          "body_sum": 1040,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/watch",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"media_kind\":\"movie\",\"media_id\":\"7\",\"completed\":true}"
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "a refused watch write earns nothing",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "POST",
+          "path": "/mc/api/media/watch",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"bad\"}"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "alice POST /api/media/watch",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/media/watch",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"media_kind\":\"movie\",\"media_id\":7,\"completed\":true}",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"bad\"}",
+          "body_len": 15,
+          "body_sum": 1291,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/mc/api/media/watch",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"media_kind\":\"movie\",\"media_id\":7,\"completed\":true}"
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "transcode token manifest rewrite",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/session/abc/index.m3u8",
+          "status": 200,
+          "headers": {
+            "content-type": "application/vnd.apple.mpegurl",
+            "cache-control": "max-age=60",
+            "content-length": "263"
+          },
+          "body": "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=1,URI='iframe.m3u8'\n#EXTINF:6.0,\nseg_00000.m4s\n  seg_00001.m4s?x=1  \n\nhttps://cdn.example/abs.ts\n#EXT-X-MEDIA:TYPE=AUDIO,URI=\"http://cdn.example/a.m3u8\",NAME=\"x\"\n#EXT-X-ENDLIST"
+        },
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/session/abc/seg_00000.ts",
+          "status": 206,
+          "headers": {
+            "content-type": "video/mp2t",
+            "content-range": "bytes 0-5/10",
+            "accept-ranges": "bytes"
+          },
+          "body": "TSDATA"
+        },
+        {
+          "method": "POST",
+          "path": "/tc/api/transcode/session/abc/heartbeat",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}"
+        },
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/session/abc/missing.m3u8",
+          "status": 404,
+          "headers": {},
+          "body": "gone"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "tokened manifest",
+          "path": "/api/transcode/session/abc/index.m3u8?t={token}&v=1",
+          "token": {
+            "kind": "remux",
+            "rid": "media:session:abc",
+            "who": "alice"
+          },
+          "headers_in": {
+            "user-agent": "AppleCoreMedia/1.0"
+          },
+          "status": 200,
+          "headers": {
+            "content-type": "application/vnd.apple.mpegurl",
+            "content-length": "1463",
+            "cache-control": "no-store",
+            "x-accel-buffering": "no"
+          },
+          "body": "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI=\"init.mp4?t=<token>\"\n#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=1,URI='iframe.m3u8?t=<token>'\n#EXTINF:6.0,\nseg_00000.m4s?t=<token>\nseg_00001.m4s?x=1&t=<token>\n\nhttps://cdn.example/abs.ts\n#EXT-X-MEDIA:TYPE=AUDIO,URI=\"http://cdn.example/a.m3u8\",NAME=\"x\"\n#EXT-X-ENDLIST",
+          "body_len": 1463,
+          "body_sum": 123556,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/session/abc/index.m3u8",
+              "query": "v=1",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "user-agent": "AppleCoreMedia/1.0"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "cookie manifest is not rewritten",
+          "as": "alice",
+          "path": "/api/transcode/session/abc/index.m3u8",
+          "status": 200,
+          "headers": {
+            "content-type": "application/vnd.apple.mpegurl",
+            "content-length": "263",
+            "cache-control": "max-age=60"
+          },
+          "body": "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH=1,URI='iframe.m3u8'\n#EXTINF:6.0,\nseg_00000.m4s\n  seg_00001.m4s?x=1  \n\nhttps://cdn.example/abs.ts\n#EXT-X-MEDIA:TYPE=AUDIO,URI=\"http://cdn.example/a.m3u8\",NAME=\"x\"\n#EXT-X-ENDLIST",
+          "body_len": 263,
+          "body_sum": 18925,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/session/abc/index.m3u8",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "tokened segment with range",
+          "path": "/api/transcode/session/abc/seg_00000.ts?t={token}",
+          "token": {
+            "kind": "remux",
+            "rid": "media:session:abc",
+            "who": "alice"
+          },
+          "headers_in": {
+            "range": "bytes=0-5"
+          },
+          "status": 206,
+          "headers": {
+            "content-type": "video/mp2t",
+            "content-range": "bytes 0-5/10",
+            "accept-ranges": "bytes"
+          },
+          "body": null,
+          "body_len": 6,
+          "body_sum": 449,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/session/abc/seg_00000.ts",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "range": "bytes=0-5"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "tokened heartbeat",
+          "method": "POST",
+          "path": "/api/transcode/session/abc/heartbeat?t={token}",
+          "token": {
+            "kind": "remux",
+            "rid": "media:session:abc",
+            "who": "alice"
+          },
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"pos\":12}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}",
+          "body_len": 11,
+          "body_sum": 1040,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/tc/api/transcode/session/abc/heartbeat",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json"
+              },
+              "body": "{\"pos\":12}"
+            }
+          ]
+        },
+        {
+          "name": "tokened 404 manifest passes through",
+          "path": "/api/transcode/session/abc/missing.m3u8?t={token}",
+          "token": {
+            "kind": "remux",
+            "rid": "media:session:abc",
+            "who": "alice"
+          },
+          "status": 404,
+          "headers": {
+            "content-type": "application/octet-stream"
+          },
+          "body": null,
+          "body_len": 4,
+          "body_sum": 425,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/session/abc/missing.m3u8",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "token for another session",
+          "path": "/api/transcode/session/xyz/index.m3u8?t={token}",
+          "token": {
+            "kind": "remux",
+            "rid": "media:session:abc",
+            "who": "alice"
+          },
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"token_mismatch\"}",
+          "body_len": 26,
+          "body_sum": 2490,
+          "calls": []
+        },
+        {
+          "name": "vod token on a session",
+          "path": "/api/transcode/session/abc/index.m3u8?t={token}",
+          "token": {
+            "kind": "vod",
+            "rid": "media:session:abc",
+            "who": "alice"
+          },
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"token_kind\"}",
+          "body_len": 22,
+          "body_sum": 2058,
+          "calls": []
+        },
+        {
+          "name": "revoked holder",
+          "path": "/api/transcode/session/abc/index.m3u8?t={token}",
+          "token": {
+            "kind": "remux",
+            "rid": "media:session:abc",
+            "who": "bob"
+          },
+          "revoke": "bob",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"access_revoked\"}",
+          "body_len": 26,
+          "body_sum": 2469,
+          "calls": []
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "transcode session paths and the control-path block",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/sessions",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "[]"
+        },
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/session/grant/index.m3u8",
+          "status": 200,
+          "headers": {},
+          "body": "#EXTM3U"
+        },
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/session/abc/warm.ts",
+          "status": 200,
+          "headers": {},
+          "body": "ts"
+        },
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/grants",
+          "status": 200,
+          "headers": {},
+          "body": "ok"
+        },
+        {
+          "method": "POST",
+          "path": "/tc/api/transcode/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"leaked\":true}"
+        },
+        {
+          "method": "POST",
+          "path": "/tc/api/transcode/warm",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"leaked\":true}"
+        },
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"leaked\":true}"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "anon GET /api/transcode/sessions",
+          "path": "/api/transcode/sessions",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": []
+        },
+        {
+          "name": "admin GET /api/transcode/sessions",
+          "as": "admin",
+          "path": "/api/transcode/sessions",
+          "headers_in": {
+            "user-agent": "Mozilla/5.0"
+          },
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "[]",
+          "body_len": 2,
+          "body_sum": 184,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/sessions",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "user-agent": "Mozilla/5.0"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/transcode/session/grant/index.m3u8",
+          "as": "alice",
+          "path": "/api/transcode/session/grant/index.m3u8",
+          "status": 200,
+          "headers": {
+            "content-type": "application/octet-stream"
+          },
+          "body": null,
+          "body_len": 7,
+          "body_sum": 489,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/session/grant/index.m3u8",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/transcode/session/abc/warm.ts",
+          "as": "alice",
+          "path": "/api/transcode/session/abc/warm.ts",
+          "status": 200,
+          "headers": {
+            "content-type": "application/octet-stream"
+          },
+          "body": null,
+          "body_len": 2,
+          "body_sum": 231,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/session/abc/warm.ts",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/transcode/grants",
+          "as": "alice",
+          "path": "/api/transcode/grants",
+          "status": 200,
+          "headers": {
+            "content-type": "application/octet-stream"
+          },
+          "body": null,
+          "body_len": 2,
+          "body_sum": 218,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/grants",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice POST /api/transcode/grant",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/transcode/grant",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"file\":{\"path\":\"/etc/shadow\"}}",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/transcode/warm",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/transcode/warm",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"path\":\"/etc/passwd\"}",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/transcode/grant",
+          "as": "alice",
+          "path": "/api/transcode/grant",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/transcode/warm",
+          "as": "alice",
+          "path": "/api/transcode/warm",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/transcode/%67rant",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/transcode/%67rant",
+          "body_in": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/transcode/%77arm",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/transcode/%77arm",
+          "body_in": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/transcode/session/abc/../../warm",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/transcode/session/abc/../../warm",
+          "body_in": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/transcode/session/abc\\..\\..\\warm",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/transcode/session/abc\\..\\..\\warm",
+          "body_in": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/transcode/session/abc\\..\\..\\grant",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/transcode/session/abc\\..\\..\\grant",
+          "body_in": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/transcode/session/abc/..\\../warm",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/transcode/session/abc/..\\../warm",
+          "body_in": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/transcode/session/abc/%2e%2e/%2E%2E/grant",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/transcode/session/abc/%2e%2e/%2E%2E/grant",
+          "body_in": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "tokened grant",
+          "method": "POST",
+          "path": "/api/transcode/grant?t={token}",
+          "token": {
+            "kind": "remux",
+            "rid": "media:session:abc",
+            "who": "alice"
+          },
+          "body_in": "{}",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/transcode/%E0%A4%A",
+          "as": "alice",
+          "path": "/api/transcode/%E0%A4%A",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "transcode streams a multi-MB segment",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tc/api/transcode/session/abc/seg_00001.ts",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp2t"
+          },
+          "body": "",
+          "bytes": 2097229,
+          "seed": 3
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "tokened big segment",
+          "path": "/api/transcode/session/abc/seg_00001.ts?t={token}",
+          "token": {
+            "kind": "remux",
+            "rid": "media:session:abc",
+            "who": "alice"
+          },
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp2t"
+          },
+          "body": null,
+          "body_len": 2097229,
+          "body_sum": 267390037,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tc/api/transcode/session/abc/seg_00001.ts",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "iptv session routes",
+      "env": {},
+      "unset": [],
+      "policies": {
+        "google:1234567890": {
+          "kid": true
+        }
+      },
+      "upstream": [
+        {
+          "method": "POST",
+          "path": "/iptv/api/iptv/stream/live/10/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"delivery\":\"hls\",\"url\":\"/x\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/iptv/api/iptv/categories",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "set-cookie": "a=b",
+            "connection": "keep-alive"
+          },
+          "body": "{\"categories\":[]}"
+        },
+        {
+          "method": "GET",
+          "path": "/iptv/api/iptv/sessions",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "[]"
+        },
+        {
+          "method": "GET",
+          "path": "/iptv/api/iptv/playlist/tokens",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "[]"
+        },
+        {
+          "method": "POST",
+          "path": "/iptv/api/iptv/playlist/token",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"token\":\"x\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/iptv/api/iptv/stream/vod/5/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}"
+        },
+        {
+          "method": "GET",
+          "path": "/iptv/api/iptv/stream/vod/5/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "alice POST /api/iptv/stream/live/10/grant?client=avplayer",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/iptv/stream/live/10/grant?client=avplayer",
+          "headers_in": {
+            "host": "api.example.test",
+            "x-forwarded-proto": "https",
+            "cf-connecting-ip": "203.0.113.7",
+            "content-type": "application/json"
+          },
+          "body_in": "{}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"delivery\":\"hls\",\"url\":\"/x\"}",
+          "body_len": 29,
+          "body_sum": 2381,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/iptv/api/iptv/stream/live/10/grant",
+              "query": "client=avplayer",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "content-type": "application/json",
+                "cf-connecting-ip": "203.0.113.7",
+                "x-forwarded-proto": "https",
+                "x-forwarded-host": "api.example.test"
+              },
+              "body": "{}"
+            }
+          ]
+        },
+        {
+          "name": "anon GET /api/iptv/categories",
+          "path": "/api/iptv/categories",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/iptv/categories",
+          "as": "alice",
+          "path": "/api/iptv/categories",
+          "headers_in": {
+            "accept-encoding": "gzip",
+            "x-forwarded-host": "tv.example",
+            "x-forwarded-for": "198.51.100.2, 10.0.0.1"
+          },
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "set-cookie": "a=b"
+          },
+          "body": "{\"categories\":[]}",
+          "body_len": 17,
+          "body_sum": 1620,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/iptv/categories",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "accept-encoding": "gzip",
+                "x-forwarded-for": "198.51.100.2, 10.0.0.1",
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "tv.example"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "bob GET /api/iptv/categories",
+          "as": "bob",
+          "path": "/api/iptv/categories",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json",
+            "set-cookie": "a=b"
+          },
+          "body": "{\"categories\":[]}",
+          "body_len": 17,
+          "body_sum": 1620,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/iptv/categories",
+              "query": "",
+              "principal": {
+                "sub": "google:1234567890",
+                "role": "user",
+                "auth_mode": "google"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "bob POST /api/iptv/stream/live/10/grant",
+          "as": "bob",
+          "method": "POST",
+          "path": "/api/iptv/stream/live/10/grant",
+          "body_in": "{}",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "bob POST /api/iptv/playlist/token",
+          "as": "bob",
+          "method": "POST",
+          "path": "/api/iptv/playlist/token",
+          "body_in": "{}",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "bob POST /api/iptv/stream/vod/5/grant",
+          "as": "bob",
+          "method": "POST",
+          "path": "/api/iptv/stream/vod/5/grant",
+          "body_in": "{}",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "bob GET /api/iptv/stream/vod/5/grant",
+          "as": "bob",
+          "path": "/api/iptv/stream/vod/5/grant",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_token\",\"detail\":\"invalid_signature\"}",
+          "body_len": 54,
+          "body_sum": 5060,
+          "calls": []
+        },
+        {
+          "name": "admin POST /api/iptv/playlist/token",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/iptv/playlist/token",
+          "body_in": "{}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"token\":\"x\"}",
+          "body_len": 13,
+          "body_sum": 1107,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/iptv/api/iptv/playlist/token",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "text/plain;charset=UTF-8",
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": "{}"
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "iptv live section",
+      "env": {},
+      "unset": [],
+      "policies": {
+        "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+          "allowedSections": {
+            "live": false,
+            "downloads": true,
+            "arr": true
+          }
+        }
+      },
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/iptv/api/iptv/sessions",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "[]"
+        },
+        {
+          "method": "GET",
+          "path": "/iptv/api/iptv/sessions/s1",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{}"
+        },
+        {
+          "method": "DELETE",
+          "path": "/iptv/api/iptv/playlist/tokens/t1",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{}"
+        },
+        {
+          "method": "GET",
+          "path": "/iptv/api/iptv/categories",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{}"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "alice GET /api/iptv/categories",
+          "as": "alice",
+          "path": "/api/iptv/categories",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"section_blocked\"}",
+          "body_len": 27,
+          "body_sum": 2572,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/iptv/sessions",
+          "as": "alice",
+          "path": "/api/iptv/sessions",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "[]",
+          "body_len": 2,
+          "body_sum": 184,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/iptv/sessions",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/iptv/sessions/s1",
+          "as": "alice",
+          "path": "/api/iptv/sessions/s1",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{}",
+          "body_len": 2,
+          "body_sum": 248,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/iptv/sessions/s1",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice DELETE /api/iptv/playlist/tokens/t1",
+          "as": "alice",
+          "method": "DELETE",
+          "path": "/api/iptv/playlist/tokens/t1",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{}",
+          "body_len": 2,
+          "body_sum": 248,
+          "calls": [
+            {
+              "method": "DELETE",
+              "path": "/iptv/api/iptv/playlist/tokens/t1",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/iptv/sessions/s1/extra",
+          "as": "alice",
+          "path": "/api/iptv/sessions/s1/extra",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"section_blocked\"}",
+          "body_len": 27,
+          "body_sum": 2572,
+          "calls": []
+        },
+        {
+          "name": "admin GET /api/iptv/categories",
+          "as": "admin",
+          "path": "/api/iptv/categories",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{}",
+          "body_len": 2,
+          "body_sum": 248,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/iptv/categories",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "iptv tokened byte routes",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/iptv/api/iptv/stream/live/10.ts",
+          "status": 206,
+          "headers": {
+            "content-type": "video/mp2t",
+            "content-range": "bytes 0-3/100",
+            "x-accel-buffering": "no"
+          },
+          "body": "abcd"
+        },
+        {
+          "method": "GET",
+          "path": "/iptv/api/iptv/stream/segment",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp2t"
+          },
+          "body": "seg"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "live bytes with range",
+          "path": "/api/iptv/stream/live/10.ts?t={token}",
+          "token": {
+            "kind": "live",
+            "rid": "10",
+            "who": "alice"
+          },
+          "headers_in": {
+            "range": "bytes=0-3"
+          },
+          "status": 206,
+          "headers": {
+            "content-type": "video/mp2t",
+            "content-range": "bytes 0-3/100",
+            "x-accel-buffering": "no"
+          },
+          "body": null,
+          "body_len": 4,
+          "body_sum": 394,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/iptv/stream/live/10.ts",
+              "query": "t=<token>",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "range": "bytes=0-3",
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "segment by ?u=",
+          "path": "/api/iptv/stream/segment?u={token}&n=1",
+          "token": {
+            "kind": "segment",
+            "rid": "seg",
+            "who": "alice"
+          },
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp2t"
+          },
+          "body": null,
+          "body_len": 3,
+          "body_sum": 319,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/iptv/stream/segment",
+              "query": "u=<token>&n=1",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "forged ?u=",
+          "path": "/api/iptv/stream/segment?u=not-a-token",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_token\",\"detail\":\"invalid_signature\"}",
+          "body_len": 54,
+          "body_sum": 5060,
+          "calls": []
+        },
+        {
+          "name": "empty ?t= wins over ?u=",
+          "path": "/api/iptv/stream/segment?t=&u={token}",
+          "token": {
+            "kind": "live",
+            "rid": "10",
+            "who": "alice"
+          },
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_token\",\"detail\":\"invalid_signature\"}",
+          "body_len": 54,
+          "body_sum": 5060,
+          "calls": []
+        },
+        {
+          "name": "no token",
+          "path": "/api/iptv/stream/live/10.ts",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_token\",\"detail\":\"invalid_signature\"}",
+          "body_len": 54,
+          "body_sum": 5060,
+          "calls": []
+        },
+        {
+          "name": "bare sub",
+          "path": "/api/iptv/stream/live/10.ts?t={token}",
+          "token": {
+            "kind": "live",
+            "rid": "10",
+            "who": "42"
+          },
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_token\",\"detail\":\"sub_invalid_format\"}",
+          "body_len": 55,
+          "body_sum": 5156,
+          "calls": []
+        },
+        {
+          "name": "revoked holder",
+          "path": "/api/iptv/stream/live/10.ts?t={token}",
+          "token": {
+            "kind": "live",
+            "rid": "10",
+            "who": "bob"
+          },
+          "revoke": "bob",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"access_revoked\"}",
+          "body_len": 26,
+          "body_sum": 2469,
+          "calls": []
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "iptv playlist.m3u",
+      "env": {},
+      "unset": [],
+      "policies": {
+        "google:1234567890": {
+          "maxContentRating": "PG-13"
+        }
+      },
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/iptv/api/iptv/playlist.m3u",
+          "status": 200,
+          "headers": {
+            "content-type": "audio/x-mpegurl"
+          },
+          "body": "#EXTM3U\n"
+        },
+        {
+          "method": "POST",
+          "path": "/iptv/internal/members/apple%3A000001.0123456789abcdef0123456789abcdef.0001/revoke-playlist-tokens",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"revoked\":2}"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "allowed member",
+          "path": "/api/iptv/playlist.m3u?t={token}",
+          "token": {
+            "kind": "playlist",
+            "rid": "iptv-channels-all",
+            "who": "admin"
+          },
+          "headers_in": {
+            "host": "vlc.example"
+          },
+          "status": 200,
+          "headers": {
+            "content-type": "audio/x-mpegurl"
+          },
+          "body": "#EXTM3U\n",
+          "body_len": 8,
+          "body_sum": 499,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/iptv/playlist.m3u",
+              "query": "t=<token>",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "vlc.example"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "capped member",
+          "path": "/api/iptv/playlist.m3u?t={token}",
+          "token": {
+            "kind": "playlist",
+            "rid": "iptv-channels-all",
+            "who": "bob"
+          },
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "garbage token",
+          "path": "/api/iptv/playlist.m3u?t=garbage",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_token\",\"detail\":\"invalid_signature\"}",
+          "body_len": 54,
+          "body_sum": 5060,
+          "calls": []
+        },
+        {
+          "name": "revoked member revokes its tokens",
+          "path": "/api/iptv/playlist.m3u?t={token}",
+          "token": {
+            "kind": "playlist",
+            "rid": "iptv-channels-all",
+            "who": "alice"
+          },
+          "revoke": "alice",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"access_revoked\"}",
+          "body_len": 26,
+          "body_sum": 2469,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/iptv/internal/members/apple%3A000001.0123456789abcdef0123456789abcdef.0001/revoke-playlist-tokens",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "admin",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "cookie POST is the session route",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/iptv/playlist.m3u",
+          "body_in": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"no fixture\"}",
+          "body_len": 22,
+          "body_sum": 2024,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/iptv/api/iptv/playlist.m3u",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "text/plain;charset=UTF-8",
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": "{}"
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "iptv playlist.m3u section",
+      "env": {},
+      "unset": [],
+      "policies": {
+        "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+          "allowedSections": {
+            "live": false,
+            "downloads": true,
+            "arr": true
+          }
+        }
+      },
+      "upstream": [],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "section blocked",
+          "path": "/api/iptv/playlist.m3u?t={token}",
+          "token": {
+            "kind": "playlist",
+            "rid": "iptv-channels-all",
+            "who": "alice"
+          },
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"section_blocked\"}",
+          "body_len": 27,
+          "body_sum": 2572,
+          "calls": []
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "iptv service down",
+      "env": {
+        "IPTV_SERVICE_URL": "http://127.0.0.1:9"
+      },
+      "unset": [],
+      "policies": {},
+      "upstream": [],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "alice GET /api/iptv/categories",
+          "as": "alice",
+          "path": "/api/iptv/categories",
+          "status": 504,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"upstream_unreachable\",\"service\":\"iptv\"}",
+          "body_len": 49,
+          "body_sum": 4560,
+          "calls": []
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "iptv streams a multi-MB body",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/iptv/api/iptv/stream/vod/5.mp4",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4"
+          },
+          "body": "",
+          "bytes": 2097157,
+          "seed": 11
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "vod bytes",
+          "path": "/api/iptv/stream/vod/5.mp4?t={token}",
+          "token": {
+            "kind": "vod",
+            "rid": "5",
+            "who": "alice"
+          },
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp4"
+          },
+          "body": null,
+          "body_len": 2097157,
+          "body_sum": 267386945,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/iptv/stream/vod/5.mp4",
+              "query": "t=<token>",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "iptv client abort closes the upstream socket",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/iptv/api/iptv/stream/live/10.ts",
+          "status": 200,
+          "headers": {
+            "content-type": "video/mp2t"
+          },
+          "body": "",
+          "slow": true
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "abort live bytes",
+          "path": "/api/iptv/stream/live/10.ts?t={token}",
+          "token": {
+            "kind": "live",
+            "rid": "10",
+            "who": "alice"
+          },
+          "abort": {
+            "status": 200,
+            "open_during": 1,
+            "open_after": 0
+          },
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/iptv/stream/live/10.ts",
+              "query": "t=<token>",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "<loopback>"
+              },
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "dvr gates",
+      "env": {},
+      "unset": [],
+      "policies": {
+        "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+          "kid": true
+        },
+        "google:1234567890": {
+          "allowedSections": {
+            "live": false,
+            "downloads": true,
+            "arr": true
+          }
+        }
+      },
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/iptv/api/dvr/recordings",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "[]"
+        },
+        {
+          "method": "GET",
+          "path": "/iptv/api/dvr/recordings/rec-1",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"id\":\"rec-1\"}"
+        },
+        {
+          "method": "POST",
+          "path": "/iptv/api/dvr/recordings",
+          "status": 201,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"id\":\"rec-2\"}"
+        },
+        {
+          "method": "DELETE",
+          "path": "/iptv/api/dvr/recordings/rec-1",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}"
+        },
+        {
+          "method": "POST",
+          "path": "/iptv/api/dvr/recordings/rec-1/grant",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"url\":\"/x\"}"
+        },
+        {
+          "method": "GET",
+          "path": "/iptv/api/dvr/recordings/rec-1/play",
+          "status": 206,
+          "headers": {
+            "content-type": "video/mp2t",
+            "content-range": "bytes 5-7/8"
+          },
+          "body": "rec"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "tokened play",
+          "path": "/api/dvr/recordings/rec-1/play?t={token}",
+          "token": {
+            "kind": "recording",
+            "rid": "rec-1",
+            "who": "alice"
+          },
+          "headers_in": {
+            "range": "bytes=5-"
+          },
+          "status": 206,
+          "headers": {
+            "content-type": "video/mp2t",
+            "content-range": "bytes 5-7/8"
+          },
+          "body": null,
+          "body_len": 3,
+          "body_sum": 314,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/dvr/recordings/rec-1/play",
+              "query": "t=<token>",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "range": "bytes=5-",
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/dvr/recordings/rec-1/play",
+          "as": "alice",
+          "path": "/api/dvr/recordings/rec-1/play",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/dvr/recordings",
+          "as": "alice",
+          "path": "/api/dvr/recordings",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "[]",
+          "body_len": 2,
+          "body_sum": 184,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/dvr/recordings",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice GET /api/dvr/recordings/rec-1",
+          "as": "alice",
+          "path": "/api/dvr/recordings/rec-1",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"id\":\"rec-1\"}",
+          "body_len": 14,
+          "body_sum": 1055,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/dvr/recordings/rec-1",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice POST /api/dvr/recordings/rec-1/grant",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/dvr/recordings/rec-1/grant",
+          "body_in": "{}",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"rating_blocked\"}",
+          "body_len": 26,
+          "body_sum": 2460,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/dvr/recordings",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/dvr/recordings",
+          "body_in": "{}",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+          "body_len": 43,
+          "body_sum": 3889,
+          "calls": []
+        },
+        {
+          "name": "alice DELETE /api/dvr/recordings/rec-1",
+          "as": "alice",
+          "method": "DELETE",
+          "path": "/api/dvr/recordings/rec-1",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+          "body_len": 43,
+          "body_sum": 3889,
+          "calls": []
+        },
+        {
+          "name": "bob GET /api/dvr/recordings",
+          "as": "bob",
+          "path": "/api/dvr/recordings",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"section_blocked\"}",
+          "body_len": 27,
+          "body_sum": 2572,
+          "calls": []
+        },
+        {
+          "name": "bob GET /api/dvr/recordings/rec-1/play",
+          "as": "bob",
+          "path": "/api/dvr/recordings/rec-1/play",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"section_blocked\"}",
+          "body_len": 27,
+          "body_sum": 2572,
+          "calls": []
+        },
+        {
+          "name": "anon GET /api/dvr/recordings",
+          "path": "/api/dvr/recordings",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": []
+        },
+        {
+          "name": "anon POST /api/dvr/recordings",
+          "method": "POST",
+          "path": "/api/dvr/recordings",
+          "body_in": "{}",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": []
+        },
+        {
+          "name": "admin POST /api/dvr/recordings",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/dvr/recordings",
+          "headers_in": {
+            "content-type": "application/json"
+          },
+          "body_in": "{\"channel\":1}",
+          "status": 201,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"id\":\"rec-2\"}",
+          "body_len": 14,
+          "body_sum": 1056,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/iptv/api/dvr/recordings",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "application/json",
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": "{\"channel\":1}"
+            }
+          ]
+        },
+        {
+          "name": "admin DELETE /api/dvr/recordings/rec-1",
+          "as": "admin",
+          "method": "DELETE",
+          "path": "/api/dvr/recordings/rec-1",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}",
+          "body_len": 11,
+          "body_sum": 1040,
+          "calls": [
+            {
+              "method": "DELETE",
+              "path": "/iptv/api/dvr/recordings/rec-1",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "admin POST /api/dvr/recordings/rec-1/grant",
+          "as": "admin",
+          "method": "POST",
+          "path": "/api/dvr/recordings/rec-1/grant",
+          "body_in": "{}",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"url\":\"/x\"}",
+          "body_len": 12,
+          "body_sum": 948,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/iptv/api/dvr/recordings/rec-1/grant",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "content-type": "text/plain;charset=UTF-8",
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": "{}"
+            }
+          ]
+        },
+        {
+          "name": "admin GET /api/dvr/recordings/rec-1/play",
+          "as": "admin",
+          "path": "/api/dvr/recordings/rec-1/play",
+          "status": 206,
+          "headers": {
+            "content-type": "video/mp2t",
+            "content-range": "bytes 5-7/8"
+          },
+          "body": null,
+          "body_len": 3,
+          "body_sum": 314,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/iptv/api/dvr/recordings/rec-1/play",
+              "query": "",
+              "principal": {
+                "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "role": "admin",
+                "auth_mode": "local"
+              },
+              "headers": {
+                "x-forwarded-proto": "http",
+                "x-forwarded-host": "localhost"
+              },
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "garbage token",
+          "path": "/api/dvr/recordings/rec-1/play?t=garbage",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_token\",\"detail\":\"invalid_signature\"}",
+          "body_len": 54,
+          "body_sum": 5060,
+          "calls": []
+        },
+        {
+          "name": "empty token falls back to the session",
+          "path": "/api/dvr/recordings/rec-1/play?t=",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": []
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "account deletion erases every step",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "DELETE",
+          "path": "/iptv/internal/members/apple%3A000001.0123456789abcdef0123456789abcdef.0001",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"ok\":true}"
+        },
+        {
+          "method": "DELETE",
+          "path": "/mc/api/media/watch",
+          "status": 204,
+          "headers": {},
+          "body": ""
+        }
+      ],
+      "seed_sql": [
+        "INSERT INTO invites (code_hash, issued_by, label, expires_at, max_uses, used_count, created_at, revoked_at) VALUES ('hash-1', 'apple:000001.0123456789abcdef0123456789abcdef.0001', 'cousin', NULL, 1, 0, '2026-01-01T00:00:00.000Z', NULL)",
+        "INSERT INTO invites (code_hash, issued_by, label, expires_at, max_uses, used_count, created_at, revoked_at) VALUES ('hash-2', 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV', 'kept', NULL, 1, 0, '2026-01-01T00:00:00.000Z', NULL)",
+        "INSERT INTO user_api_keys (sub, ciphertext, updated_at) VALUES ('apple:000001.0123456789abcdef0123456789abcdef.0001', 'x', '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO user_api_keys (sub, ciphertext, updated_at) VALUES ('google:1234567890', 'y', '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO webauthn_credentials (credential_id, sub, public_key, counter, created_at) VALUES ('cred-a', 'apple:000001.0123456789abcdef0123456789abcdef.0001', x'00', 0, '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO webauthn_credentials (credential_id, sub, public_key, counter, created_at) VALUES ('cred-b', 'google:1234567890', x'00', 0, '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO device_tokens (jti, sub, device_id, device_name, platform, server_id, issued_at, expires_at) VALUES ('jti-a1', 'apple:000001.0123456789abcdef0123456789abcdef.0001', 'dev-a1', 'Apple TV', 'tvos', 'srv', '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')",
+        "INSERT INTO device_tokens (jti, sub, device_id, device_name, platform, server_id, issued_at, expires_at) VALUES ('jti-a2', 'apple:000001.0123456789abcdef0123456789abcdef.0001', 'dev-a2', 'iPad', 'ios', 'srv', '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')",
+        "INSERT INTO device_tokens (jti, sub, device_id, device_name, platform, server_id, issued_at, expires_at) VALUES ('jti-b1', 'google:1234567890', 'dev-b1', 'Phone', 'ios', 'srv', '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')"
+      ],
+      "state_sql": [
+        "SELECT group_concat(sub || '=' || (revoked_at IS NOT NULL), ',') FROM (SELECT sub, revoked_at FROM members ORDER BY sub)",
+        "SELECT group_concat(code_hash || '=' || (revoked_at IS NOT NULL), ',') FROM (SELECT code_hash, revoked_at FROM invites ORDER BY code_hash)",
+        "SELECT group_concat(jti || '=' || reason, ',') FROM (SELECT jti, reason FROM device_token_revocations ORDER BY jti)",
+        "SELECT group_concat(sub, ',') FROM (SELECT sub FROM user_api_keys ORDER BY sub)",
+        "SELECT group_concat(credential_id, ',') FROM (SELECT credential_id FROM webauthn_credentials ORDER BY credential_id)"
+      ],
+      "steps": [
+        {
+          "name": "anon DELETE /api/account/self",
+          "method": "DELETE",
+          "path": "/api/account/self",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": []
+        },
+        {
+          "name": "alice DELETE /api/account/self",
+          "as": "alice",
+          "method": "DELETE",
+          "path": "/api/account/self",
+          "status": 204,
+          "headers": {},
+          "body": "",
+          "body_len": 0,
+          "body_sum": 0,
+          "calls": [
+            {
+              "method": "DELETE",
+              "path": "/iptv/internal/members/apple%3A000001.0123456789abcdef0123456789abcdef.0001",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "admin",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            },
+            {
+              "method": "DELETE",
+              "path": "/mc/api/media/watch",
+              "query": "",
+              "principal": {
+                "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+                "role": "user",
+                "auth_mode": "apple"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        },
+        {
+          "name": "alice DELETE /api/account/self",
+          "as": "alice",
+          "method": "DELETE",
+          "path": "/api/account/self",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json",
+            "set-cookie": "eex.session=; Max-Age=0; Path=/"
+          },
+          "body": "{\"error\":\"unauthenticated\",\"reason\":\"access_revoked\"}",
+          "body_len": 53,
+          "body_sum": 4961,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/media/movies",
+          "as": "alice",
+          "path": "/api/media/movies",
+          "status": 401,
+          "headers": {
+            "content-type": "application/json",
+            "set-cookie": "eex.session=; Max-Age=0; Path=/"
+          },
+          "body": "{\"error\":\"unauthenticated\",\"reason\":\"access_revoked\"}",
+          "body_len": 53,
+          "body_sum": 4961,
+          "calls": []
+        }
+      ],
+      "state": {
+        "sql": [
+          "apple:000001.0123456789abcdef0123456789abcdef.0001=1,google:1234567890=0,local:01ARZ3NDEKTSV4RRFFQ69G5FAV=0",
+          "hash-1=1,hash-2=0",
+          "jti-a1=account_deleted,jti-a2=account_deleted",
+          "google:1234567890",
+          "cred-b"
+        ],
+        "policies": {
+          "google:1234567890": {
+            "maxContentRating": "PG-13",
+            "allowedSections": null,
+            "kid": false
+          }
+        },
+        "feedback": {
+          "google:1234567890": {
+            "movie": {
+              "liked": [
+                {
+                  "id": 551,
+                  "title": "Kept"
+                }
+              ],
+              "disliked": []
+            },
+            "tv": {
+              "liked": [],
+              "disliked": []
+            }
+          }
+        },
+        "watchlist": {
+          "google:1234567890": {
+            "movie": [
+              {
+                "id": 551,
+                "title": "Kept",
+                "added_at": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "tv": []
+          }
+        }
+      }
+    },
+    {
+      "name": "account deletion survives failed steps",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "DELETE",
+          "path": "/iptv/internal/members/google%3A1234567890",
+          "status": 500,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"boom\"}"
+        },
+        {
+          "method": "DELETE",
+          "path": "/mc/api/media/watch",
+          "status": 405,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"method\"}"
+        }
+      ],
+      "seed_sql": [
+        "INSERT INTO invites (code_hash, issued_by, label, expires_at, max_uses, used_count, created_at, revoked_at) VALUES ('hash-1', 'apple:000001.0123456789abcdef0123456789abcdef.0001', 'cousin', NULL, 1, 0, '2026-01-01T00:00:00.000Z', NULL)",
+        "INSERT INTO invites (code_hash, issued_by, label, expires_at, max_uses, used_count, created_at, revoked_at) VALUES ('hash-2', 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV', 'kept', NULL, 1, 0, '2026-01-01T00:00:00.000Z', NULL)",
+        "INSERT INTO user_api_keys (sub, ciphertext, updated_at) VALUES ('apple:000001.0123456789abcdef0123456789abcdef.0001', 'x', '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO user_api_keys (sub, ciphertext, updated_at) VALUES ('google:1234567890', 'y', '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO webauthn_credentials (credential_id, sub, public_key, counter, created_at) VALUES ('cred-a', 'apple:000001.0123456789abcdef0123456789abcdef.0001', x'00', 0, '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO webauthn_credentials (credential_id, sub, public_key, counter, created_at) VALUES ('cred-b', 'google:1234567890', x'00', 0, '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO device_tokens (jti, sub, device_id, device_name, platform, server_id, issued_at, expires_at) VALUES ('jti-a1', 'apple:000001.0123456789abcdef0123456789abcdef.0001', 'dev-a1', 'Apple TV', 'tvos', 'srv', '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')",
+        "INSERT INTO device_tokens (jti, sub, device_id, device_name, platform, server_id, issued_at, expires_at) VALUES ('jti-a2', 'apple:000001.0123456789abcdef0123456789abcdef.0001', 'dev-a2', 'iPad', 'ios', 'srv', '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')",
+        "INSERT INTO device_tokens (jti, sub, device_id, device_name, platform, server_id, issued_at, expires_at) VALUES ('jti-b1', 'google:1234567890', 'dev-b1', 'Phone', 'ios', 'srv', '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')"
+      ],
+      "state_sql": [
+        "SELECT group_concat(sub || '=' || (revoked_at IS NOT NULL), ',') FROM (SELECT sub, revoked_at FROM members ORDER BY sub)",
+        "SELECT group_concat(code_hash || '=' || (revoked_at IS NOT NULL), ',') FROM (SELECT code_hash, revoked_at FROM invites ORDER BY code_hash)",
+        "SELECT group_concat(jti || '=' || reason, ',') FROM (SELECT jti, reason FROM device_token_revocations ORDER BY jti)",
+        "SELECT group_concat(sub, ',') FROM (SELECT sub FROM user_api_keys ORDER BY sub)",
+        "SELECT group_concat(credential_id, ',') FROM (SELECT credential_id FROM webauthn_credentials ORDER BY credential_id)"
+      ],
+      "steps": [
+        {
+          "name": "bob DELETE /api/account/self",
+          "as": "bob",
+          "method": "DELETE",
+          "path": "/api/account/self",
+          "status": 204,
+          "headers": {},
+          "body": "",
+          "body_len": 0,
+          "body_sum": 0,
+          "calls": [
+            {
+              "method": "DELETE",
+              "path": "/iptv/internal/members/google%3A1234567890",
+              "query": "",
+              "principal": {
+                "sub": "google:1234567890",
+                "role": "admin",
+                "auth_mode": "google"
+              },
+              "headers": {},
+              "body": ""
+            },
+            {
+              "method": "DELETE",
+              "path": "/mc/api/media/watch",
+              "query": "",
+              "principal": {
+                "sub": "google:1234567890",
+                "role": "user",
+                "auth_mode": "google"
+              },
+              "headers": {},
+              "body": ""
+            }
+          ]
+        }
+      ],
+      "state": {
+        "sql": [
+          "apple:000001.0123456789abcdef0123456789abcdef.0001=0,google:1234567890=1,local:01ARZ3NDEKTSV4RRFFQ69G5FAV=0",
+          "hash-1=0,hash-2=0",
+          "jti-b1=account_deleted",
+          "apple:000001.0123456789abcdef0123456789abcdef.0001",
+          "cred-a"
+        ],
+        "policies": {
+          "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+            "maxContentRating": null,
+            "allowedSections": null,
+            "kid": true
+          }
+        },
+        "feedback": {
+          "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+            "movie": {
+              "liked": [
+                {
+                  "id": 550,
+                  "title": "Fight Club"
+                }
+              ],
+              "disliked": []
+            },
+            "tv": {
+              "liked": [],
+              "disliked": []
+            }
+          }
+        },
+        "watchlist": {
+          "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+            "movie": [
+              {
+                "id": 550,
+                "title": "Fight Club",
+                "added_at": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "tv": []
+          }
+        }
+      }
+    },
+    {
+      "name": "account deletion of the last admin",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [],
+      "seed_sql": [
+        "INSERT INTO invites (code_hash, issued_by, label, expires_at, max_uses, used_count, created_at, revoked_at) VALUES ('hash-1', 'apple:000001.0123456789abcdef0123456789abcdef.0001', 'cousin', NULL, 1, 0, '2026-01-01T00:00:00.000Z', NULL)",
+        "INSERT INTO invites (code_hash, issued_by, label, expires_at, max_uses, used_count, created_at, revoked_at) VALUES ('hash-2', 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV', 'kept', NULL, 1, 0, '2026-01-01T00:00:00.000Z', NULL)",
+        "INSERT INTO user_api_keys (sub, ciphertext, updated_at) VALUES ('apple:000001.0123456789abcdef0123456789abcdef.0001', 'x', '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO user_api_keys (sub, ciphertext, updated_at) VALUES ('google:1234567890', 'y', '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO webauthn_credentials (credential_id, sub, public_key, counter, created_at) VALUES ('cred-a', 'apple:000001.0123456789abcdef0123456789abcdef.0001', x'00', 0, '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO webauthn_credentials (credential_id, sub, public_key, counter, created_at) VALUES ('cred-b', 'google:1234567890', x'00', 0, '2026-01-01T00:00:00.000Z')",
+        "INSERT INTO device_tokens (jti, sub, device_id, device_name, platform, server_id, issued_at, expires_at) VALUES ('jti-a1', 'apple:000001.0123456789abcdef0123456789abcdef.0001', 'dev-a1', 'Apple TV', 'tvos', 'srv', '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')",
+        "INSERT INTO device_tokens (jti, sub, device_id, device_name, platform, server_id, issued_at, expires_at) VALUES ('jti-a2', 'apple:000001.0123456789abcdef0123456789abcdef.0001', 'dev-a2', 'iPad', 'ios', 'srv', '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')",
+        "INSERT INTO device_tokens (jti, sub, device_id, device_name, platform, server_id, issued_at, expires_at) VALUES ('jti-b1', 'google:1234567890', 'dev-b1', 'Phone', 'ios', 'srv', '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')"
+      ],
+      "state_sql": [
+        "SELECT group_concat(sub || '=' || (revoked_at IS NOT NULL), ',') FROM (SELECT sub, revoked_at FROM members ORDER BY sub)",
+        "SELECT group_concat(code_hash || '=' || (revoked_at IS NOT NULL), ',') FROM (SELECT code_hash, revoked_at FROM invites ORDER BY code_hash)",
+        "SELECT group_concat(jti || '=' || reason, ',') FROM (SELECT jti, reason FROM device_token_revocations ORDER BY jti)",
+        "SELECT group_concat(sub, ',') FROM (SELECT sub FROM user_api_keys ORDER BY sub)",
+        "SELECT group_concat(credential_id, ',') FROM (SELECT credential_id FROM webauthn_credentials ORDER BY credential_id)"
+      ],
+      "steps": [
+        {
+          "name": "admin DELETE /api/account/self",
+          "as": "admin",
+          "method": "DELETE",
+          "path": "/api/account/self",
+          "status": 409,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"last_admin\"}",
+          "body_len": 22,
+          "body_sum": 2048,
+          "calls": []
+        }
+      ],
+      "state": {
+        "sql": [
+          "apple:000001.0123456789abcdef0123456789abcdef.0001=0,google:1234567890=0,local:01ARZ3NDEKTSV4RRFFQ69G5FAV=0",
+          "hash-1=0,hash-2=0",
+          null,
+          "apple:000001.0123456789abcdef0123456789abcdef.0001,google:1234567890",
+          "cred-a,cred-b"
+        ],
+        "policies": {
+          "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+            "kid": true
+          },
+          "google:1234567890": {
+            "maxContentRating": "PG-13"
+          }
+        },
+        "feedback": {
+          "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+            "movie": {
+              "liked": [
+                {
+                  "id": 550,
+                  "title": "Fight Club"
+                }
+              ],
+              "disliked": []
+            },
+            "tv": {
+              "liked": [],
+              "disliked": []
+            }
+          },
+          "google:1234567890": {
+            "movie": {
+              "liked": [
+                {
+                  "id": 551,
+                  "title": "Kept"
+                }
+              ],
+              "disliked": []
+            },
+            "tv": {
+              "liked": [],
+              "disliked": []
+            }
+          }
+        },
+        "watchlist": {
+          "apple:000001.0123456789abcdef0123456789abcdef.0001": {
+            "movie": [
+              {
+                "id": 550,
+                "title": "Fight Club",
+                "added_at": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "tv": []
+          },
+          "google:1234567890": {
+            "movie": [
+              {
+                "id": 551,
+                "title": "Kept",
+                "added_at": "2026-01-01T00:00:00.000Z"
+              }
+            ],
+            "tv": []
+          }
+        }
+      }
+    },
+    {
+      "name": "telemetry config not configured",
+      "env": {},
+      "unset": [],
+      "policies": {},
+      "upstream": [],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "anon GET /api/telemetry/config",
+          "path": "/api/telemetry/config",
+          "status": 503,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"telemetry_not_configured\",\"detail\":\"EEX_TELEMETRY_DSN is not set. Create an EEX project in Glitchtip, copy the DSN, and set EEX_TELEMETRY_DSN in your environment. Telemetry remains disabled until configured.\"}",
+          "body_len": 219,
+          "body_sum": 19578,
+          "calls": []
+        },
+        {
+          "name": "anon POST /api/telemetry/tunnel",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "{\"event_id\":\"e1\",\"dsn\":\"http://pubkey@x/42\"}\n{\"type\":\"event\"}\n{\"message\":\"boom\"}",
+          "status": 503,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"telemetry_not_configured\"}",
+          "body_len": 36,
+          "body_sum": 3572,
+          "calls": []
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "telemetry config invalid",
+      "env": {
+        "EEX_TELEMETRY_DSN": "not a url"
+      },
+      "unset": [],
+      "policies": {},
+      "upstream": [],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "anon GET /api/telemetry/config",
+          "path": "/api/telemetry/config",
+          "status": 500,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"telemetry_dsn_invalid\",\"detail\":\"EEX_TELEMETRY_DSN is set but is not a valid URL. Sentry-compatible DSNs must be a URL of the form https://<key>@<host>/<projectId>. Correct EEX_TELEMETRY_DSN and restart the server.\"}",
+          "body_len": 226,
+          "body_sum": 19749,
+          "calls": []
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "telemetry config bad scheme",
+      "env": {
+        "EEX_TELEMETRY_DSN": "ftp://pubkey@glitch.example/42"
+      },
+      "unset": [],
+      "policies": {},
+      "upstream": [],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "anon GET /api/telemetry/config",
+          "path": "/api/telemetry/config",
+          "status": 500,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"telemetry_dsn_invalid\",\"detail\":\"EEX_TELEMETRY_DSN must use the http or https scheme. Received scheme: ftp:\"}",
+          "body_len": 119,
+          "body_sum": 10674,
+          "calls": []
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "telemetry config and tunnel",
+      "env": {
+        "EEX_TELEMETRY_DSN": "https://pubkey@glitch.example/42",
+        "EEX_TELEMETRY_DSN_INTERNAL": "{FAKE_DSN}"
+      },
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "POST",
+          "path": "/api/42/envelope/",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"id\":\"e1\"}"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "anon GET /api/telemetry/config",
+          "path": "/api/telemetry/config",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"dsn\":\"https://pubkey@glitch.example/42\",\"environment\":\"staging\",\"release\":\"sha-golden\"}",
+          "body_len": 89,
+          "body_sum": 7941,
+          "calls": []
+        },
+        {
+          "name": "alice GET /api/telemetry/config",
+          "as": "alice",
+          "path": "/api/telemetry/config",
+          "status": 200,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"dsn\":\"https://pubkey@glitch.example/42\",\"environment\":\"staging\",\"release\":\"sha-golden\"}",
+          "body_len": 89,
+          "body_sum": 7941,
+          "calls": []
+        },
+        {
+          "name": "anon POST /api/telemetry/tunnel",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "{\"event_id\":\"e1\",\"dsn\":\"https://pubkey@glitch.example/42\"}\n{\"type\":\"event\"}\n{\"message\":\"boom\"}",
+          "status": 200,
+          "headers": {},
+          "body": "",
+          "body_len": 0,
+          "body_sum": 0,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/api/42/envelope/",
+              "query": "sentry_version=7&sentry_key=pubkey",
+              "principal": null,
+              "headers": {
+                "content-type": "application/x-sentry-envelope"
+              },
+              "body": "{\"event_id\":\"e1\",\"dsn\":\"https://pubkey@glitch.example/42\"}\n{\"type\":\"event\"}\n{\"message\":\"boom\"}"
+            }
+          ]
+        },
+        {
+          "name": "anon POST /api/telemetry/tunnel",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "{\"event_id\":\"e1\",\"dsn\":\"https://pubkey@elsewhere.example/42/\"}\n{\"type\":\"event\"}\n{\"message\":\"boom\"}",
+          "status": 200,
+          "headers": {},
+          "body": "",
+          "body_len": 0,
+          "body_sum": 0,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/api/42/envelope/",
+              "query": "sentry_version=7&sentry_key=pubkey",
+              "principal": null,
+              "headers": {
+                "content-type": "application/x-sentry-envelope"
+              },
+              "body": "{\"event_id\":\"e1\",\"dsn\":\"https://pubkey@elsewhere.example/42/\"}\n{\"type\":\"event\"}\n{\"message\":\"boom\"}"
+            }
+          ]
+        },
+        {
+          "name": "anon POST /api/telemetry/tunnel",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "{\"event_id\":\"e1\",\"dsn\":\"https://otherkey@glitch.example/42\"}\n{\"type\":\"event\"}\n{\"message\":\"boom\"}",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"dsn_mismatch\"}",
+          "body_len": 24,
+          "body_sum": 2270,
+          "calls": []
+        },
+        {
+          "name": "anon POST /api/telemetry/tunnel",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "{\"event_id\":\"e1\",\"dsn\":\"https://pubkey@glitch.example/43\"}\n{\"type\":\"event\"}\n{\"message\":\"boom\"}",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"dsn_mismatch\"}",
+          "body_len": 24,
+          "body_sum": 2270,
+          "calls": []
+        },
+        {
+          "name": "anon POST /api/telemetry/tunnel",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json\n{}",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "anon POST /api/telemetry/tunnel",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "{\"dsn\":5}",
+          "status": 403,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"dsn_mismatch\"}",
+          "body_len": 24,
+          "body_sum": 2270,
+          "calls": []
+        },
+        {
+          "name": "anon POST /api/telemetry/tunnel",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "fill": {
+            "head": "",
+            "ch": "x",
+            "total": 262145
+          },
+          "status": 413,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"payload_too_large\"}",
+          "body_len": 29,
+          "body_sum": 2793,
+          "calls": []
+        },
+        {
+          "name": "anon POST /api/telemetry/tunnel",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "fill": {
+            "head": "{\"dsn\":\"https://pubkey@glitch.example/42\"}\n",
+            "ch": "y",
+            "total": 262144
+          },
+          "status": 200,
+          "headers": {},
+          "body": "",
+          "body_len": 0,
+          "body_sum": 0,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/api/42/envelope/",
+              "query": "sentry_version=7&sentry_key=pubkey",
+              "principal": null,
+              "headers": {
+                "content-type": "application/x-sentry-envelope"
+              },
+              "body": null,
+              "body_len": 262144,
+              "body_sum": 31718011
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "telemetry tunnel upstream failure",
+      "env": {
+        "EEX_TELEMETRY_DSN": "https://pubkey@glitch.example/42",
+        "EEX_TELEMETRY_DSN_INTERNAL": "{FAKE_DSN}"
+      },
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "POST",
+          "path": "/api/42/envelope/",
+          "status": 500,
+          "headers": {},
+          "body": "down"
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "anon POST /api/telemetry/tunnel",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "{\"event_id\":\"e1\",\"dsn\":\"https://pubkey@glitch.example/42\"}\n{\"type\":\"event\"}\n{\"message\":\"boom\"}",
+          "status": 502,
+          "headers": {},
+          "body": "",
+          "body_len": 0,
+          "body_sum": 0,
+          "calls": [
+            {
+              "method": "POST",
+              "path": "/api/42/envelope/",
+              "query": "sentry_version=7&sentry_key=pubkey",
+              "principal": null,
+              "headers": {
+                "content-type": "application/x-sentry-envelope"
+              },
+              "body": "{\"event_id\":\"e1\",\"dsn\":\"https://pubkey@glitch.example/42\"}\n{\"type\":\"event\"}\n{\"message\":\"boom\"}"
+            }
+          ]
+        }
+      ],
+      "state": null
+    },
+    {
+      "name": "telemetry tunnel rate limit",
+      "env": {
+        "EEX_TELEMETRY_DSN": "https://pubkey@glitch.example/42",
+        "EEX_TELEMETRY_DSN_INTERNAL": "{FAKE_DSN}"
+      },
+      "unset": [],
+      "policies": {},
+      "upstream": [
+        {
+          "method": "POST",
+          "path": "/api/42/envelope/",
+          "status": 200,
+          "headers": {},
+          "body": ""
+        }
+      ],
+      "seed_sql": [],
+      "state_sql": [],
+      "steps": [
+        {
+          "name": "tunnel 1",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 2",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 3",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 4",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 5",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 6",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 7",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 8",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 9",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 10",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 11",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 12",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 13",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 14",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 15",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 16",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 17",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 18",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 19",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 20",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 21",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 22",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 23",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 24",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 25",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 26",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 27",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 28",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 29",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 30",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 400,
+          "headers": {
+            "content-type": "application/json"
+          },
+          "body": "{\"error\":\"invalid_envelope\"}",
+          "body_len": 28,
+          "body_sum": 2696,
+          "calls": []
+        },
+        {
+          "name": "tunnel 31",
+          "method": "POST",
+          "path": "/api/telemetry/tunnel",
+          "headers_in": {
+            "content-type": "application/x-sentry-envelope"
+          },
+          "body_in": "not json",
+          "status": 429,
+          "headers": {
+            "content-type": "application/json",
+            "retry-after": "56"
+          },
+          "body": "{\"error\":\"rate_limited\",\"retry_after_ms\":55452}",
+          "body_len": 47,
+          "body_sum": 4204,
+          "calls": []
+        }
+      ],
+      "state": null
+    }
+  ]
+}

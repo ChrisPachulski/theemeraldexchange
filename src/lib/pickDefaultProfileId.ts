@@ -1,11 +1,10 @@
 // Pick the household's curated profile by name (case/whitespace-insensitive)
-// when present; otherwise fall back through the SAME preference chain the
-// server uses in server/services/arrAdd.ts's pickProfile (prefer 1080p, then
-// HD, then anything but 'Any', then the first profile) — duplicated here
-// because the client bundle can't import server/services/arrAdd.ts, but MUST
-// be kept in lockstep so the pre-filled dropdown matches what actually gets
-// submitted (the Add modals always send qualityProfileId, so the server's
-// own fallback never runs to correct a client-side mismatch).
+// when present; otherwise fall back through the SAME preference chain as the
+// gateway's pick_profile (crates/gateway/src/arr/shared.rs): prefer 1080p, then
+// HD, then anything but 'Any', then the first profile. The Add modals always
+// send qualityProfileId, so the server's own fallback never runs to correct a
+// client-side mismatch; tests/vectors/arr-add-defaults.json holds both sides
+// to the same cases.
 export function pickDefaultProfileId(
   profiles: { id: number; name: string }[] | undefined,
   preferredName: string,

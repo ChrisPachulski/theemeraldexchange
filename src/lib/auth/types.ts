@@ -5,10 +5,10 @@
 
 export type Role = 'admin' | 'user'
 /** Which federated identity provider minted the session. Mirrors the
- *  server's AuthMode (session.ts). `local` is legacy/dev-only. */
+ *  gateway's AuthMode (crates/auth). `local` is the passkey-era owner. */
 export type AuthMode = 'plex' | 'apple' | 'google' | 'workos' | 'local'
 export type AuthUser = {
-  /** Namespaced subject: `plex:<id>` | `apple:<subject>`. Used by the
+  /** Namespaced subject: `plex:<id>` | `apple:<subject>` | `workos:user_…` | …. Used by the
    *  SPA to scope per-user localStorage (BYO API key, etc.) so a shared
    *  device that's been signed in as different family members reads the
    *  right state. The prefix also tells us which provider authed. */
@@ -21,15 +21,15 @@ export type AuthUser = {
   auth_mode?: AuthMode
 }
 
-/** Best-effort provider inference when the server omits `auth_mode`
- *  (older session cookies). The sub prefix is authoritative. */
+/** Best-effort provider inference when the server omits `auth_mode`. The
+ *  sub prefix is authoritative; authUserFromApi admits only these five. */
 export function authModeFromUser(user: Pick<AuthUser, 'sub' | 'auth_mode'>): AuthMode {
   if (user.auth_mode) return user.auth_mode
+  if (user.sub.startsWith('plex:')) return 'plex'
   if (user.sub.startsWith('apple:')) return 'apple'
   if (user.sub.startsWith('google:')) return 'google'
   if (user.sub.startsWith('workos:')) return 'workos'
-  if (user.sub.startsWith('local:')) return 'local'
-  return 'plex'
+  return 'local'
 }
 
 export type SessionState =
@@ -45,10 +45,7 @@ export type SessionReadResult =
   | { status: 'aborted' }
 
 export type SignInState = 'idle' | 'opening' | 'pending' | 'denied' | 'error'
-export type ActiveSignIn =
-  | 'plex'
-  | 'apple'
-  | null
+export type ActiveSignIn = 'plex' | 'apple' | null
 
 export type AuthCtx = {
   loading: boolean

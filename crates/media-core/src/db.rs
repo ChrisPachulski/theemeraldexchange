@@ -82,6 +82,11 @@ pub const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0015_youtube",
         include_str!("../migrations/0015_youtube.sql"),
     ),
+    (
+        16,
+        "0016_images",
+        include_str!("../migrations/0016_images.sql"),
+    ),
 ];
 
 #[derive(Clone)]
@@ -140,95 +145,7 @@ impl Db {
     }
 
     pub async fn migrate(&self) -> Result<(), sqlx::Error> {
-        // Operator escape hatch for deliberate repairs, mirroring the
-        // recommender migrator's ALLOW_MIGRATION_CHECKSUM_MISMATCH contract.
-        let allow_mismatch = std::env::var("ALLOW_MIGRATION_CHECKSUM_MISMATCH")
-            .map(|v| v == "1")
-            .unwrap_or(false);
-        self.migrate_with_options(allow_mismatch).await
-    }
-
-    /// [`Db::migrate`] with the checksum-mismatch escape hatch passed
-    /// explicitly (kept separate so tests exercise both paths without racing
-    /// on process-global env vars).
-    async fn migrate_with_options(&self, allow_checksum_mismatch: bool) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS schema_migrations (\
-             version INTEGER PRIMARY KEY, \
-             applied_at TEXT NOT NULL, \
-             checksum TEXT NOT NULL)",
-        )
-        .execute(&self.pool)
-        .await?;
-
-        let current: i64 =
-            sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
-                .fetch_one(&self.pool)
-                .await?;
-
-        // Verify already-applied versions against the embedded SQL before
-        // touching anything (mirrors recommender/app/db.py): a recorded
-        // checksum that no longer matches means the DB schema was produced by
-        // a DIFFERENT migration text than this binary carries — running new
-        // migrations on top of an unknown schema corrupts silently. Fail the
-        // boot loudly instead; ALLOW_MIGRATION_CHECKSUM_MISMATCH=1 is the
-        // operator escape hatch for a deliberate repair (after which the
-        // stored checksum should be fixed up to match).
-        let applied: Vec<(i64, String)> =
-            sqlx::query_as("SELECT version, checksum FROM schema_migrations")
-                .fetch_all(&self.pool)
-                .await?;
-        for (version, name, sql) in MIGRATIONS {
-            let Some((_, stored)) = applied.iter().find(|(v, _)| v == version) else {
-                continue;
-            };
-            let expected = checksum(sql);
-            if *stored != expected {
-                if allow_checksum_mismatch {
-                    tracing::warn!(
-                        version,
-                        name,
-                        "migration checksum mismatch allowed by \
-                         ALLOW_MIGRATION_CHECKSUM_MISMATCH=1; embedded SQL no \
-                         longer matches what was applied to this database"
-                    );
-                    continue;
-                }
-                return Err(sqlx::Error::Configuration(
-                    format!(
-                        "migration checksum mismatch on applied migration {version} ({name}): \
-                         the embedded SQL no longer matches what was applied to this database \
-                         (stored {stored}, embedded {expected}). Restore the original \
-                         migration, or set ALLOW_MIGRATION_CHECKSUM_MISMATCH=1 for a \
-                         deliberate repair."
-                    )
-                    .into(),
-                ));
-            }
-        }
-
-        for (version, name, sql) in MIGRATIONS {
-            if *version > current {
-                let mut tx = self.pool.begin().await?;
-                // `sql` is a compile-time-constant migration string from the
-                // MIGRATIONS table (never user input). sqlx 0.9 requires an
-                // explicit safety assertion for non-'static SQL; audited safe.
-                sqlx::raw_sql(sqlx::AssertSqlSafe(*sql))
-                    .execute(&mut *tx)
-                    .await?;
-                sqlx::query(
-                    "INSERT INTO schema_migrations (version, applied_at, checksum) VALUES (?, ?, ?)",
-                )
-                .bind(version)
-                .bind(now_rfc3339())
-                .bind(checksum(sql))
-                .execute(&mut *tx)
-                .await?;
-                tx.commit().await?;
-                tracing::info!("applied migration {name} (v{version})");
-            }
-        }
-        Ok(())
+        migrate(&self.pool, MIGRATIONS, allow_checksum_mismatch_from_env()).await
     }
 
     pub async fn schema_version(&self) -> Result<i64, sqlx::Error> {
@@ -236,6 +153,117 @@ impl Db {
             .fetch_one(&self.pool)
             .await
     }
+}
+
+/// Operator escape hatch for deliberate repairs, mirroring the recommender
+/// migrator's ALLOW_MIGRATION_CHECKSUM_MISMATCH contract.
+pub fn allow_checksum_mismatch_from_env() -> bool {
+    std::env::var("ALLOW_MIGRATION_CHECKSUM_MISMATCH")
+        .map(|v| v == "1")
+        .unwrap_or(false)
+}
+
+/// Apply `migrations` (ascending `(version, name, sql)`) to `pool` under the
+/// `schema_migrations` ledger convention. Shared by every Rust service that
+/// owns a SQLite file (media.db here, iptv.db in the iptv crate).
+pub async fn migrate(
+    pool: &SqlitePool,
+    migrations: &[(i64, &str, &str)],
+    allow_checksum_mismatch: bool,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (\
+         version INTEGER PRIMARY KEY, \
+         applied_at TEXT NOT NULL, \
+         checksum TEXT NOT NULL)",
+    )
+    .execute(pool)
+    .await?;
+
+    let current: i64 =
+        sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")
+            .fetch_one(pool)
+            .await?;
+
+    // Verify already-applied versions against the embedded SQL before
+    // touching anything (the recommender migrates through this too): a recorded
+    // checksum that no longer matches means the DB schema was produced by
+    // a DIFFERENT migration text than this binary carries — running new
+    // migrations on top of an unknown schema corrupts silently. Fail the
+    // boot loudly instead; ALLOW_MIGRATION_CHECKSUM_MISMATCH=1 is the
+    // operator escape hatch for a deliberate repair (after which the
+    // stored checksum should be fixed up to match).
+    let applied: Vec<(i64, String)> =
+        sqlx::query_as("SELECT version, checksum FROM schema_migrations")
+            .fetch_all(pool)
+            .await?;
+    for (version, name, sql) in migrations {
+        let Some((_, stored)) = applied.iter().find(|(v, _)| v == version) else {
+            continue;
+        };
+        let expected = checksum(sql);
+        // A row written before the ledger kept checksums (prod server.db
+        // v1-4) carries '' and so nothing to compare: record the embedded
+        // checksum, as the Node migrator went on past it.
+        if stored.is_empty() {
+            sqlx::query("UPDATE schema_migrations SET checksum = ? WHERE version = ?")
+                .bind(&expected)
+                .bind(version)
+                .execute(pool)
+                .await?;
+            tracing::info!(
+                version,
+                name,
+                "recorded the checksum of a pre-ledger migration row"
+            );
+            continue;
+        }
+        if *stored != expected {
+            if allow_checksum_mismatch {
+                tracing::warn!(
+                    version,
+                    name,
+                    "migration checksum mismatch allowed by \
+                     ALLOW_MIGRATION_CHECKSUM_MISMATCH=1; embedded SQL no \
+                     longer matches what was applied to this database"
+                );
+                continue;
+            }
+            return Err(sqlx::Error::Configuration(
+                format!(
+                    "migration checksum mismatch on applied migration {version} ({name}): \
+                     the embedded SQL no longer matches what was applied to this database \
+                     (stored {stored}, embedded {expected}). Restore the original \
+                     migration, or set ALLOW_MIGRATION_CHECKSUM_MISMATCH=1 for a \
+                     deliberate repair."
+                )
+                .into(),
+            ));
+        }
+    }
+
+    for (version, name, sql) in migrations {
+        if *version > current {
+            let mut tx = pool.begin().await?;
+            // `sql` is a compile-time-constant migration string from an
+            // embedded migrations table (never user input). sqlx 0.9 requires
+            // an explicit safety assertion for non-'static SQL; audited safe.
+            sqlx::raw_sql(sqlx::AssertSqlSafe(*sql))
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "INSERT INTO schema_migrations (version, applied_at, checksum) VALUES (?, ?, ?)",
+            )
+            .bind(version)
+            .bind(now_rfc3339())
+            .bind(checksum(sql))
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            tracing::info!("applied migration {name} (v{version})");
+        }
+    }
+    Ok(())
 }
 
 fn now_rfc3339() -> String {
@@ -280,6 +308,41 @@ mod tests {
                 i + 1
             );
         }
+    }
+
+    /// A ledger row written before checksums existed (prod server.db v1-4
+    /// carry '') has nothing to compare: it is filled in, not a boot failure.
+    /// A recorded checksum that differs still stops the boot.
+    #[tokio::test]
+    async fn an_empty_legacy_checksum_is_backfilled_and_a_real_mismatch_still_fails() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let migs: &[(i64, &str, &str)] = &[
+            (1, "0001_a.sql", "CREATE TABLE a (x INTEGER);"),
+            (2, "0002_b.sql", "CREATE TABLE b (x INTEGER);"),
+        ];
+        migrate(&pool, migs, false).await.unwrap();
+        sqlx::query("UPDATE schema_migrations SET checksum = '' WHERE version = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        migrate(&pool, migs, false).await.unwrap();
+        let stored: String =
+            sqlx::query_scalar("SELECT checksum FROM schema_migrations WHERE version = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, checksum(migs[0].2));
+
+        sqlx::query("UPDATE schema_migrations SET checksum = 'deadbeef' WHERE version = 2")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(migrate(&pool, migs, false).await.is_err());
     }
 
     #[tokio::test]
@@ -410,6 +473,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn images_table_and_audiobook_art_path_exist_after_migration() {
+        let db = Db::connect_memory().await.unwrap();
+        let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('images')")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        for c in [
+            "key",
+            "blurhash",
+            "width",
+            "height",
+            "fetched_at",
+            "failed_at",
+            "attempts",
+        ] {
+            assert!(cols.iter().any(|n| n == c), "images.{c} missing: {cols:?}");
+        }
+        let art: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('audiobooks') WHERE name = 'art_path'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(art, 1, "0016 adds audiobooks.art_path");
+    }
+
+    #[tokio::test]
     async fn migrate_fails_loud_on_applied_checksum_mismatch() {
         // An applied migration whose recorded checksum no longer matches the
         // embedded SQL means the DB schema came from a different migration
@@ -420,7 +510,7 @@ mod tests {
             .await
             .unwrap();
 
-        let err = match db.migrate_with_options(false).await {
+        let err = match migrate(&db.pool, MIGRATIONS, false).await {
             Ok(()) => panic!("migrate must fail on a checksum mismatch"),
             Err(e) => e.to_string(),
         };
@@ -440,7 +530,7 @@ mod tests {
             .await
             .unwrap();
 
-        db.migrate_with_options(true)
+        migrate(&db.pool, MIGRATIONS, true)
             .await
             .expect("escape hatch must allow boot despite the mismatch");
         assert_eq!(db.schema_version().await.unwrap(), crate::SCHEMA_VERSION);
@@ -451,7 +541,7 @@ mod tests {
         // Sanity for the verification path itself: an untampered DB passes
         // strict verification (no false positives on the recorded hashes).
         let db = Db::connect_memory().await.unwrap();
-        db.migrate_with_options(false)
+        migrate(&db.pool, MIGRATIONS, false)
             .await
             .expect("healthy ledger must verify clean");
     }

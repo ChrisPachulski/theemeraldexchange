@@ -14,8 +14,8 @@ import { useIptvEpgNow } from '../../lib/hooks/useIptvEpg'
 import { useWatchlist } from '../../lib/hooks/useWatchlist'
 import { postClickEvent } from '../../lib/api/recommenderEvents'
 import type { WatchEntry } from '../../lib/api/media'
+import { posterImg } from '../../lib/api/images'
 import {
-  TMDB_POSTER_BASE,
   airingNow,
   certsByTitle,
   continueWatching,
@@ -25,7 +25,6 @@ import {
   titleAllowed,
   titleKey,
   watchlistIntent,
-  watchlistPoster,
 } from './shelves'
 
 // The player only loads once something is resumed.
@@ -39,7 +38,9 @@ export type Card = {
   key: string
   title: string
   meta?: string | null
+  /** Any poster: a bare TMDB path or URL, or another URL (see posterImg). */
   poster?: string | null
+  blurhash?: string | null
   /** 0..1 watched, for a resume card. */
   progress?: number | null
   onOpen: () => void
@@ -58,35 +59,38 @@ export function PosterShelf({ label, cards, empty }: { label: string; cards: Car
         <p className="trending__empty-hint">{empty}</p>
       ) : (
         <div className="trending__row">
-          {cards.map((c) => (
-            <div key={c.key} className="trending__card-wrap">
-              <button type="button" className="trending__card" onClick={c.onOpen} title={c.title}>
-                {c.poster ? (
-                  <img
-                    className="trending__poster"
-                    src={c.poster}
-                    alt=""
-                    loading="lazy"
-                    decoding="async"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <div className="trending__poster trending__poster--fallback" aria-hidden="true">
-                    {c.title.charAt(0)}
+          {cards.map((c) => {
+            const img = posterImg(c.poster, c.blurhash)
+            return (
+              <div key={c.key} className="trending__card-wrap">
+                <button type="button" className="trending__card" onClick={c.onOpen} title={c.title}>
+                  {img ? (
+                    <img
+                      className="trending__poster"
+                      {...img}
+                      alt=""
+                      loading="lazy"
+                      decoding="async"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className="trending__poster trending__poster--fallback" aria-hidden="true">
+                      {c.title.charAt(0)}
+                    </div>
+                  )}
+                  {c.progress != null && (
+                    <span className="home-shelf__progress" aria-hidden="true">
+                      <span style={{ width: `${Math.round(c.progress * 100)}%` }} />
+                    </span>
+                  )}
+                  <div className="trending__caption">
+                    <span className="trending__title">{c.title}</span>
+                    {c.meta && <span className="trending__year">{c.meta}</span>}
                   </div>
-                )}
-                {c.progress != null && (
-                  <span className="home-shelf__progress" aria-hidden="true">
-                    <span style={{ width: `${Math.round(c.progress * 100)}%` }} />
-                  </span>
-                )}
-                <div className="trending__caption">
-                  <span className="trending__title">{c.title}</span>
-                  {c.meta && <span className="trending__year">{c.meta}</span>}
-                </div>
-              </button>
-            </div>
-          ))}
+                </button>
+              </div>
+            )
+          })}
         </div>
       )}
     </section>
@@ -135,7 +139,8 @@ function ContinueWatchingShelf({ movies, shows }: { movies?: Library[]; shows?: 
       key: `${r.mediaKind}:${r.mediaId}`,
       title,
       meta: episodeLabel(r),
-      poster: arr ?? (r.posterPath ? `${TMDB_POSTER_BASE}${r.posterPath}` : null),
+      poster: arr ?? r.posterPath,
+      blurhash: arr ? null : r.posterBlurhash,
       progress: r.durationSecs ? Math.min(1, r.positionSecs / r.durationSecs) : null,
       onOpen: () => setPlaying(r),
     }
@@ -284,7 +289,7 @@ export function HomeShelves() {
     .map((e) => ({
       key: `${e.kind}:${e.id}`,
       title: e.title,
-      poster: watchlistPoster(e.poster_path),
+      poster: e.poster_path,
       onOpen: () => openIntent(...watchlistIntent(e)),
     }))
 

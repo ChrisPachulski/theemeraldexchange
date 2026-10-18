@@ -100,7 +100,7 @@ test('Music tab drills Artists -> Albums -> Tracks, retries a failed level, and 
       if (albumsCalls++ < 2) return route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"boom"}' })
       expect(url.searchParams.get('artist_id')).toBe('1')
       return route.fulfill(json({
-        items: [{ id: 7, artist_id: 1, artist_name: 'Boards of Canada', title: 'Geogaddi', year: 2002, track_count: 2, art_url: '/api/media/music/albums/7/art' }],
+        items: [{ id: 7, artist_id: 1, artist_name: 'Boards of Canada', title: 'Geogaddi', year: 2002, track_count: 2, art_url: '/api/media/images/album/7' }],
         total: 1,
       }))
     }
@@ -114,7 +114,7 @@ test('Music tab drills Artists -> Albums -> Tracks, retries a failed level, and 
         total: 2,
       }))
     }
-    if (p.endsWith('/art')) return route.fulfill({ status: 404, body: '' })
+    if (p.startsWith('/api/media/images/')) return route.fulfill({ status: 404, body: '' })
     if (p.startsWith('/api/media/playback/')) {
       playback.push(p)
       return route.fulfill(json({ delivery: 'progressive', url: '/api/media/stream/track/71?t=tok', durationSecs: 321 }))
@@ -133,7 +133,7 @@ test('Music tab drills Artists -> Albums -> Tracks, retries a failed level, and 
 
   const album = page.getByRole('list', { name: 'Albums' }).getByRole('button', { name: /Geogaddi/ })
   await expect(album).toContainText('2002 · 2 tracks')
-  await expect(album.locator('img')).toHaveAttribute('src', /\/api\/media\/music\/albums\/7\/art$/)
+  await expect(album.locator('img')).toHaveAttribute('src', /\/api\/media\/images\/album\/7\?w=\d+$/)
   await album.click()
 
   await expect(page.getByRole('heading', { name: 'Geogaddi' })).toBeVisible()

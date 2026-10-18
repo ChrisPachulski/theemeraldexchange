@@ -2,10 +2,12 @@
 resolver = "2"
 members = [
   "crates/emerald-contracts",
-  "crates/emerald-contracts-napi",
-  "crates/emerald-contracts-pyo3",
   "crates/media-core",
   "crates/transcoder",
+  "crates/iptv",
+  "crates/auth",
+  "crates/gateway",
+  "crates/recommender",
 ]
 # ytresolve (our native Rust YouTube extractor) now lives in its own repo:
 #   https://github.com/ChrisPachulski/rust-yt-extractor

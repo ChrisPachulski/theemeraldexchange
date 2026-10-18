@@ -10,7 +10,8 @@ import { NavTransitionProvider } from './lib/navTransition'
 import { ReplayButton } from './components/nav/ReplayButton'
 import { LinkDeviceModal } from './components/auth/LinkDeviceModal'
 import { clearPendingLinkCode, readPendingLinkCode } from './lib/linkFragment'
-import { AuthProvider, authModeFromUser, useAuth } from './lib/auth'
+import { AuthProvider, useAuth } from './lib/auth'
+import { isPlexUser } from './lib/hooks/usePlexLinks'
 import { useLimits } from './lib/hooks/useLimits'
 import { useRatingGate, useSectionAccess } from './lib/hooks/usePolicy'
 // View Transitions cross-fade + persistent-shell view-transition-names.
@@ -87,7 +88,7 @@ function Shell() {
   // A member's policy can also deny Live or Downloads (those calls 403),
   // and the Users list reads plex.tv with the session's Plex token, so
   // only a Plex-backed admin session can load it.
-  const usersOk = isAdmin && user !== null && authModeFromUser(user) === 'plex'
+  const usersOk = isAdmin && isPlexUser(user)
   const liveOk = limits.data?.iptvEnabled !== false && sections.live
   const sonarrEnabled = limits.data?.sonarrEnabled !== false
   const radarrEnabled = limits.data?.radarrEnabled !== false

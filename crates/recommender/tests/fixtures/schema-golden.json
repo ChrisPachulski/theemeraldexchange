@@ -1,0 +1,350 @@
+{
+ "schema": [
+  [
+   "index",
+   "ingest_queue_status",
+   "ingest_queue",
+   "CREATE INDEX ingest_queue_status ON ingest_queue(status, attempts)"
+  ],
+  [
+   "index",
+   "model_config_active_one",
+   "model_config",
+   "CREATE UNIQUE INDEX model_config_active_one\n  ON model_config(active) WHERE active = 1"
+  ],
+  [
+   "index",
+   "rec_log_by_model",
+   "rec_log",
+   "CREATE INDEX rec_log_by_model ON rec_log(model_version, ts DESC)"
+  ],
+  [
+   "index",
+   "rec_log_by_user",
+   "rec_log",
+   "CREATE INDEX rec_log_by_user ON rec_log(sub, kind, ts DESC)"
+  ],
+  [
+   "index",
+   "rec_log_datetime_ts",
+   "rec_log",
+   "CREATE INDEX rec_log_datetime_ts ON rec_log(datetime(ts))"
+  ],
+  [
+   "index",
+   "rec_log_ts",
+   "rec_log",
+   "CREATE INDEX rec_log_ts ON rec_log(ts)"
+  ],
+  [
+   "index",
+   "rec_outcomes_datetime_ts",
+   "rec_outcomes",
+   "CREATE INDEX rec_outcomes_datetime_ts ON rec_outcomes(datetime(ts))"
+  ],
+  [
+   "index",
+   "recently_shown_by_user",
+   "recently_shown",
+   "CREATE INDEX recently_shown_by_user ON recently_shown(sub, kind, ts DESC)"
+  ],
+  [
+   "index",
+   "sqlite_autoindex_household_rejections_1",
+   "household_rejections",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_ingest_queue_1",
+   "ingest_queue",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_ingest_state_1",
+   "ingest_state",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_library_items_1",
+   "library_items",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_model_config_1",
+   "model_config",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_rec_outcomes_1",
+   "rec_outcomes",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_recently_shown_1",
+   "recently_shown",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_title_cast_1",
+   "title_cast",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_title_crew_1",
+   "title_crew",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_title_features_1",
+   "title_features",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_title_genres_1",
+   "title_genres",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_title_keywords_1",
+   "title_keywords",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_title_vec_info_1",
+   "title_vec_info",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_title_vec_vector_chunks00_1",
+   "title_vec_vector_chunks00",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_titles_1",
+   "titles",
+   null
+  ],
+  [
+   "index",
+   "sqlite_autoindex_user_feedback_1",
+   "user_feedback",
+   null
+  ],
+  [
+   "index",
+   "title_genres_by_genre",
+   "title_genres",
+   "CREATE INDEX title_genres_by_genre ON title_genres(kind, genre_id)"
+  ],
+  [
+   "index",
+   "title_keywords_by_keyword",
+   "title_keywords",
+   "CREATE INDEX title_keywords_by_keyword ON title_keywords(kind, keyword_id)"
+  ],
+  [
+   "index",
+   "titles_popularity_idx",
+   "titles",
+   "CREATE INDEX titles_popularity_idx ON titles(kind, popularity DESC)"
+  ],
+  [
+   "index",
+   "titles_release_idx",
+   "titles",
+   "CREATE INDEX titles_release_idx    ON titles(kind, release_date DESC)"
+  ],
+  [
+   "index",
+   "titles_votes_idx",
+   "titles",
+   "CREATE INDEX titles_votes_idx      ON titles(kind, vote_count DESC)"
+  ],
+  [
+   "index",
+   "user_feedback_by_user",
+   "user_feedback",
+   "CREATE INDEX user_feedback_by_user ON user_feedback(sub, kind, ts DESC)"
+  ],
+  [
+   "table",
+   "household_rejections",
+   "household_rejections",
+   "CREATE TABLE household_rejections (\n  kind    TEXT    NOT NULL,\n  tmdb_id INTEGER NOT NULL,\n  ts      TEXT    NOT NULL,\n  PRIMARY KEY (kind, tmdb_id)\n)"
+  ],
+  [
+   "table",
+   "ingest_queue",
+   "ingest_queue",
+   "CREATE TABLE ingest_queue (\n  tmdb_id  INTEGER NOT NULL,\n  kind     TEXT    NOT NULL,\n  status   TEXT    NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','done','skipped','error')),\n  attempts INTEGER NOT NULL DEFAULT 0,\n  last_error TEXT,\n  updated_at TEXT NOT NULL,\n  PRIMARY KEY (tmdb_id, kind)\n)"
+  ],
+  [
+   "table",
+   "ingest_state",
+   "ingest_state",
+   "CREATE TABLE ingest_state (\n  key   TEXT PRIMARY KEY,\n  value TEXT NOT NULL,\n  ts    TEXT NOT NULL\n)"
+  ],
+  [
+   "table",
+   "library_items",
+   "library_items",
+   "CREATE TABLE library_items (\n  kind     TEXT    NOT NULL,\n  tmdb_id  INTEGER NOT NULL,\n  source   TEXT,\n  added_at TEXT    NOT NULL,\n  PRIMARY KEY (kind, tmdb_id)\n)"
+  ],
+  [
+   "table",
+   "model_config",
+   "model_config",
+   "CREATE TABLE model_config (\n  id          INTEGER PRIMARY KEY AUTOINCREMENT,\n  version     TEXT    NOT NULL UNIQUE,\n  recipe      TEXT    NOT NULL,\n  params_json TEXT    NOT NULL,\n  active      INTEGER NOT NULL DEFAULT 0,\n  created_at  TEXT    NOT NULL,\n  notes       TEXT\n)"
+  ],
+  [
+   "table",
+   "rec_log",
+   "rec_log",
+   "CREATE TABLE rec_log (\n  id            INTEGER PRIMARY KEY AUTOINCREMENT,\n  sub           TEXT    NOT NULL,\n  kind          TEXT    NOT NULL,\n  tmdb_id       INTEGER NOT NULL,\n  rank          INTEGER NOT NULL,\n  score         REAL    NOT NULL,\n  provenance    TEXT    NOT NULL,\n  model_version TEXT    NOT NULL,\n  ts            TEXT    NOT NULL\n)"
+  ],
+  [
+   "table",
+   "rec_outcomes",
+   "rec_outcomes",
+   "CREATE TABLE rec_outcomes (\n  rec_id  INTEGER NOT NULL,\n  outcome TEXT    NOT NULL CHECK (outcome IN ('clicked','added','liked','disliked','rejected','ignored')),\n  ts      TEXT    NOT NULL,\n  PRIMARY KEY (rec_id, outcome),\n  FOREIGN KEY (rec_id) REFERENCES rec_log(id) ON DELETE CASCADE\n)"
+  ],
+  [
+   "table",
+   "recently_shown",
+   "recently_shown",
+   "CREATE TABLE recently_shown (\n  sub     TEXT    NOT NULL,\n  kind    TEXT    NOT NULL,\n  tmdb_id INTEGER NOT NULL,\n  ts      TEXT    NOT NULL,\n  PRIMARY KEY (sub, kind, tmdb_id)\n)"
+  ],
+  [
+   "table",
+   "schema_migrations",
+   "schema_migrations",
+   "CREATE TABLE schema_migrations (\n              version    INTEGER NOT NULL PRIMARY KEY,\n              applied_at TEXT,\n              checksum   TEXT    NOT NULL\n            )"
+  ],
+  [
+   "table",
+   "sqlite_sequence",
+   "sqlite_sequence",
+   "CREATE TABLE sqlite_sequence(name,seq)"
+  ],
+  [
+   "table",
+   "title_cast",
+   "title_cast",
+   "CREATE TABLE title_cast (\n  tmdb_id   INTEGER NOT NULL,\n  kind      TEXT    NOT NULL,\n  person_id INTEGER NOT NULL,\n  name      TEXT,\n  order_idx INTEGER,\n  PRIMARY KEY (tmdb_id, kind, person_id)\n)"
+  ],
+  [
+   "table",
+   "title_crew",
+   "title_crew",
+   "CREATE TABLE title_crew (\n  tmdb_id   INTEGER NOT NULL,\n  kind      TEXT    NOT NULL,\n  person_id INTEGER NOT NULL,\n  name      TEXT,\n  job       TEXT    NOT NULL,\n  PRIMARY KEY (tmdb_id, kind, person_id, job)\n)"
+  ],
+  [
+   "table",
+   "title_features",
+   "title_features",
+   "CREATE TABLE title_features (\n  tmdb_id      INTEGER NOT NULL,\n  kind         TEXT    NOT NULL,\n  feature_json TEXT    NOT NULL,\n  embedding    BLOB    NOT NULL,\n  dim          INTEGER NOT NULL,\n  computed_at  TEXT    NOT NULL,\n  PRIMARY KEY (tmdb_id, kind)\n)"
+  ],
+  [
+   "table",
+   "title_genres",
+   "title_genres",
+   "CREATE TABLE title_genres (\n  tmdb_id INTEGER NOT NULL,\n  kind    TEXT    NOT NULL,\n  genre_id INTEGER NOT NULL,\n  PRIMARY KEY (tmdb_id, kind, genre_id)\n)"
+  ],
+  [
+   "table",
+   "title_keywords",
+   "title_keywords",
+   "CREATE TABLE title_keywords (\n  tmdb_id    INTEGER NOT NULL,\n  kind       TEXT    NOT NULL,\n  keyword_id INTEGER NOT NULL,\n  keyword    TEXT,\n  PRIMARY KEY (tmdb_id, kind, keyword_id)\n)"
+  ],
+  [
+   "table",
+   "title_vec",
+   "title_vec",
+   "CREATE VIRTUAL TABLE title_vec USING vec0(\n  rowid         INTEGER PRIMARY KEY,\n  kind          TEXT    PARTITION KEY,\n  embedding     float[384] distance_metric=cosine\n)"
+  ],
+  [
+   "table",
+   "title_vec_chunks",
+   "title_vec_chunks",
+   "CREATE TABLE \"title_vec_chunks\"(chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,size INTEGER NOT NULL,sequence_id integer,partition00,validity BLOB NOT NULL, rowids BLOB NOT NULL)"
+  ],
+  [
+   "table",
+   "title_vec_info",
+   "title_vec_info",
+   "CREATE TABLE \"title_vec_info\" (key text primary key, value any)"
+  ],
+  [
+   "table",
+   "title_vec_rowids",
+   "title_vec_rowids",
+   "CREATE TABLE \"title_vec_rowids\"(rowid INTEGER PRIMARY KEY AUTOINCREMENT,id,chunk_id INTEGER,chunk_offset INTEGER)"
+  ],
+  [
+   "table",
+   "title_vec_vector_chunks00",
+   "title_vec_vector_chunks00",
+   "CREATE TABLE \"title_vec_vector_chunks00\"(rowid PRIMARY KEY,vectors BLOB NOT NULL)"
+  ],
+  [
+   "table",
+   "titles",
+   "titles",
+   "CREATE TABLE \"titles\" (\n  tmdb_id           INTEGER NOT NULL,\n  kind              TEXT    NOT NULL CHECK (kind IN ('movie','tv')),\n  title             TEXT    NOT NULL,\n  original_title    TEXT,\n  year              INTEGER,\n  release_date      TEXT,\n  overview          TEXT,\n  poster_path       TEXT,\n  vote_average      REAL,\n  vote_count        INTEGER,\n  popularity        REAL,\n  runtime           INTEGER,\n  status            TEXT,\n  original_language TEXT,\n  adult             INTEGER NOT NULL DEFAULT 0,\n  last_changed_at   TEXT,\n  fetched_at        TEXT    NOT NULL,\n  raw_json          TEXT,\n  PRIMARY KEY (tmdb_id, kind)\n)"
+  ],
+  [
+   "table",
+   "user_feedback",
+   "user_feedback",
+   "CREATE TABLE \"user_feedback\" (\n  sub     TEXT    NOT NULL,\n  kind    TEXT    NOT NULL,\n  tmdb_id INTEGER NOT NULL,\n  signal  TEXT    NOT NULL CHECK (signal IN ('like','dislike','reject','shown','clicked','added','watched')),\n  ts      TEXT    NOT NULL,\n  PRIMARY KEY (sub, kind, tmdb_id, signal)\n)"
+  ]
+ ],
+ "ledger": [
+  [
+   1,
+   "bc3085e98a5941060f86c8c1eac0f267b4f907afe6fd9bd2296da5a99510a1d6"
+  ],
+  [
+   2,
+   "48cffea53ed95b70b7a7250d5abace956773903d09036d1bed81ac86f21bb09b"
+  ],
+  [
+   3,
+   "cce1559630fc02d4668f6089c3e6bd44fadd61136100d53a6464a1c2b90d1af7"
+  ],
+  [
+   4,
+   "77b9d46dc2e4479d45a74333eead86fc033da55d5588349c4a73400cc830de1c"
+  ],
+  [
+   5,
+   "e0e43a41fc581e05b405de2fe6ad45b4e6257fb2178c36a7c05cb2d0f045a6f4"
+  ],
+  [
+   6,
+   "5c9ee8d0a1c5b4032b61b8f45ceb4fb1eceff23037ebca5573b2b31f79f7f951"
+  ],
+  [
+   7,
+   "2db07504b4b05f6f1d022453d3e22311a873ec466307f6e983541198d29018e7"
+  ],
+  [
+   8,
+   "4262f47b1ff707ed836bb03881150de805f187a54bb966f6b2d6b6cb986e36b4"
+  ]
+ ]
+}

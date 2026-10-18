@@ -7,20 +7,20 @@ Two tracks (plan 006):
   [`selfhost/`](./selfhost/) — the quickstart is at the top of the README. Nothing below
   applies to you.
 - **Owner full deployment** — this document: the original operator setup with every profile
-  on (Cloudflare Tunnel, Netlify SPA, Plex login, IPTV, Glitchtip telemetry). It is ONE
+  on (Cloudflare Tunnel, Netlify SPA, IPTV, Glitchtip telemetry). It is ONE
   configuration of the same product; the self-host track gives up none of the member
   experience.
 
-V2 splits the dashboard across two hosts. The SPA lives on Netlify; the Hono backend lives on the NAS behind a Cloudflare Tunnel.
+V2 splits the dashboard across two hosts. The SPA lives on Netlify; the backend (the Rust gateway, `crates/gateway`) lives on the NAS behind a Cloudflare Tunnel.
 
 ```
 theemeraldexchange.com           ──▶ Netlify (SPA)              ◀── git push triggers redeploy
 api.theemeraldexchange.com       ──▶ Cloudflare Tunnel
                                   ──▶ cloudflared on NAS (shares backend netns)
                                   ──▶ 127.0.0.1:3001
-                                  ──▶ exchange-backend (Hono)
+                                  ──▶ exchange-backend (eex-gateway, Rust)
                                        ├─▶ Sonarr / Radarr / SAB on the LAN
-                                       ├─▶ exchange-recommender   (FastAPI, internal net; loopback :8001)
+                                       ├─▶ exchange-recommender   (Rust, internal net; loopback :8001)
                                        │    └─ SQLite at /mnt/user/appdata/exchange-backend/recommender-db/exchange.db
                                        ├─▶ exchange-media-core    (Rust, library scan/serve; loopback :8002)
                                        │    └─▶ exchange-transcoder (Rust + ffmpeg/VAAPI HLS; loopback :8003)
@@ -64,14 +64,15 @@ Open it and fill the required rows plus whichever optional integrations you use:
 | Var | Where it comes from |
 |---|---|
 | `TUNNEL_TOKEN` | The `eyJhI…` you copied above. |
-| `PLEX_CLIENT_ID` *(optional)* | Enables Plex login. Use the same value as `.env.local` or generate one with `node -e 'console.log(crypto.randomUUID())'`. Leave unset for WorkOS/Apple/Google-only installs. |
 | `SESSION_SECRET` | Generate fresh: `openssl rand -base64 48`. Must be ≥32 bytes and not a placeholder — the deploy script hard-fails otherwise. **Different from dev** so the two environments can't share sessions. |
 | `STREAM_TOKEN_SECRET` | `openssl rand -base64 48`. Signs IPTV/media stream tokens (HMAC-SHA256). |
 | `DEVICE_TOKEN_SECRET` | `openssl rand -base64 48`. IKM for the device-token JWE (Apple device pairing). Must be distinct from every other secret. |
 | `INTERNAL_PRINCIPAL_SECRET` | `openssl rand -base64 48`. IKM for the internal-principal JWE the backend mints toward recommender/media-core/transcoder. Distinct from every other secret. |
 | `RECOMMENDER_EVENT_SECRET` | `openssl rand -base64 48`. Shared secret signing backend → recommender calls. |
-| `ADMINS` *(optional, legacy Plex)* | Plex username(s), comma-separated. Prefer stable `ADMIN_SUBS` for new installs. |
-| `PLEX_SERVER_ID` *(conditional)* | Required only when Plex login is configured, unless `ALLOW_UNSCOPED_PLEX_LOGIN=1` explicitly permits emergency boot. The flag grants no login access and never bypasses member/invite authorization. Set your home server's machineIdentifier as soon as it is known and remove the opt-in. |
+| `ADMIN_SUBS` | Your own provider sub (`plex:…`, `workos:user_…`, `apple:…`, `google:…`): the owner bootstrap, admin with no invite. |
+| `PLEX_CLIENT_ID` *(optional)* | Enables Plex sign-in. Any stable UUID (`uuidgen`). Leave unset for a server without Plex: the Plex routes then answer 503 `plex_not_configured`. |
+| `PLEX_SERVER_ID` *(conditional)* | Your home Plex server's machineIdentifier; scopes Plex sign-ins to your household. Required in production when `PLEX_CLIENT_ID` is set, unless `ALLOW_UNSCOPED_PLEX_LOGIN=1` permits an emergency boot (it bypasses no membership gate). |
+| `PLEX_SERVER_URL` *(optional)* | Your Plex Media Server's URL, for Play in Plex links, the Users tab and the remote-access check. Default `http://theemeraldexchange.local:32400`. |
 | `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`, `WORKOS_REDIRECT_URI` *(optional)* | WorkOS dashboard → API keys. Redirect URI is `https://api.theemeraldexchange.com/api/auth/workos/callback`, registered verbatim in the dashboard. Turn "Sign up" off there; add your `workos:user_…` id to `ADMIN_SUBS` for owner access. |
 | `ALLOWED_ORIGINS` | `https://theemeraldexchange.com` |
 | `SONARR_URL`, `SONARR_API_KEY` | Existing Sonarr install. |
@@ -85,25 +86,11 @@ Open it and fill the required rows plus whichever optional integrations you use:
 **not** complete — the backend reads a number of keys that never appear in it,
 including `USE_MEDIA_CORE`, `USE_LOCAL_RECOMMENDER`, `MEDIA_LIBRARY_HOST_PATH`,
 and `ANTHROPIC_OPTIMIZER_KEY`, all four of which the procedures below tell you to
-set. `server/env.ts` is the authoritative list. The deploy
-script validates all required keys (and the `SESSION_SECRET` strength /
-`PLEX_SERVER_ID` scoping gates) before anything ships.
+set. `crates/auth/src/config.rs` and `crates/gateway/src/config.rs` are the
+authoritative list. The deploy script validates all required keys (and the
+`SESSION_SECRET` strength gate) before anything ships.
 
 This file is gitignored. If you ever lose it, regenerate the secrets and redeploy — every active session resets, which is fine.
-
-#### Upgrade note: legacy `ADMINS`-only installs
-
-Normal provider login is now fail-closed: a verified identity still needs an
-`ADMIN_SUBS` match, an active member row, an invite, or verified Plex-server
-share admission. The owner bootstrap is `ADMIN_SUBS`: list your own provider
-sub there and the first login with that identity lands as admin, no invite.
-
-An older install that has only the username-based `ADMINS` setting keeps
-working: the successful Plex login applies `ADMINS` as runtime policy and
-writes the immutable ownership marker. Later removing `ADMINS` demotes that
-user. A rowless identity with no qualifying Plex share cannot bypass the gate:
-add its sub to `ADMIN_SUBS`, issue an invite, or configure `PLEX_SERVER_ID`
-admission.
 
 ### 3. Netlify
 
@@ -139,21 +126,21 @@ What the script actually does (`./scripts/deploy-nas.sh --help` prints its own s
    so uncommitted tracked edits would silently not ship. `--allow-dirty`
    overrides with a loud warning; a HEAD ≠ `origin/main` drift is warned, not
    blocked.
-2. Validates `.env.production` has every required key, mirrors the backend's
-   `SESSION_SECRET` strength gate and the `PLEX_SERVER_ID` /
-   `ALLOW_UNSCOPED_PLEX_LOGIN` scoping gate, so a bad env fails here instead of
-   as a container crash loop.
+2. Validates `.env.production` has every required key and mirrors the
+   backend's `SESSION_SECRET` strength gate, so a bad env fails here instead
+   of as a container crash loop.
 3. Stages the payload from `git archive HEAD` into a temp dir and rsyncs — from
    that stage, never the working tree — `Dockerfile`, `docker-compose.yml`,
-   `.dockerignore`, `package*.json`, `tsconfig.json`, `server/`, `recommender/`,
-   `crates/`, and the root `Cargo.toml`/`Cargo.lock`/`LICENSE` to
+   `.dockerignore`, `crates/`, and the root
+   `Cargo.toml`/`Cargo.lock`/`LICENSE` to
    `/mnt/user/appdata/exchange-backend/` on the NAS.
 4. Ships `.env.production` → NAS as `.env`, chmod 600.
 5. Pre-creates + chowns the sidecar DB bind-mount dirs (`recommender-db` →
-   uid 10001, `media-core-db` → uid 10002) so a fresh volume doesn't crash-loop
-   the `cap_drop: ALL` sidecars.
+   uid 10001, `media-core-db` → uid 10002, `iptv` → uid 10004) so a fresh
+   volume doesn't crash-loop the `cap_drop: ALL` sidecars. It refuses to go on
+   while `data/iptv.db` still sits in the backend's dir (see section 8).
 6. Tags every currently-deployed image (`backend`, `recommender`, `media-core`,
-   `transcoder`) as **`:rollback-<UTC timestamp>`** — one generation per run,
+   `iptv`, `transcoder`) as **`:rollback-<UTC timestamp>`** — one generation per run,
    the last 2 kept, and any legacy bare `:rollback` tag pruned. Then pulls the
    CI-built `:sha-<commit>` image for each service from GHCR and retags it to
    the compose name — nothing compiles on the NAS. Only `--build-on-nas`
@@ -165,7 +152,7 @@ What the script actually does (`./scripts/deploy-nas.sh --help` prints its own s
    recreation rebinds it to a new backend container).
 8. Installs the cloudflared stale-netns watchdog cron.
 9. **Health-gates the whole stack** (~150s ceiling): backend + recommender +
-   media-core + transcoder must all report docker-healthy. On failure it
+   media-core + iptv + transcoder must all report docker-healthy. On failure it
    restores the newest `:rollback-<ts>` generation, re-ups, and prints
    per-container log and manual-rollback commands.
 
@@ -195,7 +182,7 @@ curl -s https://api.theemeraldexchange.com/api/version
 # {... "release":"<short sha of the deployed HEAD>" ...}
 ```
 
-Then in the browser: https://theemeraldexchange.com → Plex login should work cross-origin.
+Then in the browser: https://theemeraldexchange.com → sign-in should work cross-origin.
 
 If `/api/health` 502s, the tunnel is up but the backend isn't reachable: `ssh root@theemeraldexchange.local 'docker logs exchange-backend --tail=30'`.
 If it never resolves, the tunnel didn't register: `ssh root@theemeraldexchange.local 'docker logs exchange-cloudflared --tail=30'`.
@@ -214,6 +201,25 @@ each caused a real "library invisible / nothing plays" incident:
 - **Backend flag.** The backend only proxies `/api/media` + `/api/transcode`
   when `USE_MEDIA_CORE=1` is set in `.env.production`. Until then media-core
   runs idle and the SPA shows no local library.
+- **Artwork store.** Every poster, cover and photo thumbnail is served by
+  media-core (`GET /api/media/images/{tmdb|album|audiobook|photo}/{id}?w=`)
+  as a resized lossy WebP; the SPA never names `image.tmdb.org` itself. On a
+  host without `USE_MEDIA_CORE=1` the backend answers the `tmdb` kind with a
+  redirect to the TMDB CDN, so discovery and watchlist posters still load. The
+  store lives on the media-core `/data` volume: `/data/images` holds the
+  resized variants and the TMDB originals (each fetched once), kept under
+  `MEDIA_IMAGE_CACHE_MB` (default 2048) by LRU eviction and rebuilt on demand;
+  `/data/artwork` holds the album and audiobook covers taken from tags or
+  folder images, outside the cap.
+- **First scan after rollout.** The scan that follows a deploy fetches the
+  original poster of every library movie and show it has no `images` row for,
+  through 2 origin fetch slots, and computes its blurhash in a 2-permit CPU
+  pool (album, audiobook and photo blurhashes are backfilled the same way).
+  On a large library that pass runs for minutes, and it holds the scan guard:
+  `POST /api/media/scan` answers 409 until it ends.
+  Trending, suggestions, credits and watchlist posters are fetched on first
+  view. The `images` table and `/data/images` are additive, so rolling back
+  to the previous image tag needs no cleanup.
 
 Hardware transcode: the compose maps `/dev/dri/renderD128` into the
 transcoder with `group_add: "18"` (the NAS `video` group) and defaults
@@ -224,6 +230,106 @@ CPU. Verify after first boot:
 ```bash
 ssh root@theemeraldexchange.local 'docker logs exchange-transcoder 2>&1 | grep -i -m1 encoder'
 ```
+
+### 8. Moving iptv.db to the iptv service (one time)
+
+Live TV, the guide and DVR now run in their own container (`exchange-iptv`,
+`crates/iptv`), which is the only reader and writer of `iptv.db` and the only
+process that dials the IPTV provider. The backend keeps the auth, membership,
+live-section and rating gates and forwards `/api/iptv/*` and `/api/dvr/*` to it
+(`IPTV_SERVICE_URL`, default `http://iptv:8004`). The DB moves from the
+backend's `data/` to the iptv volume, `/mnt/user/appdata/exchange-backend/iptv`
+(mounted at `/data`; recordings go to `/data/recordings`, nightly snapshots to
+`/data/backups`). `deploy-nas.sh` refuses to run until the move is done, so an
+iptv container never starts on an empty volume (it would bootstrap-sync against
+the provider while the real DB sits stranded). The schema is unchanged.
+
+1. Merge the PR and let main CI go green: it pushes
+   `theemeraldexchange-iptv:sha-<commit>` with the other four images.
+2. Check the migration ledger. The Rust migrator stops the boot on a checksum
+   mismatch, where the Node one only warned. The command reads it through the
+   running Node backend, so do this before the step 9 cutover replaces it:
+
+   ```bash
+   ssh theemeraldexchange "docker exec exchange-backend node -e \"const D=require('better-sqlite3');const d=new D('/app/data/iptv.db',{readonly:true});for(const r of d.prepare('SELECT version,checksum FROM schema_migrations ORDER BY version').all())console.log(r.version,r.checksum)\""
+   shasum -a 256 crates/iptv/migrations/*.sql
+   ```
+
+   All 10 versions should be present with the same hashes. If one differs (or
+   reads `(file-not-found)`), add `ALLOW_MIGRATION_CHECKSUM_MISMATCH=1` to
+   `.env.production` for this deploy and remove it afterwards.
+3. Stop the backend (the API stays down until the step 4 deploy; cloudflared shares its
+   netns) and move the DB with its WAL files:
+
+   ```bash
+   ssh theemeraldexchange 'docker stop exchange-backend && cd /mnt/user/appdata/exchange-backend \
+     && mkdir -p iptv && for f in iptv.db iptv.db-wal iptv.db-shm; do [ -f data/$f ] && mv data/$f iptv/; done \
+     && chown -R 10004:10004 iptv && ls -la iptv'
+   ```
+
+   DVR is off in prod, so there are no recordings to move. If `DVR_ENABLED` was
+   ever on, also move `data/recordings` to `iptv/recordings` and rewrite
+   `dvr_recordings.file_path` from `/app/data/recordings/` to
+   `/data/recordings/`.
+4. `./scripts/deploy-nas.sh`. It pulls the five images, starts `exchange-iptv`
+   and the backend, and health-gates both.
+5. Verify: `curl -s https://api.theemeraldexchange.com/api/health`, the
+   `/api/version` release sha, then tune one live channel in a client.
+   `ssh theemeraldexchange 'docker logs exchange-iptv --tail=30'` shows
+   `iptv listening` and no bootstrap sync (`last_sync` in the moved DB is
+   fresh). In-memory state (remux sessions, dead-feed memory, the concurrency
+   tracker) starts empty, which costs one re-tune.
+
+Rollback: if the health gate fails, `deploy-nas.sh` restores the previous
+images and compose file and, because that compose has no `iptv` service, moves
+`iptv.db` back to `data/` before bringing the stack up. By hand: stop
+`exchange-iptv`, move `iptv/iptv.db*` back to `data/` (`chown 10001:10001`),
+retag the `:rollback-<ts>` images and `docker compose up -d --no-build`.
+
+### 9. Cutover to the Rust gateway (one time, no identity change)
+
+The backend is now the Rust gateway. CI's docker-build job builds it from
+`Dockerfile` and pushes **`ghcr.io/chrispachulski/theemeraldexchange-backend:sha-<commit>`**
+(and `:main`) after booting it to `/api/health`. It is the same `backend`
+compose service (`exchange-backend`, port 3001, healthcheck `/api/health`) and
+carries one binary, `eex-gateway`. There is no Node in the image.
+
+The cutover changes no identity. The gateway reads the same `PLEX_CLIENT_ID`,
+`PLEX_SERVER_ID` and `PLEX_SERVER_URL` as the Node server, and the owner stays
+admin as her `plex:` sub in `ADMIN_SUBS`. Members, invites and every per-sub
+data row stay keyed on their `plex:` subs, so nothing moves. Session cookies
+the Node server issued keep verifying (same key, derived from `SESSION_SECRET`,
+and the cookie's Plex token is read back), so a signed-in household member
+stays signed in. Apple devices keep their pairing because their device tokens
+verify again. Nothing is re-paired and nothing is re-keyed.
+
+Order:
+
+1. **`.env.production`.** Keep every secret as it is (`SESSION_SECRET`,
+   `STREAM_TOKEN_SECRET`, `DEVICE_TOKEN_SECRET`, `INTERNAL_PRINCIPAL_SECRET`):
+   a new `SESSION_SECRET` signs everyone out and leaves the stored Anthropic
+   keys undecryptable. Keep `PLEX_CLIENT_ID`, `PLEX_SERVER_ID` and
+   `PLEX_SERVER_URL`. `ADMIN_SUBS` stays the owner's `plex:` sub. `ADMINS` is
+   no longer read; delete the line.
+2. **Merge the stacked PRs and deploy.** Netlify publishes the SPA as soon as
+   main moves, so deploy the backend in the same sitting. Wait for CI to go
+   green on the merge commit, then run `scripts/deploy-nas.sh`: it pulls the
+   `:sha-<commit>` images (nothing compiles on the NAS), recreates the stack
+   and health-gates it.
+3. **Verify end to end:**
+   - `/api/health` is 200, and `/api/version` shows `release` = the deployed
+     short sha.
+   - Plex sign-in works in a fresh browser window (the PIN is created in the
+     browser), and `/api/me` shows role `admin` for the owner.
+   - Play in Plex on a local library title opens that title in Plex.
+   - Admin, Users lists the Plex server's users.
+   - An Apple TV that was paired opens signed in; a new Apple TV completes the
+     Plex sign-in through the device poll (`POST /api/auth/device/poll`).
+
+Rollback: redeploy the previous image. `deploy-nas.sh` tags each image it
+replaces as `:rollback-<stamp>`; retag that generation to `:latest` and run
+`docker compose up -d --no-build`, or run `scripts/deploy-nas.sh` from the
+previous commit. No data moved, so there is nothing to restore.
 
 ---
 
@@ -237,7 +343,7 @@ reason).
 `deploy-image.sh` call `scripts/ci-gate.sh`, which refuses an unpushed HEAD
 and waits (up to 25 min, polling GitHub once a minute) for every Actions
 check on HEAD to finish; a red or cancelled check aborts the deploy naming the
-job. On main the CI `docker-build` job pushes the four images to GHCR as
+job. On main the CI `docker-build` job pushes the five images to GHCR as
 `:main` and `:sha-<commit>`, and `deploy-nas.sh` pulls the `:sha-` images for
 HEAD and retags them to the compose names — the NAS never compiles. So the
 working loop is `git push && ./scripts/deploy-nas.sh`: the script idles until
@@ -254,9 +360,8 @@ cheap failure classes never reach main. `SKIP_PREPUSH=1 git push` bypasses.
 | What changed | Command | Effect |
 |---|---|---|
 | SPA only (anything in `src/`) | `git push` | Netlify auto-builds and deploys. ~30s. |
-| Backend (anything in `server/`) | `git push && ./scripts/deploy-nas.sh` | Waits for green CI, pulls the CI-built backend image, restarts. |
-| Rust sidecars (anything in `crates/`, root `Cargo.toml`/`Cargo.lock`) | `git push && ./scripts/deploy-nas.sh` | Same path — `crates/` feeds the media-core + transcoder images AND the backend's napi / recommender's pyo3 contract bindings. CI compiles them, not the NAS. |
-| Recommender (anything in `recommender/`) | `git push && ./scripts/deploy-nas.sh` | Same path; pulls the CI-built recommender image. |
+| Backend (`crates/gateway`, `crates/auth`) | `git push && ./scripts/deploy-nas.sh` | Waits for green CI, pulls the CI-built backend image, restarts. |
+| Rust sidecars (anything in `crates/`, root `Cargo.toml`/`Cargo.lock`) | `git push && ./scripts/deploy-nas.sh` | Same path — `crates/` feeds the backend, media-core, iptv, transcoder and recommender images. CI compiles them, not the NAS. |
 | Both SPA + NAS | `git push && ./scripts/deploy-nas.sh` | Deploy the **frontend before the backend** when a change spans both (the SPA is the consumer). |
 | Env var change in `.env.production` | `./scripts/deploy-nas.sh` | Same script; new `.env` ships and containers restart. |
 | `VITE_API_BASE_URL` change | Netlify UI → trigger redeploy | Vite bakes env vars at build time, so a redeploy is required. |
@@ -271,7 +376,7 @@ running stale code.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Browser: Plex login popup never closes after auth | Cookie isn't being set cross-origin | Check `ALLOWED_ORIGINS` matches the actual frontend origin exactly; check `NODE_ENV=production` is in the backend container env (`docker exec exchange-backend env \| grep NODE_ENV`). |
+| Browser: sign-in completes but the SPA stays signed out | Cookie isn't being set cross-origin | Check `ALLOWED_ORIGINS` matches the actual frontend origin exactly; check `NODE_ENV=production` is in the backend container env (`docker exec exchange-backend env \| grep NODE_ENV`). |
 | `/api/*` returns 503 | Backend not up | `docker logs exchange-backend` — usually a missing required env var. |
 | `/api/*` returns 502 / never resolves | Tunnel registered but can't reach backend | The tunnel hostname config is `localhost:3001`; cloudflared joins the backend's network namespace (`network_mode: service:backend`) so `localhost:3001` resolves to the backend's own listener. If broken, check `docker ps` shows both containers Up and (since they share a netns) **restart `exchange-cloudflared` after any backend recreate** — the netns reference breaks otherwise. |
 | `/api/*` returns 401 | Session cookie not present | Confirm browser is sending cookies to `api.theemeraldexchange.com`; check DevTools Network tab → Request Headers → Cookie. If missing, the browser blocked it (third-party cookie blocking on Safari is the usual culprit). |
@@ -282,33 +387,33 @@ running stale code.
 
 ## Local recommender (replaces per-request Claude)
 
-`recommender/` is a Python + FastAPI sibling container in
+`crates/recommender` (binary `eex-recommender`) is a Rust sibling container in
 `docker-compose.yml`. It owns a SQLite DB (sqlite-vec) at
 `/mnt/user/appdata/exchange-backend/recommender-db/exchange.db` and serves
-ranked picks to the Hono backend on the internal Docker network. The
-`recommender/` *source* dir on the NAS (synced by `deploy-nas.sh`) supplies the
-image's `dockerfile:`; the `build:` context is the appdata root, so the
-Dockerfile can reach `crates/emerald-contracts{,-pyo3}` for the PyO3 binding.
-The DB lives in `recommender-db/` so the two never collide.
+ranked picks to the gateway on the internal Docker network. CI builds the
+image (`crates/recommender/Dockerfile`) with the all-MiniLM-L6-v2 files baked
+in at the pinned revision; `deploy-nas.sh` pulls it like the other images.
 
 ### Roles
 
 * **Per-request scoring** — `POST /score` on every `/api/suggestions/:type`
   refresh. No Claude call, no per-request cost.
-* **Optimizer (offline)** — `make optimize` runs nightly via `crontab` on
-  the NAS. One Claude call per run reviews the day's outcomes and proposes
-  config patches. Auto-promotes only if the patch beats the held-out eval
-  set; weight changes clamped to ±20% per night.
+* **Scheduled jobs (in process)** — the container runs its own jobs, in the
+  container's local time (UTC unless `TZ` is set on the service): the
+  optimizer at 03:30 (one Claude call reviews the day's outcomes and proposes
+  config patches; auto-promotes only if the patch beats the held-out eval set;
+  weight changes clamped to ±20% per night), TMDB changes then featurize at
+  04:00, and the rec_log retention sweep plus ranker warm every hour and once
+  at boot. There is no host cron.
 
 ### Bootstrap (one-time, multi-hour)
 
+Migrations run at boot. Then:
+
 ```bash
 ssh root@theemeraldexchange.local '
-  cd /mnt/user/appdata/exchange-backend
-  docker compose up -d recommender
-  docker compose exec recommender python -m app.db --migrate
-  docker compose exec recommender python -m workers.tmdb_ingest --mode bootstrap
-  docker compose exec recommender python -m workers.featurize
+  docker exec exchange-recommender eex-recommender ingest --mode bootstrap
+  docker exec exchange-recommender eex-recommender featurize
 '
 ```
 
@@ -329,38 +434,30 @@ ANTHROPIC_OPTIMIZER_KEY=sk-ant-...
 then redeploy with `scripts/deploy-nas.sh`. The backend will now skip
 Claude on every refresh and call the recommender instead.
 
-### Nightly optimizer cron
+### Removing the old host cron (one-time, at the Rust image's first deploy)
 
-On the NAS, drop into `/etc/cron.d/exchange-recommender`:
-
-```cron
-SHELL=/bin/bash
-PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/bin
-# Phase A: pull TMDB changes for the day and update the titles rows.
-0 4 * * *  root docker exec exchange-recommender python -m workers.tmdb_ingest --mode changes >> /var/log/exchange-ingest.log 2>&1
-# Phase B: rebuild embeddings for new + UPDATED rows. featurize picks
-# up both never-featurized rows and rows whose titles.fetched_at is
-# newer than title_features.computed_at — so changes-mode updates to
-# overview/genres/keywords actually flow into retrieval. Without this
-# step the changes cron updates the titles table but the embeddings
-# stay frozen against pre-revision content.
-15 4 * * * root docker exec exchange-recommender python -m workers.featurize >> /var/log/exchange-featurize.log 2>&1
-30 3 * * * root docker exec exchange-recommender python -m workers.optimizer >> /var/log/exchange-optimizer.log 2>&1
-```
-
-Unraid wipes `/etc/cron.d/` on every reboot, so also drop a copy on the
-USB persistence (`/boot/config/`) and have `/boot/config/go` reinstall
-it at boot:
+The Python image was driven by a host cron (`docker exec exchange-recommender
+python -m workers.*`). The Rust image has no python and runs those jobs
+itself, so the old lines would fail nightly. On the NAS, after the Rust image
+is up:
 
 ```bash
-cp /etc/cron.d/exchange-recommender /boot/config/exchange-recommender.cron
-cat >> /boot/config/go <<'EOF'
-if [ -f /boot/config/exchange-recommender.cron ]; then
-  cp /boot/config/exchange-recommender.cron /etc/cron.d/exchange-recommender
-  chmod 644 /etc/cron.d/exchange-recommender
-fi
-EOF
+rm -f /etc/cron.d/exchange-recommender /boot/config/exchange-recommender.cron
+# and delete the matching `if [ -f /boot/config/exchange-recommender.cron ]` block
+# from /boot/config/go
 ```
+
+`/data/hf-cache` (the Python image's model download) and the old
+`recommender/` build-context dir under the appdata root are no longer read.
+Move any operator `recommender/eval/holdout.jsonl` to
+`recommender-db/holdout.jsonl` (see below) before deleting that dir.
+
+Then confirm the first boot: `docker logs exchange-recommender` shows the
+migrations (none on the existing DB) and the ranker warm, and
+`curl -fsS http://127.0.0.1:8001/health` answers. Rollback is redeploying the
+previous recommender image (retag its `:rollback-<ts>` image to `:latest`
+and `docker compose up -d --no-build recommender`);
+exchange.db's schema is unchanged by the port, so both images read it.
 
 ### Recovering ingest rows stuck at `status='error'`
 
@@ -373,52 +470,28 @@ rows). To recover:
 ```bash
 # Reset every error row to pending, then drain. Capped to attempts<5
 # so permanently-broken titles (removed from TMDB, etc.) don't churn.
-docker exec exchange-recommender python -m workers.tmdb_ingest \
+docker exec exchange-recommender eex-recommender ingest \
   --mode retry-errors --max-attempts 5
 ```
 
 `--retry-errors` is also available on `--mode bootstrap` and
-`--mode changes` if you want the recovery sweep to happen as part of
-the regular nightly cron.
+`--mode changes` for a one-off run that sweeps errors as well.
 
 ### Wiring up the optimizer's eval gate
 
-The optimizer's auto-promotion path is gated by an evaluation set —
-without it, every nightly run records the candidate model as an
-inactive proposal and the active model stays put. Note the gate is not
-merely "a file exists": the optimizer stays record-only until the set
-has **at least 30 usable rows** (`MIN_HOLDOUT_SIZE`,
-`recommender/workers/optimizer.py:5`). The set is one
-JSON object per line (see `recommender/eval/README.md` for the
-schema) and lives at `RECOMMENDER_HOLDOUT_PATH` inside the container,
-defaulting to `/data/holdout.jsonl`.
+The optimizer's auto-promotion path is gated by an evaluation set. It reads
+`RECOMMENDER_HOLDOUT_PATH` inside the container (default
+`/data/holdout.jsonl`, i.e. `recommender-db/holdout.jsonl` on the NAS); when
+that file is absent it uses the vetted seed compiled into the binary
+(`crates/recommender/holdout.seed.jsonl`). The optimizer stays record-only
+until the set has **at least 30 usable rows** (`MIN_HOLDOUT_SIZE`,
+`crates/recommender/src/holdout.rs`). The set is one JSON object per line,
+in the seed's shape (`sub`, `kind`, `library`, `positives`, `negatives`).
+`/health` with the event secret reports its mode and row count.
 
-```bash
-# Quick start: ship the syntactically-valid example to prove the
-# wiring (file shape, env var, mount path), THEN replace it with a
-# real generated holdout before relying on auto-promotion. The
-# example is 3 synthetic rows — enough to satisfy load_holdout() but
-# well under the 30-row floor, so auto-promotion stays OFF until you
-# ship a real generated set.
-scp recommender/eval/holdout.example.jsonl \
-  root@theemeraldexchange.local:/mnt/user/appdata/exchange-backend/recommender-db/holdout.jsonl
-
-# Real holdout: generate from the running recommender DB. The
-# generator filters to (sub, kind) pairs with at least one positive
-# outcome AND a library of at least 10 titles (MIN_LIBRARY, from
-# RECOMMENDER_COLD_START_THRESHOLD) in the last 30 days.
-ssh root@theemeraldexchange.local \
-  'docker exec exchange-recommender python -m eval.build_holdout' \
-  > /tmp/holdout.jsonl
-scp /tmp/holdout.jsonl \
-  root@theemeraldexchange.local:/mnt/user/appdata/exchange-backend/recommender-db/holdout.jsonl
-```
-
-The Dockerfile intentionally does NOT bake the holdout into the image
-and `scripts/deploy-nas.sh` excludes it from rsync — it's operator-
-curated history, not source code. Re-run the generator periodically
-as `rec_log` + `rec_outcomes` accumulate; the optimizer's evaluation
-only gets sharper as the set grows.
+The image does NOT bake an operator holdout in — it's household history,
+not source code. Grow it as `rec_log` + `rec_outcomes` accumulate; the
+optimizer's evaluation only gets sharper as the set grows.
 
 ### Rolling back
 
@@ -440,9 +513,9 @@ site down via cloudflared's `depends_on` gate). Probe through `node`, which is
 always present:
 
 ```bash
-# Backend → recommender connectivity (node-based probe, run on the NAS)
+# Backend → recommender connectivity (the gateway image ships curl)
 ssh root@theemeraldexchange.local \
-  'docker exec exchange-backend node -e "fetch(\"http://recommender:8000/health\").then(r=>r.text()).then(console.log)"'
+  'docker exec exchange-backend curl -fsS http://recommender:8000/health'
 
 # Recommender directly (run ON the NAS — curl exists there)
 ssh root@theemeraldexchange.local 'curl -s http://127.0.0.1:8001/health'

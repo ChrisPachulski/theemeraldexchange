@@ -1,0 +1,286 @@
+{
+  "_meta": {
+    "format_version": 1,
+    "purpose": "The Add modals pre-fill the quality profile and root folder and always submit both, so the server's own fallback never runs to correct a client-side mismatch. The SPA (src/lib/pickDefaultProfileId.ts, src/lib/pickDefaultRootFolder.ts) and the gateway (crates/gateway/src/arr/shared.rs pick_profile / normalize_path) must agree on every case here.",
+    "executed_by": "src/lib/pickDefaultProfileId.test.ts, src/lib/pickDefaultRootFolder.test.ts (TS) and crates/gateway/src/arr/shared/tests.rs (Rust)",
+    "profiles_note": "preferred is the configured DEFAULT_PROFILE_NAME as typed; both sides trim and lowercase it. expected_id null means no profile.",
+    "root_folders_note": "configured is DEFAULT_*_ROOT_FOLDER_PATH; null or '' means unset. expected_path is the live folder path returned verbatim (match is normalized, the result is not), or the first folder when nothing matches. matched says whether the configured path selected the folder; the gateway's non-admin add refuses default_root_folder_missing instead of falling back."
+  },
+  "profiles": [
+    {
+      "name": "empty list",
+      "preferred": "choose me",
+      "profiles": [],
+      "expected_id": null
+    },
+    {
+      "name": "curated name, case and whitespace on the preferred side",
+      "preferred": " Choose Me ",
+      "profiles": [
+        {
+          "id": 1,
+          "name": "Any"
+        },
+        {
+          "id": 2,
+          "name": "choose me"
+        }
+      ],
+      "expected_id": 2
+    },
+    {
+      "name": "curated name, case and whitespace on the profile side",
+      "preferred": "choose me",
+      "profiles": [
+        {
+          "id": 7,
+          "name": "  CHOOSE ME  "
+        }
+      ],
+      "expected_id": 7
+    },
+    {
+      "name": "1080p when no name matches",
+      "preferred": "choose me",
+      "profiles": [
+        {
+          "id": 1,
+          "name": "Any"
+        },
+        {
+          "id": 2,
+          "name": "HD - 1080p"
+        }
+      ],
+      "expected_id": 2
+    },
+    {
+      "name": "starts with hd when nothing contains 1080p",
+      "preferred": "choose me",
+      "profiles": [
+        {
+          "id": 1,
+          "name": "Any"
+        },
+        {
+          "id": 2,
+          "name": "SD"
+        },
+        {
+          "id": 3,
+          "name": "HD-720p"
+        }
+      ],
+      "expected_id": 3
+    },
+    {
+      "name": "anything but Any, a padded Any does not count",
+      "preferred": "choose me",
+      "profiles": [
+        {
+          "id": 1,
+          "name": " Any "
+        },
+        {
+          "id": 2,
+          "name": "Ultra-HD"
+        }
+      ],
+      "expected_id": 2
+    },
+    {
+      "name": "first profile when every rung fails",
+      "preferred": "choose me",
+      "profiles": [
+        {
+          "id": 9,
+          "name": "ANY"
+        }
+      ],
+      "expected_id": 9
+    },
+    {
+      "name": "first of several Any spellings",
+      "preferred": "choose me",
+      "profiles": [
+        {
+          "id": 4,
+          "name": "any"
+        },
+        {
+          "id": 5,
+          "name": " ANY "
+        }
+      ],
+      "expected_id": 4
+    },
+    {
+      "name": "the name wins over 1080p",
+      "preferred": "choose me",
+      "profiles": [
+        {
+          "id": 1,
+          "name": "Any"
+        },
+        {
+          "id": 2,
+          "name": "HD-1080p"
+        },
+        {
+          "id": 3,
+          "name": "Choose Me"
+        }
+      ],
+      "expected_id": 3
+    }
+  ],
+  "root_folders": [
+    {
+      "name": "empty list",
+      "configured": "/data/media/movies",
+      "folders": [],
+      "expected_path": null,
+      "matched": false
+    },
+    {
+      "name": "curated path over the first folder",
+      "configured": "/data/media/movies",
+      "folders": [
+        {
+          "id": 1,
+          "path": "/mnt/scratch/downloads"
+        },
+        {
+          "id": 2,
+          "path": "/data/media/movies"
+        }
+      ],
+      "expected_path": "/data/media/movies",
+      "matched": true
+    },
+    {
+      "name": "trailing slash, live path returned verbatim",
+      "configured": "/data/media/tv/",
+      "folders": [
+        {
+          "id": 1,
+          "path": "/mnt/scratch/downloads"
+        },
+        {
+          "id": 2,
+          "path": "/data/Media/TV"
+        }
+      ],
+      "expected_path": "/data/Media/TV",
+      "matched": true
+    },
+    {
+      "name": "case variant",
+      "configured": "/DATA/MEDIA/TV",
+      "folders": [
+        {
+          "id": 1,
+          "path": "/mnt/scratch/downloads"
+        },
+        {
+          "id": 2,
+          "path": "/data/Media/TV"
+        }
+      ],
+      "expected_path": "/data/Media/TV",
+      "matched": true
+    },
+    {
+      "name": "several trailing slashes",
+      "configured": "/data/media/tv///",
+      "folders": [
+        {
+          "id": 1,
+          "path": "/mnt/scratch/downloads"
+        },
+        {
+          "id": 2,
+          "path": "/data/Media/TV"
+        }
+      ],
+      "expected_path": "/data/Media/TV",
+      "matched": true
+    },
+    {
+      "name": "backslash separators",
+      "configured": "d:\\media\\tv\\",
+      "folders": [
+        {
+          "id": 3,
+          "path": "D:\\Media\\TV"
+        }
+      ],
+      "expected_path": "D:\\Media\\TV",
+      "matched": true
+    },
+    {
+      "name": "absent curated path falls back to the first folder",
+      "configured": "/data/media/gone",
+      "folders": [
+        {
+          "id": 1,
+          "path": "/mnt/scratch/downloads"
+        },
+        {
+          "id": 2,
+          "path": "/data/media/movies"
+        }
+      ],
+      "expected_path": "/mnt/scratch/downloads",
+      "matched": false
+    },
+    {
+      "name": "unset (null) falls back to the first folder",
+      "configured": null,
+      "folders": [
+        {
+          "id": 1,
+          "path": "/movies"
+        },
+        {
+          "id": 2,
+          "path": "/other"
+        }
+      ],
+      "expected_path": "/movies",
+      "matched": false
+    },
+    {
+      "name": "empty string is unset, not a match for a '' path",
+      "configured": "",
+      "folders": [
+        {
+          "id": 1,
+          "path": "/movies"
+        },
+        {
+          "id": 2,
+          "path": "/other"
+        }
+      ],
+      "expected_path": "/movies",
+      "matched": false
+    },
+    {
+      "name": "upper-cased spelling plus a slash selects the folder",
+      "configured": "/X/",
+      "folders": [
+        {
+          "id": 1,
+          "path": "/decoy"
+        },
+        {
+          "id": 2,
+          "path": "/x"
+        }
+      ],
+      "expected_path": "/x",
+      "matched": true
+    }
+  ]
+}

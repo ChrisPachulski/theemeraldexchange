@@ -1,91 +1,31 @@
+/// <reference types="node" />
+
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { pickDefaultProfileId } from './pickDefaultProfileId'
-import { pickProfile } from '../../server/services/arrAdd'
 
 type Profile = { id: number; name: string }
+type Case = { name: string; preferred: string; profiles: Profile[]; expected_id: number | null }
+
+// tests/vectors/arr-add-defaults.json is shared with the gateway's pick_profile
+// (crates/gateway/src/arr/shared/tests.rs). The Add modals always send
+// qualityProfileId, so the server's own fallback never corrects a client-side
+// mismatch: both sides must agree on every case.
+const { profiles: cases } = JSON.parse(
+  readFileSync(resolve(process.cwd(), 'tests/vectors/arr-add-defaults.json'), 'utf8'),
+) as { profiles: Case[] }
 
 describe('pickDefaultProfileId', () => {
-  it('returns null for an undefined or empty profile list', () => {
+  it('returns null for an undefined profile list', () => {
     expect(pickDefaultProfileId(undefined, 'choose me')).toBeNull()
-    expect(pickDefaultProfileId([], 'choose me')).toBeNull()
   })
 
-  it('matches the curated name ignoring case and whitespace on EITHER side', () => {
-    const profiles: Profile[] = [
-      { id: 1, name: 'Any' },
-      { id: 2, name: 'choose me' },
-    ]
-    expect(pickDefaultProfileId(profiles, ' Choose Me ')).toBe(2)
-    expect(pickDefaultProfileId([{ id: 7, name: '  CHOOSE ME  ' }], 'choose me')).toBe(7)
+  it('has vectors to run', () => {
+    expect(cases.length).toBeGreaterThan(5)
   })
 
-  it('prefers a 1080p profile when no name matches (the reported regression)', () => {
-    const profiles: Profile[] = [
-      { id: 1, name: 'Any' },
-      { id: 2, name: 'HD - 1080p' },
-    ]
-    expect(pickDefaultProfileId(profiles, 'choose me')).toBe(2)
-  })
-
-  it('falls back to a profile starting with "hd" when nothing contains 1080p', () => {
-    const profiles: Profile[] = [
-      { id: 1, name: 'Any' },
-      { id: 2, name: 'SD' },
-      { id: 3, name: 'HD-720p' },
-    ]
-    expect(pickDefaultProfileId(profiles, 'choose me')).toBe(3)
-  })
-
-  it('falls back to anything that is not "Any"', () => {
-    const profiles: Profile[] = [
-      { id: 1, name: ' Any ' },
-      { id: 2, name: 'Ultra-HD' },
-    ]
-    // 'Ultra-HD' neither contains 1080p nor starts with 'hd', so it wins only
-    // on the not-'any' rung — and the leading/trailing space on 'Any' must not
-    // let it slip through as a non-'any' name.
-    expect(pickDefaultProfileId(profiles, 'choose me')).toBe(2)
-  })
-
-  it('returns the first profile when every rung fails', () => {
-    expect(pickDefaultProfileId([{ id: 9, name: 'ANY' }], 'choose me')).toBe(9)
-    expect(
-      pickDefaultProfileId(
-        [
-          { id: 4, name: 'any' },
-          { id: 5, name: ' ANY ' },
-        ],
-        'choose me',
-      ),
-    ).toBe(4)
-  })
-
-  it('agrees with the server pickProfile chain it duplicates', () => {
-    // The Add modals always send qualityProfileId, so the server's own fallback
-    // never runs to correct a client-side mismatch — these two MUST stay in
-    // lockstep. Cross-check the whole chain on the same fixtures.
-    const cases: Profile[][] = [
-      [
-        { id: 1, name: 'Any' },
-        { id: 2, name: 'HD - 1080p' },
-      ],
-      [
-        { id: 1, name: 'Any' },
-        { id: 2, name: 'SD' },
-        { id: 3, name: 'HD-720p' },
-      ],
-      [
-        { id: 1, name: ' Any ' },
-        { id: 2, name: 'Ultra-HD' },
-      ],
-      [{ id: 9, name: 'ANY' }],
-      [
-        { id: 1, name: 'Any' },
-        { id: 2, name: 'choose me' },
-      ],
-    ]
-    for (const profiles of cases) {
-      expect(pickDefaultProfileId(profiles, 'choose me')).toBe(pickProfile(profiles, 'choose me')?.id)
-    }
+  it.each(cases)('$name', ({ preferred, profiles, expected_id }) => {
+    expect(pickDefaultProfileId(profiles, preferred)).toBe(expected_id)
   })
 })

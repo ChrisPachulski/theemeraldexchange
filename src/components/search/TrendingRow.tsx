@@ -4,6 +4,7 @@ import type { SuggestionDiag } from '../../lib/hooks/useSuggested'
 import type { SuggestionMode } from '../../lib/hooks/useSuggestionMode'
 import { StripModeToggle } from './StripModeToggle'
 import { FeedbackDots, type DotState } from './FeedbackDots'
+import { posterImg } from '../../lib/api/images'
 import './TrendingRow.css'
 
 // Suggestion strip rendered on Movies + TV Discover surfaces. Sources:
@@ -14,8 +15,6 @@ import './TrendingRow.css'
 // Each card has a pair of feedback dots below the caption — red for
 // "don't suggest again" (per-user dislike, household-wide veto), green
 // for "show me more like this" (per-user positive signal to Claude).
-
-const TMDB_POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
 
 type Props = {
   items: TrendingItem[]
@@ -382,6 +381,7 @@ export function TrendingRow({
           const tipParts = [item.title]
           if (item.reason) tipParts.push(item.reason)
           const tooltip = tipParts.join(' · ')
+          const poster = posterImg(item.posterPath)
           return (
             <div key={item.id} className="trending__card-wrap">
               <button
@@ -403,10 +403,10 @@ export function TrendingRow({
                     title={item.provenance === 'personalized' ? 'Personalized for you' : 'From your genre picks'}
                   />
                 )}
-                {item.posterPath ? (
+                {poster ? (
                   <img
                     className="trending__poster"
-                    src={`${TMDB_POSTER_BASE}${item.posterPath}`}
+                    {...poster}
                     alt=""
                     loading="lazy"
                     decoding="async"

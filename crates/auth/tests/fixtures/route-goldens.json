@@ -1,0 +1,2427 @@
+{
+  "minted_at": 1792294256,
+  "seed": {
+    "server_state": [
+      {
+        "key": "server_id",
+        "value": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
+        "ts": "2026-10-18 03:30:56"
+      }
+    ],
+    "members": [
+      {
+        "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+        "display_name": "Mom",
+        "role": "user",
+        "auth_mode": "apple",
+        "invited_by": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+        "joined_at": "2026-10-04T00:00:00.000Z",
+        "revoked_at": null
+      },
+      {
+        "sub": "google:777",
+        "display_name": "Other",
+        "role": "user",
+        "auth_mode": "google",
+        "invited_by": null,
+        "joined_at": "2026-10-03T00:00:00.000Z",
+        "revoked_at": null
+      },
+      {
+        "sub": "google:1234567890",
+        "display_name": "G",
+        "role": "admin",
+        "auth_mode": "google",
+        "invited_by": null,
+        "joined_at": "2026-10-02T00:00:00.000Z",
+        "revoked_at": null
+      },
+      {
+        "sub": "apple:000002.0123456789abcdef0123456789abcdef.0002",
+        "display_name": "R",
+        "role": "user",
+        "auth_mode": "apple",
+        "invited_by": null,
+        "joined_at": "2026-10-01T00:00:00.000Z",
+        "revoked_at": "2026-10-05T00:00:00.000Z"
+      }
+    ],
+    "device_tokens": [
+      {
+        "jti": "01M56GZZT9HNRTVVFPVRCMB5S6",
+        "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ0",
+        "device_name": "Living Room Apple TV",
+        "platform": "tvos",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
+        "kid": "device-v1",
+        "issued_at": "2026-10-18T02:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
+        "last_seen_at": null,
+        "last_seen_version": null,
+        "username": null
+      },
+      {
+        "jti": "01M56GZZT99RR91W5HSSMTJ7K6",
+        "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ1",
+        "device_name": "iPhone",
+        "platform": "tvos",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
+        "kid": "device-v1",
+        "issued_at": "2026-10-18T01:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
+        "last_seen_at": null,
+        "last_seen_version": null,
+        "username": null
+      },
+      {
+        "jti": "01M56GZZT9RPBEHP1Q6WZQFMFY",
+        "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ2",
+        "device_name": "Old TV",
+        "platform": "tvos",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
+        "kid": "device-v1",
+        "issued_at": "2026-10-18T00:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
+        "last_seen_at": null,
+        "last_seen_version": null,
+        "username": null
+      },
+      {
+        "jti": "01M56GZZTAY884XJE7G2746BJM",
+        "sub": "google:777",
+        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ3",
+        "device_name": "Other TV",
+        "platform": "tvos",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
+        "kid": "device-v1",
+        "issued_at": "2026-10-17T23:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
+        "last_seen_at": null,
+        "last_seen_version": null,
+        "username": null
+      },
+      {
+        "jti": "01M56GZZTAQC3ABX69NTQ0HGT1",
+        "sub": "google:777",
+        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ4",
+        "device_name": "Other iPad",
+        "platform": "tvos",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
+        "kid": "device-v1",
+        "issued_at": "2026-10-17T22:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
+        "last_seen_at": null,
+        "last_seen_version": null,
+        "username": null
+      },
+      {
+        "jti": "01M56GZZTAQ7NYG0GTGNRQ8MF4",
+        "sub": "google:1234567890",
+        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ5",
+        "device_name": "Admin's Mac",
+        "platform": "tvos",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
+        "kid": "device-v1",
+        "issued_at": "2026-10-17T21:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
+        "last_seen_at": null,
+        "last_seen_version": null,
+        "username": null
+      },
+      {
+        "jti": "01M56GZZTA6ZV8FV175A2866WC",
+        "sub": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ6",
+        "device_name": "Owner iPad",
+        "platform": "tvos",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
+        "kid": "device-v1",
+        "issued_at": "2026-10-17T20:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
+        "last_seen_at": null,
+        "last_seen_version": null,
+        "username": null
+      }
+    ],
+    "device_token_revocations": [
+      {
+        "jti": "01M56GZZT9RPBEHP1Q6WZQFMFY",
+        "revoked_at": "2026-10-06 00:00:00",
+        "reason": "self_revoke"
+      }
+    ],
+    "invites": [
+      {
+        "code_hash": "1da08c9e87c3060f0fdde68ebe8b48403d9b4a4d1583be544913f039d1864e0b",
+        "issued_by": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+        "label": "Grandma",
+        "expires_at": "2099-01-01T00:00:00.000Z",
+        "max_uses": 1,
+        "used_count": 0,
+        "created_at": "2026-10-06T00:00:00.000Z",
+        "revoked_at": null,
+        "role": "user"
+      },
+      {
+        "code_hash": "3241efe53204d70a0fa6dbe0f1dacbe3ab28e01fd62374f90ed6b2dd8e474272",
+        "issued_by": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+        "label": null,
+        "expires_at": null,
+        "max_uses": 5,
+        "used_count": 2,
+        "created_at": "2026-10-05T00:00:00.000Z",
+        "revoked_at": null,
+        "role": "admin"
+      },
+      {
+        "code_hash": "2d7c1db24c9f0c2bb790c2800fb27f5899fee1c92b48c6f817ec07420c498a61",
+        "issued_by": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+        "label": "Late",
+        "expires_at": "2020-01-01T00:00:00.000Z",
+        "max_uses": 1,
+        "used_count": 0,
+        "created_at": "2026-10-04T00:00:00.000Z",
+        "revoked_at": null,
+        "role": "user"
+      },
+      {
+        "code_hash": "f27ef52c019323f73b8ebdc94115a2ec9427fb8c76daf7447f9d00e1e375ffa5",
+        "issued_by": "google:1234567890",
+        "label": "Used",
+        "expires_at": "2099-01-01T00:00:00.000Z",
+        "max_uses": 1,
+        "used_count": 1,
+        "created_at": "2026-10-03T00:00:00.000Z",
+        "revoked_at": null,
+        "role": "user"
+      },
+      {
+        "code_hash": "6d92335d8f3d13cd7efe134e88929285c6106a9b194b1627926b83d661e30ae2",
+        "issued_by": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+        "label": "Gone",
+        "expires_at": "2099-01-01T00:00:00.000Z",
+        "max_uses": 1,
+        "used_count": 0,
+        "created_at": "2026-10-02T00:00:00.000Z",
+        "revoked_at": "2026-10-07T00:00:00.000Z",
+        "role": "user"
+      },
+      {
+        "code_hash": "5f6c6a8f4de7ea6d5cbce3cafb04a455e39762a3018592d6e8fecd391e660082",
+        "issued_by": "apple:000002.0123456789abcdef0123456789abcdef.0002",
+        "label": "Orphan",
+        "expires_at": null,
+        "max_uses": 1,
+        "used_count": 0,
+        "created_at": "2026-10-01T00:00:00.000Z",
+        "revoked_at": null,
+        "role": "user"
+      }
+    ],
+    "device_link_codes": [
+      {
+        "code": "PEND2345",
+        "device_id": "tv-link-1",
+        "device_name": "Link TV",
+        "device_platform": "tvos",
+        "created_at": 1792294256,
+        "expires_at": 1792294856,
+        "claimed_sub": null,
+        "claimed_username": null,
+        "claimed_role": null,
+        "claimed_auth_mode": null,
+        "claimed_at": null,
+        "consumed_at": null
+      },
+      {
+        "code": "BEAR2345",
+        "device_id": "tv-link-2",
+        "device_name": "Link TV",
+        "device_platform": "tvos",
+        "created_at": 1792294256,
+        "expires_at": 1792294856,
+        "claimed_sub": null,
+        "claimed_username": null,
+        "claimed_role": null,
+        "claimed_auth_mode": null,
+        "claimed_at": null,
+        "consumed_at": null
+      },
+      {
+        "code": "EXPD2345",
+        "device_id": "tv-link-3",
+        "device_name": "Link TV",
+        "device_platform": "tvos",
+        "created_at": 1792293556,
+        "expires_at": 1792294246,
+        "claimed_sub": null,
+        "claimed_username": null,
+        "claimed_role": null,
+        "claimed_auth_mode": null,
+        "claimed_at": null,
+        "consumed_at": null
+      },
+      {
+        "code": "OLDD2345",
+        "device_id": "tv-link-4",
+        "device_name": "Link TV",
+        "device_platform": "tvos",
+        "created_at": 1792292256,
+        "expires_at": 1792292956,
+        "claimed_sub": null,
+        "claimed_username": null,
+        "claimed_role": null,
+        "claimed_auth_mode": null,
+        "claimed_at": null,
+        "consumed_at": null
+      }
+    ]
+  },
+  "scenarios": [
+    {
+      "name": "methods (no plex key in Rust)",
+      "method": "GET",
+      "path": "/api/auth/methods",
+      "headers": {},
+      "body": null,
+      "volatile": [],
+      "status": 200,
+      "text": "{\"plex\":false,\"apple\":false,\"google\":false,\"workos\":false}",
+      "set_cookie": null
+    },
+    {
+      "name": "me",
+      "method": "GET",
+      "path": "/api/me",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 200,
+      "text": "{\"user\":{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"Mom\",\"role\":\"user\",\"auth_mode\":\"apple\"}}",
+      "set_cookie": null
+    },
+    {
+      "name": "self list by bearer marks is_current",
+      "method": "GET",
+      "path": "/api/devices/self",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..6_6K81DXmYiWV_FJ.1tA7hvE3rPexrePDvFOkqp3NhOndWLU7D67WeyrZoCurUaRz2P3Z3__GC3-k1y1qs8ZzaP_PIrGuhEjKpHc3VRbl227EEmhhG3dkpf4wbMDRFIsLzY_G5-Xy0JH1w6uLsVIn2LU8CVHETbWpsQl7FjLF0HVZ1Q4v5EYg_nPBTgxP0sNvAYVrYxVV2HFlKy_LDtO46FQAHc9xrRSfU0Lmm0o2pOtEdWbc7Se5sh-KZREnT-DQgjoI-aSO42D3YlsQPHrCUtodlc522K4xpzysEnL7FWaD8IunLEVWRMf5VG9zYmOn0Bem9Cj1zTJW4O4ofGtd4-3y5zLSWKdOJcF77is_xu_YWmYZ0MOmKc-ftU_HC7b2fmtsxxkR_zgfc4CJjuG2yfTPQoYpaf8CZQ_RolODwYcc6eqf5TSIDurhxhY7vRsz.kuhX8hY5-u_w4xsQBi0T_Q"
+      },
+      "body": null,
+      "volatile": [
+        "last_seen_at"
+      ],
+      "status": 200,
+      "text": "{\"devices\":[{\"jti\":\"01M56GZZT9HNRTVVFPVRCMB5S6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ0\",\"device_name\":\"Living Room Apple TV\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T02:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":\"<last_seen_at>\",\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null,\"is_current\":true},{\"jti\":\"01M56GZZT99RR91W5HSSMTJ7K6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ1\",\"device_name\":\"iPhone\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T01:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null}]}",
+      "set_cookie": null
+    },
+    {
+      "name": "self list by cookie",
+      "method": "GET",
+      "path": "/api/devices/self",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
+      },
+      "body": null,
+      "volatile": [
+        "last_seen_at"
+      ],
+      "status": 200,
+      "text": "{\"devices\":[{\"jti\":\"01M56GZZT9HNRTVVFPVRCMB5S6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ0\",\"device_name\":\"Living Room Apple TV\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T02:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":\"<last_seen_at>\",\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null},{\"jti\":\"01M56GZZT99RR91W5HSSMTJ7K6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ1\",\"device_name\":\"iPhone\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T01:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null}]}",
+      "set_cookie": null
+    },
+    {
+      "name": "self list without credentials",
+      "method": "GET",
+      "path": "/api/devices/self",
+      "headers": {},
+      "body": null,
+      "volatile": [],
+      "status": 401,
+      "text": "{\"error\":\"unauthenticated\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "self list as a revoked member clears the cookie",
+      "method": "GET",
+      "path": "/api/devices/self",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..FIGUdwj47ywBnqvc.ayrKVTS86tyM1ToAsYsYGrGV-T_LqbRgvzQLfKU9zgXiiCQTZzYnD8DMwQmvm9Tzp4BGeRfkWnFXvuydJ6zr1mwdFISJ7chliV8NSP4PrDdFa7WHq6YbOBxZaAZJu9pn_fwYUdq_FXGWAyt3keYLZIf0LaUm_BwZwzsu_wAzyB-BTrZoKCHR8jYBDqQC7D0.iiKteJF1RWMhQiCgL0Qcng"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 401,
+      "text": "{\"error\":\"unauthenticated\",\"reason\":\"access_revoked\"}",
+      "set_cookie": "eex.session=; Max-Age=0; Path=/"
+    },
+    {
+      "name": "rename own",
+      "method": "PATCH",
+      "path": "/api/devices/self/01M56GZZT99RR91W5HSSMTJ7K6/name",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"device_name\":\"  Kids iPhone \"}",
+      "volatile": [],
+      "status": 200,
+      "text": "{\"ok\":true,\"device_name\":\"Kids iPhone\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "rename own blank",
+      "method": "PATCH",
+      "path": "/api/devices/self/01M56GZZT99RR91W5HSSMTJ7K6/name",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"device_name\":\"   \"}",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"invalid_body\",\"message\":\"device_name must be 1-128 chars\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "rename own 129 chars",
+      "method": "PATCH",
+      "path": "/api/devices/self/01M56GZZT99RR91W5HSSMTJ7K6/name",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"device_name\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"invalid_body\",\"message\":\"device_name must be 1-128 chars\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "rename own non-string",
+      "method": "PATCH",
+      "path": "/api/devices/self/01M56GZZT99RR91W5HSSMTJ7K6/name",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"device_name\":7}",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"invalid_body\",\"message\":\"device_name (string) required\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "rename own bad json",
+      "method": "PATCH",
+      "path": "/api/devices/self/01M56GZZT99RR91W5HSSMTJ7K6/name",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
+        "Content-Type": "application/json"
+      },
+      "body": "not json",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"invalid_body\",\"message\":\"device_name (string) required\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "rename someone else's",
+      "method": "PATCH",
+      "path": "/api/devices/self/01M56GZZTAY884XJE7G2746BJM/name",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"device_name\":\"Hijacked\"}",
+      "volatile": [],
+      "status": 404,
+      "text": "{\"error\":\"not_found\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "revoke someone else's",
+      "method": "DELETE",
+      "path": "/api/devices/self/01M56GZZTAY884XJE7G2746BJM",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 404,
+      "text": "{\"error\":\"not_found\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "revoke own",
+      "method": "DELETE",
+      "path": "/api/devices/self/01M56GZZT99RR91W5HSSMTJ7K6",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 200,
+      "text": "{\"ok\":true,\"revoked\":\"01M56GZZT99RR91W5HSSMTJ7K6\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "revoke unknown",
+      "method": "DELETE",
+      "path": "/api/devices/self/01HNONEXISTENTNONEXISTENT0",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 404,
+      "text": "{\"error\":\"not_found\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "logout everywhere",
+      "method": "DELETE",
+      "path": "/api/devices/self",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..2SRC0TW1bwwdmA5o.lAwTUK7xCEFv0XC06P3ETMMdE7xPZvEj2PrIv39fPaf-Z3lLsKDQGmMXZQxwRx8KXiZCyJuI2MMncl8BDXkT0QGpwlSEXpmIYAWbpdJPrYqtWKL5FjkDLkJPhZk0zxcWVL_H27-vXjrFAlpw.cCRrn_R9zwITggiIdwRTUA"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 200,
+      "text": "{\"ok\":true,\"revoked_count\":2}",
+      "set_cookie": null
+    },
+    {
+      "name": "admin list",
+      "method": "GET",
+      "path": "/api/admin/devices",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [
+        "last_seen_at",
+        "revoked_at"
+      ],
+      "status": 200,
+      "text": "{\"devices\":[{\"jti\":\"01M56GZZT9HNRTVVFPVRCMB5S6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ0\",\"device_name\":\"Living Room Apple TV\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T02:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":\"<last_seen_at>\",\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null,\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\"},{\"jti\":\"01M56GZZT99RR91W5HSSMTJ7K6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ1\",\"device_name\":\"Kids iPhone\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T01:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":true,\"revoked_at\":\"<revoked_at>\",\"revoked_reason\":\"self_revoke\",\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\"},{\"jti\":\"01M56GZZT9RPBEHP1Q6WZQFMFY\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ2\",\"device_name\":\"Old TV\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T00:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":true,\"revoked_at\":\"<revoked_at>\",\"revoked_reason\":\"self_revoke\",\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\"},{\"jti\":\"01M56GZZTAY884XJE7G2746BJM\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ3\",\"device_name\":\"Other TV\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-17T23:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":true,\"revoked_at\":\"<revoked_at>\",\"revoked_reason\":\"self_logout_everywhere\",\"sub\":\"google:777\"},{\"jti\":\"01M56GZZTAQC3ABX69NTQ0HGT1\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ4\",\"device_name\":\"Other iPad\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-17T22:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":true,\"revoked_at\":\"<revoked_at>\",\"revoked_reason\":\"self_logout_everywhere\",\"sub\":\"google:777\"},{\"jti\":\"01M56GZZTAQ7NYG0GTGNRQ8MF4\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ5\",\"device_name\":\"Admin's Mac\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-17T21:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null,\"sub\":\"google:1234567890\"},{\"jti\":\"01M56GZZTA6ZV8FV175A2866WC\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ6\",\"device_name\":\"Owner iPad\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-17T20:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null,\"sub\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\"}]}",
+      "set_cookie": null
+    },
+    {
+      "name": "admin list as a member",
+      "method": "GET",
+      "path": "/api/admin/devices",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 403,
+      "text": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "admin list without credentials",
+      "method": "GET",
+      "path": "/api/admin/devices",
+      "headers": {},
+      "body": null,
+      "volatile": [],
+      "status": 401,
+      "text": "{\"error\":\"unauthenticated\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "admin rename",
+      "method": "PATCH",
+      "path": "/api/admin/devices/01M56GZZT9HNRTVVFPVRCMB5S6/name",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"device_name\":\"Renamed By Admin\"}",
+      "volatile": [],
+      "status": 200,
+      "text": "{\"ok\":true,\"device_name\":\"Renamed By Admin\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "admin rename unknown",
+      "method": "PATCH",
+      "path": "/api/admin/devices/01HNONEXISTENTNONEXISTENT0/name",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"device_name\":\"X\"}",
+      "volatile": [],
+      "status": 404,
+      "text": "{\"error\":\"not_found\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "admin rename blank",
+      "method": "PATCH",
+      "path": "/api/admin/devices/01M56GZZT9HNRTVVFPVRCMB5S6/name",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"device_name\":\"\"}",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"invalid_body\",\"message\":\"device_name must be 1-128 chars\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "admin revoke as a DB admin",
+      "method": "DELETE",
+      "path": "/api/admin/devices/01M56GZZTAQ7NYG0GTGNRQ8MF4",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..VrY--Ni1BbPObLXS.6WNJnDrqM9GS8MYTDh9Q4k8ncKeB6kIAJpW07K0mwiwwBTF05SC5KS8BzglBw81is23RS2BPDkqIjIzfwbJQC1PozJ3y8JyrvBTaqBox-s3RDnxBBpFRx8ncA7l-ZQUfjgENsDLFcY8f8OdPSXoHSQ.j8HxIWOziAc8vYCOmAMakw"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 200,
+      "text": "{\"ok\":true,\"revoked\":\"01M56GZZTAQ7NYG0GTGNRQ8MF4\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "admin revoke unknown",
+      "method": "DELETE",
+      "path": "/api/admin/devices/01HNONEXISTENTNONEXISTENT0",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 404,
+      "text": "{\"error\":\"not_found\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "admin revoke as a member",
+      "method": "DELETE",
+      "path": "/api/admin/devices/01M56GZZTAY884XJE7G2746BJM",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 403,
+      "text": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "invites without credentials",
+      "method": "GET",
+      "path": "/api/admin/invites",
+      "headers": {},
+      "body": null,
+      "volatile": [],
+      "status": 401,
+      "text": "{\"error\":\"unauthenticated\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "invites as a member",
+      "method": "GET",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 403,
+      "text": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "invites list",
+      "method": "GET",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 200,
+      "text": "{\"invites\":[{\"code_hash_prefix\":\"1da08c9e\",\"issued_by\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\",\"label\":\"Grandma\",\"role\":\"user\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"max_uses\":1,\"used_count\":0,\"created_at\":\"2026-10-06T00:00:00.000Z\",\"revoked_at\":null,\"status\":\"active\"},{\"code_hash_prefix\":\"3241efe5\",\"issued_by\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\",\"label\":null,\"role\":\"admin\",\"expires_at\":null,\"max_uses\":5,\"used_count\":2,\"created_at\":\"2026-10-05T00:00:00.000Z\",\"revoked_at\":null,\"status\":\"active\"},{\"code_hash_prefix\":\"2d7c1db2\",\"issued_by\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\",\"label\":\"Late\",\"role\":\"user\",\"expires_at\":\"2020-01-01T00:00:00.000Z\",\"max_uses\":1,\"used_count\":0,\"created_at\":\"2026-10-04T00:00:00.000Z\",\"revoked_at\":null,\"status\":\"expired\"},{\"code_hash_prefix\":\"f27ef52c\",\"issued_by\":\"google:1234567890\",\"label\":\"Used\",\"role\":\"user\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"max_uses\":1,\"used_count\":1,\"created_at\":\"2026-10-03T00:00:00.000Z\",\"revoked_at\":null,\"status\":\"exhausted\"},{\"code_hash_prefix\":\"6d92335d\",\"issued_by\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\",\"label\":\"Gone\",\"role\":\"user\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"max_uses\":1,\"used_count\":0,\"created_at\":\"2026-10-02T00:00:00.000Z\",\"revoked_at\":\"2026-10-07T00:00:00.000Z\",\"status\":\"revoked\"},{\"code_hash_prefix\":\"5f6c6a8f\",\"issued_by\":\"apple:000002.0123456789abcdef0123456789abcdef.0002\",\"label\":\"Orphan\",\"role\":\"user\",\"expires_at\":null,\"max_uses\":1,\"used_count\":0,\"created_at\":\"2026-10-01T00:00:00.000Z\",\"revoked_at\":null,\"status\":\"active\"}]}",
+      "set_cookie": null
+    },
+    {
+      "name": "revoke an invite",
+      "method": "DELETE",
+      "path": "/api/admin/invites/1da08c9e",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 200,
+      "text": "{\"ok\":true}",
+      "set_cookie": null
+    },
+    {
+      "name": "revoke it again",
+      "method": "DELETE",
+      "path": "/api/admin/invites/1da08c9e",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 404,
+      "text": "{\"error\":\"not_found\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "revoke an unknown prefix",
+      "method": "DELETE",
+      "path": "/api/admin/invites/deadbeef",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 404,
+      "text": "{\"error\":\"not_found\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "revoke a revoked invite",
+      "method": "DELETE",
+      "path": "/api/admin/invites/6d92335d",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 404,
+      "text": "{\"error\":\"not_found\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "revoke an upper-case prefix",
+      "method": "DELETE",
+      "path": "/api/admin/invites/F27EF52C",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 404,
+      "text": "{\"error\":\"not_found\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "invites list after revoke",
+      "method": "GET",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [
+        "revoked_at"
+      ],
+      "status": 200,
+      "text": "{\"invites\":[{\"code_hash_prefix\":\"1da08c9e\",\"issued_by\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\",\"label\":\"Grandma\",\"role\":\"user\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"max_uses\":1,\"used_count\":0,\"created_at\":\"2026-10-06T00:00:00.000Z\",\"revoked_at\":\"<revoked_at>\",\"status\":\"revoked\"},{\"code_hash_prefix\":\"3241efe5\",\"issued_by\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\",\"label\":null,\"role\":\"admin\",\"expires_at\":null,\"max_uses\":5,\"used_count\":2,\"created_at\":\"2026-10-05T00:00:00.000Z\",\"revoked_at\":null,\"status\":\"active\"},{\"code_hash_prefix\":\"2d7c1db2\",\"issued_by\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\",\"label\":\"Late\",\"role\":\"user\",\"expires_at\":\"2020-01-01T00:00:00.000Z\",\"max_uses\":1,\"used_count\":0,\"created_at\":\"2026-10-04T00:00:00.000Z\",\"revoked_at\":null,\"status\":\"expired\"},{\"code_hash_prefix\":\"f27ef52c\",\"issued_by\":\"google:1234567890\",\"label\":\"Used\",\"role\":\"user\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"max_uses\":1,\"used_count\":1,\"created_at\":\"2026-10-03T00:00:00.000Z\",\"revoked_at\":null,\"status\":\"exhausted\"},{\"code_hash_prefix\":\"6d92335d\",\"issued_by\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\",\"label\":\"Gone\",\"role\":\"user\",\"expires_at\":\"2099-01-01T00:00:00.000Z\",\"max_uses\":1,\"used_count\":0,\"created_at\":\"2026-10-02T00:00:00.000Z\",\"revoked_at\":\"<revoked_at>\",\"status\":\"revoked\"},{\"code_hash_prefix\":\"5f6c6a8f\",\"issued_by\":\"apple:000002.0123456789abcdef0123456789abcdef.0002\",\"label\":\"Orphan\",\"role\":\"user\",\"expires_at\":null,\"max_uses\":1,\"used_count\":0,\"created_at\":\"2026-10-01T00:00:00.000Z\",\"revoked_at\":null,\"status\":\"active\"}]}",
+      "set_cookie": null
+    },
+    {
+      "name": "issue defaults",
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{}",
+      "volatile": [
+        "code",
+        "code_hash_prefix",
+        "expires_at"
+      ],
+      "status": 201,
+      "text": "{\"code\":\"<code>\",\"code_hash_prefix\":\"<code_hash_prefix>\",\"label\":null,\"role\":\"user\",\"expires_at\":\"<expires_at>\",\"max_uses\":1}",
+      "set_cookie": null
+    },
+    {
+      "name": "issue full",
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"label\":\"  Mom's iPad  \",\"expiresInDays\":30,\"maxUses\":3}",
+      "volatile": [
+        "code",
+        "code_hash_prefix",
+        "expires_at"
+      ],
+      "status": 201,
+      "text": "{\"code\":\"<code>\",\"code_hash_prefix\":\"<code_hash_prefix>\",\"label\":\"Mom's iPad\",\"role\":\"user\",\"expires_at\":\"<expires_at>\",\"max_uses\":3}",
+      "set_cookie": null
+    },
+    {
+      "name": "issue owner invite without expiry",
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"role\":\"admin\",\"label\":\"App Review\",\"expiresInDays\":null}",
+      "volatile": [
+        "code",
+        "code_hash_prefix"
+      ],
+      "status": 201,
+      "text": "{\"code\":\"<code>\",\"code_hash_prefix\":\"<code_hash_prefix>\",\"label\":\"App Review\",\"role\":\"admin\",\"expires_at\":null,\"max_uses\":1}",
+      "set_cookie": null
+    },
+    {
+      "name": "issue long label",
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"label\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "volatile": [
+        "code",
+        "code_hash_prefix",
+        "expires_at"
+      ],
+      "status": 201,
+      "text": "{\"code\":\"<code>\",\"code_hash_prefix\":\"<code_hash_prefix>\",\"label\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"role\":\"user\",\"expires_at\":\"<expires_at>\",\"max_uses\":1}",
+      "set_cookie": null
+    },
+    {
+      "name": "issue label null, maxUses 2",
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"label\":null,\"maxUses\":2}",
+      "volatile": [
+        "code",
+        "code_hash_prefix",
+        "expires_at"
+      ],
+      "status": 201,
+      "text": "{\"code\":\"<code>\",\"code_hash_prefix\":\"<code_hash_prefix>\",\"label\":null,\"role\":\"user\",\"expires_at\":\"<expires_at>\",\"max_uses\":2}",
+      "set_cookie": null
+    },
+    {
+      "name": "issue bad json reads as empty",
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "not json",
+      "volatile": [
+        "code",
+        "code_hash_prefix",
+        "expires_at"
+      ],
+      "status": 201,
+      "text": "{\"code\":\"<code>\",\"code_hash_prefix\":\"<code_hash_prefix>\",\"label\":null,\"role\":\"user\",\"expires_at\":\"<expires_at>\",\"max_uses\":1}",
+      "set_cookie": null
+    },
+    {
+      "name": "issue label 123",
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"label\":123}",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"invalid_body\",\"message\":\"label must be a string\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "issue expiresInDays soon",
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"expiresInDays\":\"soon\"}",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"invalid_body\",\"message\":\"expiresInDays must be a number or null\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "issue maxUses 0",
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"maxUses\":0}",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"invalid_body\",\"message\":\"maxUses must be an integer >= 1\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "issue maxUses 1.5",
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"maxUses\":1.5}",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"invalid_body\",\"message\":\"maxUses must be an integer >= 1\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "issue role owner",
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"role\":\"owner\"}",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"invalid_body\",\"message\":\"role must be 'user' or 'admin'\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "issue as a member",
+      "method": "POST",
+      "path": "/api/admin/invites",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
+        "Content-Type": "application/json"
+      },
+      "body": "{}",
+      "volatile": [],
+      "status": 403,
+      "text": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "members list (synthesized owner)",
+      "method": "GET",
+      "path": "/api/admin/members",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 200,
+      "text": "{\"members\":[{\"sub\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\",\"display_name\":null,\"role\":\"admin\",\"auth_mode\":\"plex\",\"invited_by\":null,\"joined_at\":\"\",\"revoked_at\":null,\"is_admin\":true},{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"display_name\":\"Mom\",\"role\":\"user\",\"auth_mode\":\"apple\",\"invited_by\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\",\"joined_at\":\"2026-10-04T00:00:00.000Z\",\"revoked_at\":null,\"is_admin\":false},{\"sub\":\"google:777\",\"display_name\":\"Other\",\"role\":\"user\",\"auth_mode\":\"google\",\"invited_by\":null,\"joined_at\":\"2026-10-03T00:00:00.000Z\",\"revoked_at\":null,\"is_admin\":false},{\"sub\":\"google:1234567890\",\"display_name\":\"G\",\"role\":\"admin\",\"auth_mode\":\"google\",\"invited_by\":null,\"joined_at\":\"2026-10-02T00:00:00.000Z\",\"revoked_at\":null,\"is_admin\":true},{\"sub\":\"apple:000002.0123456789abcdef0123456789abcdef.0002\",\"display_name\":\"R\",\"role\":\"user\",\"auth_mode\":\"apple\",\"invited_by\":null,\"joined_at\":\"2026-10-01T00:00:00.000Z\",\"revoked_at\":\"2026-10-05T00:00:00.000Z\",\"is_admin\":false}]}",
+      "set_cookie": null
+    },
+    {
+      "name": "members as a member",
+      "method": "GET",
+      "path": "/api/admin/members",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 403,
+      "text": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "revoke the owner",
+      "method": "DELETE",
+      "path": "/api/admin/members/workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 409,
+      "text": "{\"error\":\"cannot_revoke_owner\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "a DB admin revokes themselves",
+      "method": "DELETE",
+      "path": "/api/admin/members/google:1234567890",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..VrY--Ni1BbPObLXS.6WNJnDrqM9GS8MYTDh9Q4k8ncKeB6kIAJpW07K0mwiwwBTF05SC5KS8BzglBw81is23RS2BPDkqIjIzfwbJQC1PozJ3y8JyrvBTaqBox-s3RDnxBBpFRx8ncA7l-ZQUfjgENsDLFcY8f8OdPSXoHSQ.j8HxIWOziAc8vYCOmAMakw"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 409,
+      "text": "{\"error\":\"cannot_revoke_self\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "revoke a member (encoded sub)",
+      "method": "DELETE",
+      "path": "/api/admin/members/google%3A777",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 200,
+      "text": "{\"ok\":true}",
+      "set_cookie": null
+    },
+    {
+      "name": "revoke an already revoked member",
+      "method": "DELETE",
+      "path": "/api/admin/members/apple:000002.0123456789abcdef0123456789abcdef.0002",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 404,
+      "text": "{\"error\":\"not_found\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "revoke an unknown member",
+      "method": "DELETE",
+      "path": "/api/admin/members/google:5",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [],
+      "status": 404,
+      "text": "{\"error\":\"not_found\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "members list after revoke",
+      "method": "GET",
+      "path": "/api/admin/members",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
+      },
+      "body": null,
+      "volatile": [
+        "revoked_at"
+      ],
+      "status": 200,
+      "text": "{\"members\":[{\"sub\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\",\"display_name\":null,\"role\":\"admin\",\"auth_mode\":\"plex\",\"invited_by\":null,\"joined_at\":\"\",\"revoked_at\":null,\"is_admin\":true},{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"display_name\":\"Mom\",\"role\":\"user\",\"auth_mode\":\"apple\",\"invited_by\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\",\"joined_at\":\"2026-10-04T00:00:00.000Z\",\"revoked_at\":null,\"is_admin\":false},{\"sub\":\"google:777\",\"display_name\":\"Other\",\"role\":\"user\",\"auth_mode\":\"google\",\"invited_by\":null,\"joined_at\":\"2026-10-03T00:00:00.000Z\",\"revoked_at\":\"<revoked_at>\",\"is_admin\":false},{\"sub\":\"google:1234567890\",\"display_name\":\"G\",\"role\":\"admin\",\"auth_mode\":\"google\",\"invited_by\":null,\"joined_at\":\"2026-10-02T00:00:00.000Z\",\"revoked_at\":null,\"is_admin\":true},{\"sub\":\"apple:000002.0123456789abcdef0123456789abcdef.0002\",\"display_name\":\"R\",\"role\":\"user\",\"auth_mode\":\"apple\",\"invited_by\":null,\"joined_at\":\"2026-10-01T00:00:00.000Z\",\"revoked_at\":\"<revoked_at>\",\"is_admin\":false}]}",
+      "set_cookie": null
+    },
+    {
+      "name": "link start",
+      "method": "POST",
+      "path": "/api/auth/device/link/start",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"device_id\":\"tv-new\",\"device_name\":\"Den TV\",\"device_platform\":\"tvos\"}",
+      "volatile": [
+        "code"
+      ],
+      "status": 200,
+      "text": "{\"code\":\"<code>\",\"verify_url\":\"https://app.example/#/link/<code>\",\"expires_in\":600,\"interval\":2}",
+      "set_cookie": null
+    },
+    {
+      "name": "link start missing fields",
+      "method": "POST",
+      "path": "/api/auth/device/link/start",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"device_id\":\"tv-new\"}",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"missing_device_fields\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link start bad json",
+      "method": "POST",
+      "path": "/api/auth/device/link/start",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "not json",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"missing_device_fields\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link poll pending",
+      "method": "POST",
+      "path": "/api/auth/device/link/poll",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"PEND2345\",\"device_id\":\"tv-link-1\"}",
+      "volatile": [],
+      "status": 200,
+      "text": "{\"status\":\"pending\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link poll wrong device",
+      "method": "POST",
+      "path": "/api/auth/device/link/poll",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"PEND2345\",\"device_id\":\"tv-link-9\"}",
+      "volatile": [],
+      "status": 200,
+      "text": "{\"status\":\"denied\",\"reason\":\"unknown_code\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link poll bad code",
+      "method": "POST",
+      "path": "/api/auth/device/link/poll",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"nope\",\"device_id\":\"tv-link-1\"}",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"invalid_request\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link claim without credentials",
+      "method": "POST",
+      "path": "/api/auth/device/link/claim",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"PEND2345\"}",
+      "volatile": [],
+      "status": 401,
+      "text": "{\"error\":\"unauthenticated\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link claim bad code",
+      "method": "POST",
+      "path": "/api/auth/device/link/claim",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"nope\"}",
+      "volatile": [],
+      "status": 400,
+      "text": "{\"error\":\"invalid_code\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link claim unknown code",
+      "method": "POST",
+      "path": "/api/auth/device/link/claim",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"ZZZZ2345\"}",
+      "volatile": [],
+      "status": 404,
+      "text": "{\"error\":\"unknown_code\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link claim expired code",
+      "method": "POST",
+      "path": "/api/auth/device/link/claim",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"EXPD2345\"}",
+      "volatile": [],
+      "status": 410,
+      "text": "{\"error\":\"expired\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link claim (normalized code)",
+      "method": "POST",
+      "path": "/api/auth/device/link/claim",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\" pend-2345 \"}",
+      "volatile": [],
+      "status": 200,
+      "text": "{\"ok\":true,\"device_name\":\"Link TV\",\"device_platform\":\"tvos\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link claim twice",
+      "method": "POST",
+      "path": "/api/auth/device/link/claim",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..VrY--Ni1BbPObLXS.6WNJnDrqM9GS8MYTDh9Q4k8ncKeB6kIAJpW07K0mwiwwBTF05SC5KS8BzglBw81is23RS2BPDkqIjIzfwbJQC1PozJ3y8JyrvBTaqBox-s3RDnxBBpFRx8ncA7l-ZQUfjgENsDLFcY8f8OdPSXoHSQ.j8HxIWOziAc8vYCOmAMakw",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"PEND2345\"}",
+      "volatile": [],
+      "status": 409,
+      "text": "{\"error\":\"already_claimed\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link poll authorized",
+      "method": "POST",
+      "path": "/api/auth/device/link/poll",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"PEND2345\",\"device_id\":\"tv-link-1\"}",
+      "volatile": [
+        "token"
+      ],
+      "status": 200,
+      "text": "{\"status\":\"authorized\",\"token\":\"<token>\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"user\":{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"Mom\",\"role\":\"user\"}}",
+      "set_cookie": null
+    },
+    {
+      "name": "link poll after consume",
+      "method": "POST",
+      "path": "/api/auth/device/link/poll",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"PEND2345\",\"device_id\":\"tv-link-1\"}",
+      "volatile": [],
+      "status": 200,
+      "text": "{\"status\":\"denied\",\"reason\":\"unknown_code\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link poll expired",
+      "method": "POST",
+      "path": "/api/auth/device/link/poll",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"EXPD2345\",\"device_id\":\"tv-link-3\"}",
+      "volatile": [],
+      "status": 200,
+      "text": "{\"status\":\"denied\",\"reason\":\"expired\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link claim by bearer",
+      "method": "POST",
+      "path": "/api/auth/device/link/claim",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..6_6K81DXmYiWV_FJ.1tA7hvE3rPexrePDvFOkqp3NhOndWLU7D67WeyrZoCurUaRz2P3Z3__GC3-k1y1qs8ZzaP_PIrGuhEjKpHc3VRbl227EEmhhG3dkpf4wbMDRFIsLzY_G5-Xy0JH1w6uLsVIn2LU8CVHETbWpsQl7FjLF0HVZ1Q4v5EYg_nPBTgxP0sNvAYVrYxVV2HFlKy_LDtO46FQAHc9xrRSfU0Lmm0o2pOtEdWbc7Se5sh-KZREnT-DQgjoI-aSO42D3YlsQPHrCUtodlc522K4xpzysEnL7FWaD8IunLEVWRMf5VG9zYmOn0Bem9Cj1zTJW4O4ofGtd4-3y5zLSWKdOJcF77is_xu_YWmYZ0MOmKc-ftU_HC7b2fmtsxxkR_zgfc4CJjuG2yfTPQoYpaf8CZQ_RolODwYcc6eqf5TSIDurhxhY7vRsz.kuhX8hY5-u_w4xsQBi0T_Q",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"BEAR2345\"}",
+      "volatile": [],
+      "status": 200,
+      "text": "{\"ok\":true,\"device_name\":\"Link TV\",\"device_platform\":\"tvos\"}",
+      "set_cookie": null
+    },
+    {
+      "name": "link poll bearer claim",
+      "method": "POST",
+      "path": "/api/auth/device/link/poll",
+      "headers": {
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"BEAR2345\",\"device_id\":\"tv-link-2\"}",
+      "volatile": [
+        "token"
+      ],
+      "status": 200,
+      "text": "{\"status\":\"authorized\",\"token\":\"<token>\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"user\":{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"Renamed By Admin\",\"role\":\"user\"}}",
+      "set_cookie": null
+    },
+    {
+      "name": "link claim as a revoked member",
+      "method": "POST",
+      "path": "/api/auth/device/link/claim",
+      "headers": {
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..FIGUdwj47ywBnqvc.ayrKVTS86tyM1ToAsYsYGrGV-T_LqbRgvzQLfKU9zgXiiCQTZzYnD8DMwQmvm9Tzp4BGeRfkWnFXvuydJ6zr1mwdFISJ7chliV8NSP4PrDdFa7WHq6YbOBxZaAZJu9pn_fwYUdq_FXGWAyt3keYLZIf0LaUm_BwZwzsu_wAzyB-BTrZoKCHR8jYBDqQC7D0.iiKteJF1RWMhQiCgL0Qcng",
+        "Content-Type": "application/json"
+      },
+      "body": "{\"code\":\"BEAR2345\"}",
+      "volatile": [],
+      "status": 401,
+      "text": "{\"error\":\"unauthenticated\",\"reason\":\"access_revoked\"}",
+      "set_cookie": "eex.session=; Max-Age=0; Path=/"
+    }
+  ],
+  "iptv_calls": [
+    "POST /internal/members/google%3A777/revoke-playlist-tokens"
+  ],
+  "final": {
+    "members": [
+      {
+        "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+        "revoked": 0
+      },
+      {
+        "sub": "apple:000002.0123456789abcdef0123456789abcdef.0002",
+        "revoked": 1
+      },
+      {
+        "sub": "google:1234567890",
+        "revoked": 0
+      },
+      {
+        "sub": "google:777",
+        "revoked": 1
+      }
+    ],
+    "invites": [
+      {
+        "prefix": "1da08c9e",
+        "revoked": 1
+      },
+      {
+        "prefix": "2d7c1db2",
+        "revoked": 0
+      },
+      {
+        "prefix": "3241efe5",
+        "revoked": 0
+      },
+      {
+        "prefix": "5f6c6a8f",
+        "revoked": 0
+      },
+      {
+        "prefix": "6d92335d",
+        "revoked": 1
+      },
+      {
+        "prefix": "f27ef52c",
+        "revoked": 0
+      }
+    ],
+    "invite_count": 12,
+    "revocations": [
+      {
+        "jti": "01M56GZZT99RR91W5HSSMTJ7K6",
+        "reason": "self_revoke"
+      },
+      {
+        "jti": "01M56GZZT9RPBEHP1Q6WZQFMFY",
+        "reason": "self_revoke"
+      },
+      {
+        "jti": "01M56GZZTAQ7NYG0GTGNRQ8MF4",
+        "reason": "admin_revoke"
+      },
+      {
+        "jti": "01M56GZZTAQC3ABX69NTQ0HGT1",
+        "reason": "self_logout_everywhere"
+      },
+      {
+        "jti": "01M56GZZTAY884XJE7G2746BJM",
+        "reason": "self_logout_everywhere"
+      }
+    ],
+    "device_names": [
+      {
+        "jti": "01M56GZZT99RR91W5HSSMTJ7K6",
+        "device_name": "Kids iPhone"
+      },
+      {
+        "jti": "01M56GZZT9HNRTVVFPVRCMB5S6",
+        "device_name": "Renamed By Admin"
+      },
+      {
+        "jti": "01M56GZZT9RPBEHP1Q6WZQFMFY",
+        "device_name": "Old TV"
+      },
+      {
+        "jti": "01M56GZZTA6ZV8FV175A2866WC",
+        "device_name": "Owner iPad"
+      },
+      {
+        "jti": "01M56GZZTAQ7NYG0GTGNRQ8MF4",
+        "device_name": "Admin's Mac"
+      },
+      {
+        "jti": "01M56GZZTAQC3ABX69NTQ0HGT1",
+        "device_name": "Other iPad"
+      },
+      {
+        "jti": "01M56GZZTAY884XJE7G2746BJM",
+        "device_name": "Other TV"
+      }
+    ],
+    "device_count": 9,
+    "link_codes": [
+      {
+        "code": "BEAR2345",
+        "claimed_sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+        "claimed_username": "Renamed By Admin",
+        "claimed_role": "user",
+        "claimed_auth_mode": "apple",
+        "claimed": 1,
+        "consumed": 1
+      },
+      {
+        "code": "EXPD2345",
+        "claimed_sub": null,
+        "claimed_username": null,
+        "claimed_role": null,
+        "claimed_auth_mode": null,
+        "claimed": 0,
+        "consumed": 0
+      },
+      {
+        "code": "PEND2345",
+        "claimed_sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+        "claimed_username": "Mom",
+        "claimed_role": "user",
+        "claimed_auth_mode": "apple",
+        "claimed": 1,
+        "consumed": 1
+      }
+    ],
+    "link_code_count": 4
+  },
+  "plex": {
+    "minted_at": 1792342977,
+    "seed": {
+      "members": [
+        {
+          "sub": "plex:101",
+          "display_name": "Member",
+          "role": "user",
+          "auth_mode": "plex",
+          "invited_by": null,
+          "joined_at": "2026-10-04T00:00:00.000Z",
+          "revoked_at": null
+        },
+        {
+          "sub": "plex:102",
+          "display_name": "Plex Admin Row",
+          "role": "admin",
+          "auth_mode": "plex",
+          "invited_by": null,
+          "joined_at": "2026-10-03T00:00:00.000Z",
+          "revoked_at": null
+        },
+        {
+          "sub": "plex:107",
+          "display_name": "Kicked",
+          "role": "user",
+          "auth_mode": "plex",
+          "invited_by": null,
+          "joined_at": "2026-10-02T00:00:00.000Z",
+          "revoked_at": "2026-10-05T00:00:00.000Z"
+        }
+      ],
+      "invites": [
+        {
+          "code_hash": "7083f0ed3e1d1e93c9e2bb4a533fd160a020bd2caa6b8055d061b2038df5e4fc",
+          "issued_by": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+          "label": "Plex friend",
+          "expires_at": null,
+          "max_uses": 1,
+          "used_count": 0,
+          "created_at": "2026-10-06T00:00:00.000Z",
+          "revoked_at": null,
+          "role": "user"
+        }
+      ]
+    },
+    "scenarios": [
+      {
+        "name": "plex config",
+        "method": "GET",
+        "path": "/api/auth/plex/config",
+        "headers": {},
+        "body": null,
+        "server_id": false,
+        "plex": {},
+        "status": 200,
+        "text": "{\"clientId\":\"golden-plex-client\",\"product\":\"The Emerald Exchange\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "methods with plex configured",
+        "method": "GET",
+        "path": "/api/auth/methods",
+        "headers": {},
+        "body": null,
+        "server_id": false,
+        "plex": {},
+        "status": 200,
+        "text": "{\"plex\":true,\"apple\":false,\"google\":false,\"workos\":false}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check pending",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":501}",
+        "server_id": false,
+        "plex": {
+          "token": null
+        },
+        "status": 200,
+        "text": "{\"status\":\"pending\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/501"
+        ]
+      },
+      {
+        "name": "check pending (string pinId)",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":\" 502 \"}",
+        "server_id": false,
+        "plex": {
+          "token": null
+        },
+        "status": 200,
+        "text": "{\"status\":\"pending\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/502"
+        ]
+      },
+      {
+        "name": "check empty token is pending",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":503}",
+        "server_id": false,
+        "plex": {
+          "token": ""
+        },
+        "status": 200,
+        "text": "{\"status\":\"pending\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/503"
+        ]
+      },
+      {
+        "name": "check no body",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {},
+        "body": null,
+        "server_id": false,
+        "plex": {},
+        "status": 400,
+        "text": "{\"error\":\"missing pinId\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check bad json",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{",
+        "server_id": false,
+        "plex": {},
+        "status": 400,
+        "text": "{\"error\":\"missing pinId\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check pinId foo",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":\"foo\"}",
+        "server_id": false,
+        "plex": {},
+        "status": 400,
+        "text": "{\"error\":\"bad pinId\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check pinId 1.5",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":1.5}",
+        "server_id": false,
+        "plex": {},
+        "status": 400,
+        "text": "{\"error\":\"bad pinId\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check pinId empty string",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":\"\"}",
+        "server_id": false,
+        "plex": {},
+        "status": 400,
+        "text": "{\"error\":\"missing pinId\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check oversized body",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":504,\"padding\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "server_id": false,
+        "plex": {},
+        "status": 413,
+        "text": "{\"error\":\"body_too_large\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check plex.tv 429 numeric",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":505}",
+        "server_id": false,
+        "plex": {
+          "pinStatus": 429,
+          "retryAfter": "17"
+        },
+        "status": 429,
+        "text": "{\"error\":\"plex_rate_limited\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": "17",
+        "plex_calls": [
+          "GET /api/v2/pins/505"
+        ]
+      },
+      {
+        "name": "check plex.tv 429 date",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":506}",
+        "server_id": false,
+        "plex": {
+          "pinStatus": 429,
+          "retryAfter": "Sat, 18 Jul 2026 23:59:59 GMT"
+        },
+        "status": 429,
+        "text": "{\"error\":\"plex_rate_limited\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": "Sat, 18 Jul 2026 23:59:59 GMT",
+        "plex_calls": [
+          "GET /api/v2/pins/506"
+        ]
+      },
+      {
+        "name": "check plex.tv 429 malformed",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":507}",
+        "server_id": false,
+        "plex": {
+          "pinStatus": 429,
+          "retryAfter": "eventually"
+        },
+        "status": 429,
+        "text": "{\"error\":\"plex_rate_limited\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": "5",
+        "plex_calls": [
+          "GET /api/v2/pins/507"
+        ]
+      },
+      {
+        "name": "check plex.tv 429 absent",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":508}",
+        "server_id": false,
+        "plex": {
+          "pinStatus": 429
+        },
+        "status": 429,
+        "text": "{\"error\":\"plex_rate_limited\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": "5",
+        "plex_calls": [
+          "GET /api/v2/pins/508"
+        ]
+      },
+      {
+        "name": "member signs in, servers discovered",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":509}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-101",
+          "user": {
+            "id": 101,
+            "uuid": "uuid-101",
+            "username": "Member",
+            "email": "Member@example.com",
+            "thumb": null
+          },
+          "resources": [
+            {
+              "name": "Home",
+              "clientIdentifier": "golden-server",
+              "owned": false,
+              "home": false,
+              "provides": "server"
+            },
+            {
+              "name": "Elsewhere",
+              "clientIdentifier": "other-server",
+              "owned": true,
+              "home": false,
+              "provides": "server,client"
+            },
+            {
+              "name": "Some Player",
+              "clientIdentifier": "player-id",
+              "owned": false,
+              "home": false,
+              "provides": "player"
+            }
+          ]
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:101\",\"username\":\"Member\",\"email\":\"Member@example.com\",\"thumb\":null,\"role\":\"user\"},\"discoveredServers\":[{\"name\":\"Home\",\"id\":\"golden-server\",\"owned\":false},{\"name\":\"Elsewhere\",\"id\":\"other-server\",\"owned\":true}]}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:101",
+          "username": "Member",
+          "role": "user",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-101"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/509",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "member signs in, discovery fails",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":510}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-101",
+          "user": {
+            "id": 101,
+            "uuid": "uuid-101",
+            "username": "Member",
+            "email": "Member@example.com",
+            "thumb": null
+          },
+          "resourcesStatus": 503
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:101\",\"username\":\"Member\",\"email\":\"Member@example.com\",\"thumb\":null,\"role\":\"user\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:101",
+          "username": "Member",
+          "role": "user",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-101"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/510",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "ADMIN_SUBS plex owner signs in",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":511}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-4242",
+          "user": {
+            "id": 4242,
+            "uuid": "uuid-4242",
+            "username": "Owner",
+            "email": "Owner@example.com",
+            "thumb": null
+          }
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:4242\",\"username\":\"Owner\",\"email\":\"Owner@example.com\",\"thumb\":null,\"role\":\"admin\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:4242",
+          "username": "Owner",
+          "role": "admin",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-4242"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/511",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "admin member row signs in",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":512}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-102",
+          "user": {
+            "id": 102,
+            "uuid": "uuid-102",
+            "username": "Plex Admin Row",
+            "email": "Plex Admin Row@example.com",
+            "thumb": null
+          }
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:102\",\"username\":\"Plex Admin Row\",\"email\":\"Plex Admin Row@example.com\",\"thumb\":null,\"role\":\"admin\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:102",
+          "username": "Plex Admin Row",
+          "role": "admin",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-102"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/512",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "stranger without invite",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":513}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-103",
+          "user": {
+            "id": 103,
+            "uuid": "uuid-103",
+            "username": "Stranger",
+            "email": "Stranger@example.com",
+            "thumb": null
+          }
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/513",
+          "GET /api/v2/user"
+        ]
+      },
+      {
+        "name": "stranger with a bad invite",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":514,\"inviteCode\":\"WRONG\"}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-103",
+          "user": {
+            "id": 103,
+            "uuid": "uuid-103",
+            "username": "Stranger",
+            "email": "Stranger@example.com",
+            "thumb": null
+          }
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/514",
+          "GET /api/v2/user"
+        ]
+      },
+      {
+        "name": "stranger redeems an invite",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":515,\"inviteCode\":\"golden-plex-invite\"}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-103",
+          "user": {
+            "id": 103,
+            "uuid": "uuid-103",
+            "username": "Stranger",
+            "email": "Stranger@example.com",
+            "thumb": null
+          }
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:103\",\"username\":\"Stranger\",\"email\":\"Stranger@example.com\",\"thumb\":null,\"role\":\"user\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:103",
+          "username": "Stranger",
+          "role": "user",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-103"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/515",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "spent invite",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":516,\"inviteCode\":\"golden-plex-invite\"}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-104",
+          "user": {
+            "id": 104,
+            "uuid": "uuid-104",
+            "username": "Late",
+            "email": "Late@example.com",
+            "thumb": null
+          }
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/516",
+          "GET /api/v2/user"
+        ]
+      },
+      {
+        "name": "shared on the home server is admitted",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":517}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-105",
+          "user": {
+            "id": 105,
+            "uuid": "uuid-105",
+            "username": "Friend",
+            "email": "Friend@example.com",
+            "thumb": null
+          },
+          "resources": [
+            {
+              "name": "Home",
+              "clientIdentifier": "golden-server",
+              "owned": false,
+              "home": false,
+              "provides": "server"
+            },
+            {
+              "name": "Some Player",
+              "clientIdentifier": "player-id",
+              "owned": false,
+              "home": false,
+              "provides": "player"
+            }
+          ]
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:105\",\"username\":\"Friend\",\"email\":\"Friend@example.com\",\"thumb\":null,\"role\":\"user\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:105",
+          "username": "Friend",
+          "role": "user",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-105"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/517",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "shared friend signs in again",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":518}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-105",
+          "user": {
+            "id": 105,
+            "uuid": "uuid-105",
+            "username": "Friend",
+            "email": "Friend@example.com",
+            "thumb": null
+          },
+          "resources": []
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:105\",\"username\":\"Friend\",\"email\":\"Friend@example.com\",\"thumb\":null,\"role\":\"user\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:105",
+          "username": "Friend",
+          "role": "user",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-105"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/518",
+          "GET /api/v2/user"
+        ]
+      },
+      {
+        "name": "on another server only",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":519}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-106",
+          "user": {
+            "id": 106,
+            "uuid": "uuid-106",
+            "username": "Elsewhere",
+            "email": "Elsewhere@example.com",
+            "thumb": null
+          },
+          "resources": [
+            {
+              "name": "Elsewhere",
+              "clientIdentifier": "other-server",
+              "owned": true,
+              "home": false,
+              "provides": "server,client"
+            },
+            {
+              "name": "Some Player",
+              "clientIdentifier": "player-id",
+              "owned": false,
+              "home": false,
+              "provides": "player"
+            }
+          ]
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/519",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "share probe outage fails closed",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":520}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-108",
+          "user": {
+            "id": 108,
+            "uuid": "uuid-108",
+            "username": "Unlucky",
+            "email": "Unlucky@example.com",
+            "thumb": null
+          },
+          "resourcesStatus": 503
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/520",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "share probe 401 fails closed",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":521}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-108",
+          "user": {
+            "id": 108,
+            "uuid": "uuid-108",
+            "username": "Unlucky",
+            "email": "Unlucky@example.com",
+            "thumb": null
+          },
+          "resourcesStatus": 401
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/521",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "revoked member still shared",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":522}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-107",
+          "user": {
+            "id": 107,
+            "uuid": "uuid-107",
+            "username": "Kicked",
+            "email": "Kicked@example.com",
+            "thumb": null
+          },
+          "resources": [
+            {
+              "name": "Home",
+              "clientIdentifier": "golden-server",
+              "owned": false,
+              "home": false,
+              "provides": "server"
+            }
+          ]
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/522",
+          "GET /api/v2/user"
+        ]
+      },
+      {
+        "name": "member with the server id set",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":523}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-101",
+          "user": {
+            "id": 101,
+            "uuid": "uuid-101",
+            "username": "Member",
+            "email": "Member@example.com",
+            "thumb": null
+          }
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:101\",\"username\":\"Member\",\"email\":\"Member@example.com\",\"thumb\":null,\"role\":\"user\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:101",
+          "username": "Member",
+          "role": "user",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-101"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/523",
+          "GET /api/v2/user"
+        ]
+      },
+      {
+        "name": "logout with a plex token",
+        "method": "POST",
+        "path": "/api/auth/logout",
+        "headers": {
+          "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..2QFzZ7BrQbswWZL0.cSEQpt7RlOTizwqP4mBcxbh1W-zOAKp0MrEtvUwELybhjaW-6oONUFVLFW1io7IAhClckHW_TTTSXvZXYCDJEkRWAM8lnkrCwjQjj99cO6zYR51NRlPntQnQatntghnJ__KjSruORKpoaHq3-43SSaYHKCnRo4YLwpoNX2JShNsUf2PrN259TgZjbikwQEE.QucIl8hVarzoFvgZGhQJJw"
+        },
+        "body": null,
+        "server_id": false,
+        "plex": {},
+        "status": 200,
+        "text": "{\"ok\":true}",
+        "set_cookie": "eex.session=; Max-Age=0; Path=/",
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "POST /api/v2/signout"
+        ]
+      },
+      {
+        "name": "logout when plex signout fails",
+        "method": "POST",
+        "path": "/api/auth/logout",
+        "headers": {
+          "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..737sA6qBM61Ow19W.2yJuQNYyEakOgSk8hqDJ2o9xlsQghenQ5JMzEuEfc7-iM-B_qrvqOT-M2cMT9evdQ9Nr_iv-p1w4u3a_FCfna7VFuPmqcrd5CEbH1ezsMn_2b40VL7dqM3c7h1hD6erkSxRxeP9EynNo_1XpwKt6wXP9No9CxJz_qdVnuJc9bzil59PSOLvSOOvtSZF8NcM.1QPAJujVMfh-a-2tMw2sSQ"
+        },
+        "body": null,
+        "server_id": false,
+        "plex": {
+          "signoutStatus": 500
+        },
+        "status": 200,
+        "text": "{\"ok\":true}",
+        "set_cookie": "eex.session=; Max-Age=0; Path=/",
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "POST /api/v2/signout"
+        ]
+      },
+      {
+        "name": "logout with a plex cookie and no token",
+        "method": "POST",
+        "path": "/api/auth/logout",
+        "headers": {
+          "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..c02_3nqJ5ujrZ0C5.78aQPAo0PMf9x_APtwwWpeKVA7gzOfpTk-2YC91jQ-2ogUGQa-LoCxVXRvitfgU-YYTz2XrKz9gnu9xGJoazcKhoF0Q0N8MRnkGtIyji42X_A6-rbcOm_uTulYhzgga-RoNMnLFvO_y6.z23HSNiXw1DdFd-hA7rjSA"
+        },
+        "body": null,
+        "server_id": false,
+        "plex": {},
+        "status": 200,
+        "text": "{\"ok\":true}",
+        "set_cookie": "eex.session=; Max-Age=0; Path=/",
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "logout with a garbage cookie",
+        "method": "POST",
+        "path": "/api/auth/logout",
+        "headers": {
+          "Cookie": "eex.session=garbage"
+        },
+        "body": null,
+        "server_id": false,
+        "plex": {},
+        "status": 200,
+        "text": "{\"ok\":true}",
+        "set_cookie": "eex.session=; Max-Age=0; Path=/",
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      }
+    ],
+    "final": {
+      "members": [
+        {
+          "sub": "plex:101",
+          "display_name": "Member",
+          "role": "user",
+          "auth_mode": "plex",
+          "invited_by": null,
+          "revoked": 0
+        },
+        {
+          "sub": "plex:102",
+          "display_name": "Plex Admin Row",
+          "role": "admin",
+          "auth_mode": "plex",
+          "invited_by": null,
+          "revoked": 0
+        },
+        {
+          "sub": "plex:103",
+          "display_name": "Stranger",
+          "role": "user",
+          "auth_mode": "plex",
+          "invited_by": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+          "revoked": 0
+        },
+        {
+          "sub": "plex:105",
+          "display_name": "Friend",
+          "role": "user",
+          "auth_mode": "plex",
+          "invited_by": "plex:server-share",
+          "revoked": 0
+        },
+        {
+          "sub": "plex:107",
+          "display_name": "Kicked",
+          "role": "user",
+          "auth_mode": "plex",
+          "invited_by": null,
+          "revoked": 1
+        }
+      ],
+      "invites": [
+        {
+          "issued_by": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+          "used_count": 1
+        }
+      ]
+    }
+  }
+}

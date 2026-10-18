@@ -1,0 +1,55 @@
+[package]
+name = "gateway"
+version = "0.1.0"
+edition.workspace = true
+license-file.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "The Emerald Exchange gateway: the public /api surface (replaces the Hono backend). Links crates/auth in-process."
+publish = false
+
+[lib]
+name = "gateway"
+path = "src/lib.rs"
+
+[[bin]]
+name = "eex-gateway"
+path = "src/main.rs"
+
+[dependencies]
+auth = { path = "../auth" }
+# The migrator and ssrf_guard (later slices).
+media-core = { path = "../media-core" }
+# Internal principals and the telemetry scrubber.
+emerald-contracts = { path = "../emerald-contracts" }
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync", "fs"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.7", features = ["cors", "fs"] }
+http-body-util = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
+# stream: the media/transcode/iptv proxies pass bodies through unbuffered.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde.workspace = true
+# Insertion-ordered maps: the JSON stores keep their files' key order.
+indexmap = { version = "2", features = ["serde"] }
+# raw_value: grab-log lines are served as written.
+serde_json = { workspace = true, features = ["raw_value"] }
+regex.workspace = true
+# The user_api_keys AES-256-GCM rows.
+aes-gcm.workspace = true
+base64.workspace = true
+# The candidate pool's per-request shuffle.
+rand.workspace = true
+ulid.workspace = true
+uuid = { version = "1", features = ["v4"] }
+chrono = "0.4"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sentry = { version = "0.49", default-features = false, features = ["backtrace", "contexts", "panic", "rustls", "reqwest", "tracing"] }
+sentry-tracing = "0.49"
+
+[dev-dependencies]
+tempfile = "3"

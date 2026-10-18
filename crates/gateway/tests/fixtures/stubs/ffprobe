@@ -1,0 +1,9 @@
+#!/bin/sh
+# Test stand-in for ffprobe -version: prints ffprobe.out to stdout and
+# ffprobe.err to stderr from beside the symlink, then exits ffprobe.code (0).
+d=$(dirname "$0")
+[ -f "$d/ffprobe.out" ] && cat "$d/ffprobe.out"
+[ -f "$d/ffprobe.err" ] && cat "$d/ffprobe.err" >&2
+code=0
+[ -f "$d/ffprobe.code" ] && code=$(cat "$d/ffprobe.code")
+exit "$code"

@@ -101,8 +101,8 @@ export function UsersTab() {
         <h2 className="users-tab__title">Who can sign in</h2>
         <p className="users-tab__hint">
           Anyone listed below who is a member of your home Plex server can sign in.
-          Admin role is granted to usernames in the <code>ADMINS</code> env var; everyone
-          else gets viewer access.
+          Admins are the accounts in <code>ADMIN_SUBS</code> or invited as admins;
+          everyone else gets viewer access.
         </p>
       </header>
 

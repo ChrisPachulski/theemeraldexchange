@@ -1,0 +1,13 @@
+#!/bin/sh
+# Test stand-in for eex-ytresolve, run through a symlink in a temp dir: prints
+# resolve/<id>.json from beside the link, else fails like a video the iOS
+# client cannot serve. Every run is logged to ytresolve.calls.
+d=$(dirname "$0")
+echo "$*" >> "$d/ytresolve.calls"
+f="$d/resolve/$1.json"
+if [ -f "$f" ]; then
+  cat "$f"
+  exit 0
+fi
+echo "no usable streams for $1" >&2
+exit 1

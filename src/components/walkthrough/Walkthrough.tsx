@@ -14,10 +14,10 @@ import './Walkthrough.css'
 // walkthrough is the tour: real video assets, real components, mock
 // data. Copy is captions, not paragraphs — the page IS the demo.
 
-// Curated mock strip — real TMDB ids and poster paths pulled from the
-// public CDN so the demo looks like the live strip without burning a
-// TMDB key. Ordering matches what a Drama-leaning household would
-// actually see surface.
+// Curated mock strip — real TMDB ids and poster paths, loaded through the
+// server's image route like the live strip. That route is session-gated, so a
+// signed-out visitor gets empty poster tiles. Ordering matches what a
+// Drama-leaning household would actually see surface.
 const DEMO_STRIP: TrendingItem[] = [
   { id: 95396, title: 'Severance', posterPath: '/lFf6LLrQjYldcZItzOkGmMMigP7.jpg', year: 2022 },
   { id: 84958, title: 'Loki', posterPath: '/voHUmluYmKyleFkTu3lOXQG702u.jpg', year: 2021 },

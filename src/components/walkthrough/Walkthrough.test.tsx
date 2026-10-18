@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Walkthrough } from './Walkthrough'
 import { AuthProvider } from '../../lib/auth'
 
@@ -18,6 +18,11 @@ function render(initialInviteCode = ''): string {
     </QueryClientProvider>,
   )
 }
+
+// The demo strip's posters resolve through apiUrl, which reads the origin.
+beforeEach(() => {
+  vi.stubGlobal('window', { location: { origin: 'http://localhost' } })
+})
 
 afterEach(() => {
   vi.unstubAllEnvs()

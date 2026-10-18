@@ -173,3 +173,50 @@ test('a show pick resolves through Sonarr and opens the owned library entry', as
   await expect(page).toHaveURL(/#\/tv$/)
   expect(terms).toEqual(['tmdb:1396'])
 })
+
+test('posters load from the server image route, never from TMDB', async ({ page }) => {
+  await setup(page)
+  const tmdbHits: string[] = []
+  page.on('request', (r) => {
+    if (new URL(r.url()).hostname === 'image.tmdb.org') tmdbHits.push(r.url())
+  })
+  await page.route('https://image.tmdb.org/**', (route) => route.abort())
+  const served: string[] = []
+  await page.route('**/api/media/images/**', (route) => {
+    served.push(new URL(route.request().url()).pathname)
+    return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="342" height="513"/>' })
+  })
+  // A Radarr remoteUrl (any TMDB size), a stored watchlist row's bare path and
+  // a suggestion's bare poster_path.
+  await page.route('**/api/radarr/api/v3/movie', (route) =>
+    route.fulfill(json([{ ...DUNE, images: [{ coverType: 'poster', remoteUrl: 'https://image.tmdb.org/t/p/original/dune.jpg' }] }])),
+  )
+  await page.route('**/api/watchlist', (route) =>
+    route.fulfill(json({ items: [{ kind: 'movie', id: 603, title: 'The Matrix', poster_path: '/matrix.jpg', added_at: '2026-10-01T00:00:00Z' }] })),
+  )
+  await page.route('**/api/suggestions/movie**', (route) =>
+    route.fulfill(json({ source: 'recommender', items: [{ id: 27205, title: 'Inception', year: 2010, posterPath: '/inception.jpg' }] })),
+  )
+
+  await page.goto('/#/home')
+  for (const [shelf, title, file] of [
+    ['Recently added movies', 'Dune', 'dune.jpg'],
+    ['Watchlist', 'The Matrix', 'matrix.jpg'],
+  ] as const) {
+    const img = page.getByRole('region', { name: shelf }).getByRole('button', { name: new RegExp(title) }).locator('img')
+    await expect(img).toHaveAttribute('src', new RegExp(`/api/media/images/tmdb/${file}\\?w=342$`))
+    await expect(img).toHaveAttribute('srcset', new RegExp(`/api/media/images/tmdb/${file}\\?w=500 500w`))
+  }
+  const pick = page.locator('section.trending', { has: page.getByRole('heading', { name: 'Movies picked for you' }) })
+  const inception = pick.getByRole('button', { name: /^Inception/ }).locator('img')
+  await expect(inception).toHaveAttribute('src', /\/api\/media\/images\/tmdb\/inception\.jpg\?w=342$/)
+  // The poster is loading="lazy" and sits just below the 720 px fold once the
+  // shelves above it render, so bring it into view before waiting on its fetch.
+  await inception.scrollIntoViewIfNeeded()
+  await expect.poll(() => served.some((p) => p === '/api/media/images/tmdb/inception.jpg')).toBe(true)
+
+  // The detail's poster and backdrop take the same route.
+  await page.getByRole('region', { name: 'Recently added movies' }).getByRole('button', { name: /Dune/ }).click()
+  await expect(page.getByRole('dialog', { name: 'Dune' }).locator('img.detail__poster')).toHaveAttribute('src', /\/api\/media\/images\/tmdb\/dune\.jpg\?w=342$/)
+  expect(tmdbHits).toEqual([])
+})

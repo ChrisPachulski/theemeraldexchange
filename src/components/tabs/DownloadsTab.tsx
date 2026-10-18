@@ -16,6 +16,7 @@ import { useConfirm } from '../confirm/useConfirm'
 import { QueueRow } from '../queue/QueueRow'
 import { LoadingPulse } from '../feedback/LoadingPulse'
 import { useAuth } from '../../lib/auth'
+import { posterImg } from '../../lib/api/images'
 import './DownloadsTab.css'
 
 // Parse SAB's "5.5 GB" / "1024 MB" / "0" strings into bytes for arithmetic.
@@ -66,7 +67,7 @@ export function DownloadsTab() {
   const sonarrQueue = useSonarrQueue()
   const radarrQueue = useRadarrQueue()
   const series = useSonarrLibrary()
-  const recent = useRecentlyAdded(12)
+  const recent = useRecentlyAdded(12).map((r) => ({ ...r, img: posterImg(r.poster) }))
   const confirm = useConfirm()
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
@@ -485,10 +486,10 @@ export function DownloadsTab() {
                 onClick={() => openIntent(item.route, item.id)}
                 title={`${item.title}${item.year ? ` (${item.year})` : ''}`}
               >
-                {item.poster ? (
+                {item.img ? (
                   <img
                     className="downloads-tab__recent-poster"
-                    src={item.poster}
+                    {...item.img}
                     alt=""
                     loading="lazy"
                     decoding="async"

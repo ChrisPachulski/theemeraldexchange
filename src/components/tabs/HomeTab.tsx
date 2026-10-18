@@ -1,7 +1,8 @@
 import { Suspense, lazy } from 'react'
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
-import { authModeFromUser, useAuth } from '../../lib/auth'
+import { useAuth } from '../../lib/auth'
+import { isPlexUser } from '../../lib/hooks/usePlexLinks'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useRatingGate, useSectionAccess } from '../../lib/hooks/usePolicy'
 import './HomeTab.css'
@@ -48,25 +49,30 @@ const PANELS: Panel[] = [
     eyebrow: 'What it is',
     title: 'A private streaming library, just for your circle.',
     body:
-      "The Emerald Exchange is an invitation-only movies-and-TV service for one household and the people they share with. Think of it as a personal Netflix that never drops titles; you decide what's in it, and Plex plays it on any screen in the house.",
+      "The Emerald Exchange is an invitation-only movies-and-TV service for one household and the people they share with. Think of it as a personal Netflix that never drops titles; you decide what's in it, and it plays on any screen in the house.",
   },
   {
     eyebrow: 'How it works',
-    title: 'Search, add, then watch on Plex.',
+    title: 'Search, add, then watch.',
     steps: [
       'Open TV Shows or Movies and search by title.',
       'Click a result. For a movie, hit Add to library. For a show, hit Add. Season 1 starts monitored by default; admins can pick a later season in the dialog.',
       'The Emerald Exchange finds the best release with no quality settings to fuss with, and hands it to the downloader in the background.',
       'Check the Downloads tab to watch progress live. Single episodes and movies usually finish in minutes; a full TV season can take half an hour to an hour.',
-      "When it's ready, hit Watch up top (or tell Plex on whichever device you're watching on to rescan) and the new addition is available on every screen in the house.",
+      "When it's ready, open the title and hit Play: the new addition is available on every screen in the house.",
     ],
   },
 ]
 
+// A Plex member can also watch in Plex itself, so their last step says so.
+const PLEX_READY_STEP =
+  "When it's ready, open the title and hit Play, or hit Watch up top to watch it in Plex (tell Plex on your device to rescan if it hasn't shown up yet)."
+
 export function HomeTab() {
   const { transitionTo } = useNavTransition()
   const { isAdmin, user } = useAuth()
-  const plexAdmin = isAdmin && user !== null && authModeFromUser(user) === 'plex'
+  const plexUser = isPlexUser(user)
+  const plexAdmin = isAdmin && plexUser
   const sections = useSectionAccess()
   const ratingGate = useRatingGate()
   const limits = useLimits()
@@ -91,7 +97,7 @@ export function HomeTab() {
             {p.body && <p className="home__panel-body">{p.body}</p>}
             {p.steps && (
               <ol className="home__panel-steps">
-                {p.steps.map((s, i) => (
+                {(plexUser ? [...p.steps.slice(0, -1), PLEX_READY_STEP] : p.steps).map((s, i) => (
                   <li key={i} className="home__panel-step">
                     <span className="home__panel-step-num">{i + 1}</span>
                     <span className="home__panel-step-body">{s}</span>

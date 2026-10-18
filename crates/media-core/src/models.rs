@@ -51,10 +51,6 @@ pub struct FileProbe {
     /// these; video/music ignore them.
     #[serde(default)]
     pub chapters: Vec<Chapter>,
-    /// True when any stream is an attached_pic (embedded cover art). The music
-    /// scanner extracts it as album art when no folder image exists.
-    #[serde(default)]
-    pub has_embedded_art: bool,
 }
 
 /// One container chapter, seconds-granular (audiobook navigation needs no
@@ -96,6 +92,9 @@ pub struct MovieRow {
     pub overview: Option<String>,
     #[serde(default)]
     pub poster_path: Option<String>,
+    /// Blurhash of the poster, NULL until the artwork backfill describes it.
+    #[serde(default)]
+    pub poster_blurhash: Option<String>,
     /// US certification (e.g. "PG-13"), NULL when TMDB carried none or the row
     /// is not yet enriched. The Apple parental gate filters on this.
     #[serde(default)]
@@ -116,6 +115,9 @@ pub struct ShowRow {
     pub overview: Option<String>,
     #[serde(default)]
     pub poster_path: Option<String>,
+    /// Blurhash of the poster, NULL until the artwork backfill describes it.
+    #[serde(default)]
+    pub poster_blurhash: Option<String>,
     /// US content rating (e.g. "TV-MA"), NULL when TMDB carried none or the row
     /// is not yet enriched. The Apple parental gate filters on this.
     #[serde(default)]

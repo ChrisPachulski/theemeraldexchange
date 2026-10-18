@@ -8,7 +8,8 @@ import { defineConfig, devices } from '@playwright/test'
 //      Run: npm run test:e2e
 //
 //   2. `integration` (PW_INTEGRATION=1) — REAL client↔server coverage.
-//      Boots the actual Hono backend (throwaway sqlite in tmpdir, all
+//      Boots the actual Rust gateway (target/debug/eex-gateway; build it
+//      with `cargo build -p gateway --bin eex-gateway`; throwaway sqlite in tmpdir, all
 //      upstreams pointed at tests/e2e/helpers/stubUpstreams.ts) plus Vite on
 //      a dedicated port pair, and drives real logins/flows with ZERO route
 //      mocking. Run: npm run test:e2e:integration
@@ -102,11 +103,10 @@ export default defineConfig({
   webServer: INTEGRATION
     ? [
         {
-          // Real Hono backend + upstream stubs. NODE_ENV=test is the hard
-          // gate for the helper's test-only login route.
+          // The real Rust gateway + upstream stubs (the helper pins the
+          // gateway's whole environment itself).
           command: 'npx tsx tests/e2e/helpers/integrationServer.ts',
           url: `http://127.0.0.1:${BACKEND_PORT}/api/health`,
-          env: { NODE_ENV: 'test' },
           reuseExistingServer: false,
           timeout: 120_000,
           stdout: 'pipe',
@@ -126,7 +126,7 @@ export default defineConfig({
       ]
     : {
         // Mocked tier: Vite alone (not the full `npm run dev`, which also
-        // boots the Hono backend) because every /api/* call is intercepted
+        // runs the gateway) because every /api/* call is intercepted
         // via page.route() in each spec.
         command: 'npm run dev:vite',
         url: `http://localhost:${VITE_PORT}`,

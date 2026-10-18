@@ -133,6 +133,7 @@ pub(super) async fn trigger_scan(
             bg.db.clone(),
             bg.config.music_roots.clone(),
             bg.config.artwork_dir.clone(),
+            bg.artwork.clone(),
         )
         .await
         {

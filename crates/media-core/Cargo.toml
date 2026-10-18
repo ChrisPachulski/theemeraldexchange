@@ -31,6 +31,8 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
+# Snapshot/sync schedules (node-cron syntax), shared with iptv and the gateway.
+croner = "3"
 walkdir = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2.workspace = true
@@ -39,6 +41,15 @@ kamadak-exif = "0.6"
 # Podcast RSS parsing (pull parser; serde mode fights itunes: namespaces).
 quick-xml = "0.41"
 http-body = "1"
+# Artwork pipeline: decode (EXIF orientation), SIMD resize, lossy WebP via
+# libwebp (image's own WebP encoder is lossless-only), blurhash placeholders.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "tiff", "bmp"] }
+fast_image_resize = { version = "6", features = ["image"] }
+webp = { version = "0.3", default-features = false }
+blurhash = { version = "0.2", default-features = false }
+# Scan-time cover art: the tag picture (ID3v2, MP4 covr, FLAC/Vorbis) read
+# in-process instead of an ffmpeg extraction per album or book.
+lofty = "0.25.4"
 
 [dev-dependencies]
 tempfile = "3"

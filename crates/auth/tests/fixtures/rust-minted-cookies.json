@@ -1,0 +1,58 @@
+[
+  {
+    "minted_at": 1792341601,
+    "name": "rust apple user",
+    "session": {
+      "auth_mode": "apple",
+      "role": "user",
+      "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+      "username": "someone"
+    },
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..j7GIL-xi9eBe2hTF.oAuIHCs4DP0FwLqgju-VehMBXZf2A3-ZzwVs6B4vEcmEWqq6I_AacXktqjRBxAAN7kIuLVTEwMIUYOjdgf4o9ddqc1UJoKgHvLA2xDehwDbgH023RnvyfKrLn_jYttrW5yBhGHz1pMxXSTwH5JDK71Z6ZRdbejwCOtzuiSrjHUaCTHcssxzf0T1MOEkDiJoMxyYpkLU.WJtkG7Nu-sKDB_64-jDxfQ"
+  },
+  {
+    "minted_at": 1792341601,
+    "name": "rust workos admin",
+    "session": {
+      "auth_mode": "workos",
+      "role": "admin",
+      "sub": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+      "username": "someone"
+    },
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..1vvps8AJuBv1l5bw.-xgXSL73HSEl8Wxuuc10_m49r36RxkdoIjA60NlAuufRMrp6EvGSCBgeYeypA6VAbUgRXAMXQW-_yZn_I9gEnuF_ZLELrFwtDmebg_1CzpUTF3fn49UPbm7jbQkUR9K_1wLYsrJKgrbS3IJBez2kEJxDXHAwC72yfvpWBMTZUr8dZ1IhBLWZ-zyDYQ._tYhk5PEC9DyZRi2mBxjQw"
+  },
+  {
+    "minted_at": 1792341601,
+    "name": "rust google user",
+    "session": {
+      "auth_mode": "google",
+      "role": "user",
+      "sub": "google:1234567890",
+      "username": "someone"
+    },
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..E9Fx5D9AxLKvHoFu.ByYAPUzMmR-sykfVSEKMbt1PMo2Fgtye9eA6BsA0b9DClY_WTsIzYdtWOJbDUtogQsAL3a6kPkUA2y4dpIUmwFjb5dBV7R7P0wGKKrMOhUMLp0h9EQuZf9KWuqi89wox1U558wzybkaMyICZ1ANtqfP6wiaC.hVOgtg0pBMau-XZuMFUDcg"
+  },
+  {
+    "minted_at": 1792341601,
+    "name": "rust local user",
+    "session": {
+      "auth_mode": "local",
+      "role": "user",
+      "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "username": "someone"
+    },
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..1c8pNH_loZNw13xO.fm-xeK8AmU9gtGiBG4lrIxwZI0IijYpz9PBUJ9gclN10yFZjwe1-0A8s2lgy-NmZW9x8_fCAlBsKN-9NRwgsvaLOLnQ_FM3T2-lqvoP0tLyajxuymZc4bYWndQvIf5ZigmHLWoQ6QOduf-yrYfwmHbTGwPG_pCsf5RGRvt7NZzdbJ5Q.REyxLDz7jFll5u6GJtnHow"
+  },
+  {
+    "minted_at": 1792341601,
+    "name": "rust plex user with a plex token",
+    "session": {
+      "auth_mode": "plex",
+      "plexAuthToken": "plex-golden-token",
+      "role": "user",
+      "sub": "plex:42",
+      "username": "someone"
+    },
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..JUARCgoqhcu-TDpK.RQON5h8c4YSlJYdfINvTncL9jJh3glxNVzVSVuTkCsLp9GFmzmv1cQSMFsqT78m9gPN-pl0Ob3LMp7CheuIiHmWB1mJkmCHqubv000agn_UwTjVIQllJbZAtetp_-iZcIv9pyTWvc8jdQ7zSN2umCrk3q5RII2Nw00tTuHObM2vg5LpyxLWnkbo9l6X1.GJa9sd7pWbY3Q18w2g-UJA"
+  }
+]

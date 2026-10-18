@@ -5,8 +5,6 @@ import type { IntentRoute } from '../../lib/router'
 
 // Pure selectors behind the Home shelves (Apple HomeScreen.swift parity).
 
-export const TMDB_POSTER_BASE = 'https://image.tmdb.org/t/p/w342'
-
 /** In-progress titles, newest first, capped (Apple's resume shelf). */
 export function continueWatching(rows: Iterable<WatchEntry>, cap = 20): WatchEntry[] {
   return [...rows]
@@ -67,12 +65,6 @@ export function titleAllowed(certs: Map<string, Cert[]>, title: string, allows: 
  *  movie, TVDB for a show). The tab resolves it library-first. */
 export function watchlistIntent(e: Pick<WatchlistEntry, 'kind' | 'id'>): [IntentRoute, string] {
   return e.kind === 'movie' ? ['movies', `tmdb:${e.id}`] : ['tv', `tvdb:${e.id}`]
-}
-
-/** A Watchlist row's poster: an *arr URL as stored, or a bare TMDB path. */
-export function watchlistPoster(path: string | undefined): string | null {
-  if (!path) return null
-  return path.startsWith('http') ? path : `${TMDB_POSTER_BASE}${path}`
 }
 
 export type Airing = {

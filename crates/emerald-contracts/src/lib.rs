@@ -1,13 +1,12 @@
 //! emerald-contracts — canonical cross-language contracts for The Emerald Exchange.
 //!
 //! Source of truth for tokens, HKDF derivation, sub-namespace parsing,
-//! and PII scrub keys. Hono consumes via N-API (`emerald-contracts-napi`),
-//! recommender via PyO3 (future), Apple via Swift port.
+//! and PII scrub keys. The Rust services (gateway, auth, iptv, media-core,
+//! transcoder, recommender) link it directly; Apple uses a Swift port.
 //!
 //! Test vectors at `tests/vectors/*.json` are the cross-language interop
 //! oracle. `cargo test` runs every vector against this crate's
-//! implementation; CI gates Hono's `npm test` against the same vectors
-//! via the N-API binding.
+//! implementation.
 
 pub mod canonical;
 pub mod device_token;

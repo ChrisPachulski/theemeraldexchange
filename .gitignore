@@ -28,7 +28,7 @@ dist-ssr
 *.sln
 *.sw?
 
-# Python bytecode (recommender app + parity tests)
+# Python bytecode (helper scripts)
 __pycache__/
 *.pyc
 
@@ -84,23 +84,11 @@ data/
 # 11.9 MB; built in CI, never committed — the source lives in its own repo.
 /bin/eex-ytresolve
 
-# napi-rs build artifacts — produced by `npm run build:napi` (or the napi
-# crate's `prepare` script). One .node per host triple; not portable, not
-# checked in. The Planning agent's M2 deploy plan compiles these in the
-# Docker image build step.
-crates/emerald-contracts-napi/*.node
-
-# PyO3 binding: extension module + venv built by `maturin develop`. The
-# .so is host-triple-specific; the venv is a developer convenience only.
-crates/emerald-contracts-pyo3/.venv/
-crates/emerald-contracts-pyo3/*.so
-crates/emerald-contracts-pyo3/*.pyd
-
 .planning/burn-it-all/
 
-# Recs eval-run artifacts. The eval suite now writes to $TMPDIR/eex-eval-runs
-# (see server/routes/suggestions.eval.test.ts); these in-tree stragglers are
-# generated output, not source. Pre-2026-06 runs remain tracked as history.
+# Recs eval-run artifacts from the retired TS eval suite; these in-tree
+# stragglers are generated output, not source. Pre-2026-06 runs remain
+# tracked as history.
 .planning/ai-recommendations-loop/eval-runs/
 
 # Playwright-MCP browser session scratch (page snapshots, traces)
@@ -114,15 +102,6 @@ crates/emerald-contracts-pyo3/*.pyd
 .audit_allfiles.txt
 docs/audit-results.json
 docs/PRODUCTION-AUDIT.html
-
-# Local uv resolver output. Do not commit until Docker/CI consume uv.lock.
-recommender/uv.lock
-
-# Offline recsys-eval venv (numpy + sqlite-vec + pydantic); host-specific.
-recommender/.venv-eval/
-
-# BGE content-embedding venv (torch + sentence-transformers); host-specific.
-recommender/.venv-embed/
 
 # local security audit scratch + exposure-monitor state (not committed)
 .security-audit/

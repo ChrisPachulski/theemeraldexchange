@@ -8,6 +8,9 @@ use axum::body::Body;
 use axum::http::Request as HttpRequest;
 use std::sync::Arc;
 
+/// Loopback port nothing listens on: tests never reach image.tmdb.org.
+pub(crate) const DEAD_ORIGIN: &str = "http://127.0.0.1:9";
+
 pub(super) async fn test_state() -> AppState {
     // Off-mode: no principal secret/mode wired → principal_layer skips
     // auth, so handlers fall back to the `?sub=` query param. Subtitle
@@ -21,10 +24,17 @@ pub(super) async fn test_state() -> AppState {
         std::env::remove_var("WHISPER_BIN");
     }
     let db = crate::db::Db::connect_memory().await.unwrap();
-    let config = Arc::new(Config::from_env().unwrap());
+    let config = Arc::new(Config {
+        tmdb_image_base: DEAD_ORIGIN.into(),
+        ..Config::from_env().unwrap()
+    });
     let tmdb = crate::tmdb::TmdbClient::new(None);
     AppState {
         db,
+        artwork: Arc::new(crate::artwork::Store::open(
+            config.images_dir.clone(),
+            config.image_cache_bytes,
+        )),
         config,
         tmdb,
         scanning: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -60,10 +70,17 @@ pub(super) async fn test_state_enforce(secret: &str) -> AppState {
         whisper_model: None,
         subtitles_dir: std::path::PathBuf::from("./data/subtitles"),
         artwork_dir: std::path::PathBuf::from("./data/artwork"),
+        images_dir: std::path::PathBuf::from("./data/images"),
+        image_cache_bytes: crate::config::DEFAULT_IMAGE_CACHE_MB * 1024 * 1024,
+        tmdb_image_base: DEAD_ORIGIN.into(),
     });
     let tmdb = crate::tmdb::TmdbClient::new(None);
     AppState {
         db,
+        artwork: Arc::new(crate::artwork::Store::open(
+            config.images_dir.clone(),
+            config.image_cache_bytes,
+        )),
         config,
         tmdb,
         scanning: Arc::new(std::sync::atomic::AtomicBool::new(false)),

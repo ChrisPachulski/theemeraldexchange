@@ -1,8 +1,8 @@
 # Runtime smoke of the PUBLISHED images on BOTH architectures (plan 006).
 #
 # Manifest lists existing for linux/amd64+arm64 proves the builds ran, not
-# that the images RUN: a wrong-arch napi .node, an x86-only apt package, or
-# a mis-resolved wheel all surface only at boot. This workflow pulls the
+# that the images RUN: a wrong-arch binary, an x86-only apt package, or a
+# mis-resolved wheel all surface only at boot. This workflow pulls the
 # published images on native runners (amd64 = ubuntu-latest, arm64 =
 # ubuntu-24.04-arm) and boots each with a bare env until its health
 # endpoint answers — the same "docker compose up just works" contract the
@@ -74,10 +74,13 @@ jobs:
           done
           # In-container arch is the matrix arch (manifest resolved correctly)
           docker exec backend uname -m
-          # Phase 0/1/2 contract on this arch: claimable + SPA HTML + typed 503
-          curl -fsS http://127.0.0.1:3001/api/setup/status | grep -q '"claimable":true'
+          # The Rust gateway, no Node runtime in the image.
+          ! docker exec backend sh -c 'command -v node'
+          # Self-host contract on this arch: SPA HTML same-origin, the sign-in
+          # method list, and a typed 503 for an unconfigured integration.
           curl -fsS http://127.0.0.1:3001/ | grep -qi '<!doctype html'
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3001/api/auth/plex/config)" = "503"
+          curl -fsS http://127.0.0.1:3001/api/auth/methods | grep -q '"workos":false'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3001/api/telemetry/config)" = "503"
           echo "backend ✓"
 
       - name: media-core boots and answers /health
@@ -109,11 +112,24 @@ jobs:
           done
           echo "transcoder ✓"
 
+      - name: iptv boots (no provider configured) and answers /healthz
+        run: |
+          B="${{ steps.img.outputs.base }}"
+          docker run -d --name iptv --network host \
+            -e IPTV_HOST=0.0.0.0 -e IPTV_PORT=8004 \
+            -e STREAM_TOKEN_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')" \
+            -e INTERNAL_PRINCIPAL_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')" \
+            "$B-iptv:$TAG"
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8004/healthz && break || sleep 2
+            [ "$i" = 60 ] && { docker logs iptv; exit 1; }
+          done
+          echo "iptv ✓"
+
       - name: recommender boots and answers /health
         run: |
           B="${{ steps.img.outputs.base }}"
           docker run -d --name recommender --network host \
-            -e RECOMMENDER_HOST=0.0.0.0 -e RECOMMENDER_PORT=8000 \
             -e RECOMMENDER_DB_PATH=/tmp/exchange.db \
             -e RECOMMENDER_EVENT_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')" \
             -e INTERNAL_PRINCIPAL_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')" \
@@ -122,4 +138,8 @@ jobs:
             curl -fsS http://127.0.0.1:8000/health && break || sleep 2
             [ "$i" = 90 ] && { docker logs recommender; exit 1; }
           done
+          docker exec recommender uname -m
+          # The MiniLM files are baked in (no first-featurize download).
+          docker exec recommender ls /srv/minilm/model.safetensors
+          ! docker exec recommender sh -c 'command -v python3 || command -v python'
           echo "recommender ✓"

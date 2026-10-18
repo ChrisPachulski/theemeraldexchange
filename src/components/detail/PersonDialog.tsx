@@ -1,7 +1,8 @@
 /* eslint-disable react-refresh/only-export-components -- creditIntent is
    exported for its unit test; fast-refresh is irrelevant for a pure function. */
 import { useRef, useState } from 'react'
-import { TMDB_IMAGE_BASE, type CastMember, type PersonCredit } from '../../lib/api/tmdb'
+import { type CastMember, type PersonCredit } from '../../lib/api/tmdb'
+import { posterImg } from '../../lib/api/images'
 import { sonarr } from '../../lib/api/sonarr'
 import { openIntent, type IntentRoute } from '../../lib/router'
 import { useLimits } from '../../lib/hooks/useLimits'
@@ -48,7 +49,7 @@ export function PersonDialog({ member, onClose }: { member: CastMember | null; o
   if (!rendered || !shown) return null
 
   const name = person.data?.name ?? shown.name
-  const photo = person.data?.profile_path ?? shown.profile_path
+  const photoImg = posterImg(person.data?.profile_path ?? shown.profile_path)
   // Only kinds whose tab is on can open.
   const credits = ratingGate.capped
     ? []
@@ -96,8 +97,8 @@ export function PersonDialog({ member, onClose }: { member: CastMember | null; o
           {'×'}
         </button>
         <header className="detail__hero">
-          {photo ? (
-            <img className="detail__poster" src={`${TMDB_IMAGE_BASE}${photo}`} alt="" referrerPolicy="no-referrer" />
+          {photoImg ? (
+            <img className="detail__poster" {...photoImg} alt="" referrerPolicy="no-referrer" />
           ) : (
             <div className="detail__poster detail__poster--fallback" aria-hidden="true">
               {name.charAt(0)}
@@ -126,6 +127,7 @@ export function PersonDialog({ member, onClose }: { member: CastMember | null; o
               <ul className="detail__cast">
                 {credits.map((c) => {
                   const year = (c.release_date ?? c.first_air_date ?? '').slice(0, 4)
+                  const poster = posterImg(c.poster_path)
                   return (
                     <li key={`${c.media_type}:${c.id}`} className="detail__cast-card">
                       <button
@@ -135,10 +137,10 @@ export function PersonDialog({ member, onClose }: { member: CastMember | null; o
                         disabled={opening !== null}
                         aria-busy={opening === c.id}
                       >
-                        {c.poster_path ? (
+                        {poster ? (
                           <img
                             className="detail__cast-photo"
-                            src={`${TMDB_IMAGE_BASE}${c.poster_path}`}
+                            {...poster}
                             alt=""
                             loading="lazy"
                             decoding="async"

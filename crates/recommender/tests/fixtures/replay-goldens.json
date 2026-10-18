@@ -1,0 +1,2782 @@
+{
+ "this_year": 2026,
+ "snapshot": {
+  "owner": "local:replay-owner",
+  "user_feedback": [
+   [
+    "local:replay-owner",
+    "movie",
+    1,
+    "dislike",
+    "2026-06-07T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    2,
+    "added",
+    "2026-07-14T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    3,
+    "clicked",
+    "2026-08-20T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    4,
+    "watched",
+    "2026-05-29T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    5,
+    "like",
+    "2026-07-05T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    8,
+    "dislike",
+    "2026-06-26T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    9,
+    "dislike",
+    "2026-07-24T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    13,
+    "added",
+    "2026-05-02T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    15,
+    "dislike",
+    "2026-07-15T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    16,
+    "clicked",
+    "2026-08-21T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    18,
+    "dislike",
+    "2026-06-27T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    21,
+    "watched",
+    "2026-06-27T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    22,
+    "dislike",
+    "2026-08-03T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    24,
+    "added",
+    "2026-06-18T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    27,
+    "dislike",
+    "2026-05-31T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    29,
+    "dislike",
+    "2026-08-22T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    35,
+    "added",
+    "2026-08-04T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    36,
+    "dislike",
+    "2026-05-13T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    38,
+    "watched",
+    "2026-07-26T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    42,
+    "clicked",
+    "2026-08-23T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    43,
+    "dislike",
+    "2026-06-01T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    45,
+    "dislike",
+    "2026-08-05T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    46,
+    "added",
+    "2026-05-23T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    50,
+    "dislike",
+    "2026-06-20T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    54,
+    "dislike",
+    "2026-07-09T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    55,
+    "clicked",
+    "2026-08-24T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    57,
+    "dislike",
+    "2026-07-09T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    62,
+    "like",
+    "2026-05-15T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    63,
+    "dislike",
+    "2026-06-12T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    64,
+    "dislike",
+    "2026-07-28T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    68,
+    "added",
+    "2026-08-25T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    71,
+    "dislike",
+    "2026-08-16T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    72,
+    "watched",
+    "2026-05-25T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    72,
+    "dislike",
+    "2026-05-16T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    78,
+    "dislike",
+    "2026-05-07T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    79,
+    "added",
+    "2026-06-13T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    81,
+    "clicked",
+    "2026-08-26T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    81,
+    "dislike",
+    "2026-08-17T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    85,
+    "dislike",
+    "2026-05-26T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    89,
+    "watched",
+    "2026-06-23T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    90,
+    "added",
+    "2026-07-30T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    90,
+    "dislike",
+    "2026-07-21T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    92,
+    "dislike",
+    "2026-06-14T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    94,
+    "clicked",
+    "2026-08-27T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    99,
+    "dislike",
+    "2026-07-03T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    100,
+    "like",
+    "2026-08-09T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    101,
+    "added",
+    "2026-05-18T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    106,
+    "dislike",
+    "2026-07-22T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    107,
+    "clicked",
+    "2026-08-28T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    108,
+    "dislike",
+    "2026-05-28T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    112,
+    "added",
+    "2026-07-04T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    113,
+    "dislike",
+    "2026-08-10T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    117,
+    "dislike",
+    "2026-05-01T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    119,
+    "like",
+    "2026-07-23T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    120,
+    "dislike",
+    "2026-05-01T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    123,
+    "added",
+    "2026-08-20T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    126,
+    "dislike",
+    "2026-08-02T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    127,
+    "dislike",
+    "2026-05-20T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    133,
+    "clicked",
+    "2026-05-02T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    134,
+    "dislike",
+    "2026-06-08T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    135,
+    "dislike",
+    "2026-07-06T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    138,
+    "like",
+    "2026-07-06T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    140,
+    "watched",
+    "2026-05-21T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    141,
+    "dislike",
+    "2026-06-27T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    144,
+    "dislike",
+    "2026-06-09T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    145,
+    "added",
+    "2026-07-25T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    146,
+    "clicked",
+    "2026-05-03T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    148,
+    "dislike",
+    "2026-07-16T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    153,
+    "dislike",
+    "2026-05-13T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    155,
+    "dislike",
+    "2026-08-04T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    156,
+    "added",
+    "2026-05-13T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    157,
+    "watched",
+    "2026-06-19T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    159,
+    "clicked",
+    "2026-05-04T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    162,
+    "dislike",
+    "2026-08-23T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    167,
+    "added",
+    "2026-06-29T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    169,
+    "dislike",
+    "2026-05-14T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    171,
+    "dislike",
+    "2026-07-18T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    172,
+    "clicked",
+    "2026-05-05T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    174,
+    "watched",
+    "2026-07-18T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    176,
+    "dislike",
+    "2026-06-02T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    178,
+    "added",
+    "2026-08-15T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    180,
+    "dislike",
+    "2026-06-21T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    183,
+    "dislike",
+    "2026-06-21T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    185,
+    "clicked",
+    "2026-05-06T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    189,
+    "added",
+    "2026-06-03T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    189,
+    "dislike",
+    "2026-05-25T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    190,
+    "dislike",
+    "2026-07-10T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    191,
+    "watched",
+    "2026-08-16T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    195,
+    "like",
+    "2026-05-16T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    197,
+    "dislike",
+    "2026-07-29T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    198,
+    "clicked",
+    "2026-05-07T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    198,
+    "dislike",
+    "2026-08-26T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    200,
+    "added",
+    "2026-07-20T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    204,
+    "dislike",
+    "2026-08-17T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    207,
+    "dislike",
+    "2026-07-30T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    208,
+    "watched",
+    "2026-05-17T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    211,
+    "dislike",
+    "2026-05-08T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    214,
+    "like",
+    "2026-08-27T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    216,
+    "dislike",
+    "2026-07-03T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    218,
+    "dislike",
+    "2026-05-27T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    222,
+    "added",
+    "2026-06-24T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    224,
+    "clicked",
+    "2026-05-09T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    225,
+    "dislike",
+    "2026-06-15T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    232,
+    "dislike",
+    "2026-07-04T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    233,
+    "added",
+    "2026-08-10T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    234,
+    "dislike",
+    "2026-05-10T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    237,
+    "clicked",
+    "2026-05-10T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    239,
+    "dislike",
+    "2026-07-23T12:00:00.000000+00:00"
+   ],
+   [
+    "local:someone-else",
+    "movie",
+    3,
+    "added",
+    "2026-06-01T00:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    1,
+    "dislike",
+    "2026-06-07T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    2,
+    "added",
+    "2026-07-14T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    3,
+    "clicked",
+    "2026-08-20T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    4,
+    "watched",
+    "2026-05-29T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    5,
+    "like",
+    "2026-07-05T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    8,
+    "dislike",
+    "2026-06-26T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    9,
+    "dislike",
+    "2026-07-24T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    13,
+    "added",
+    "2026-05-02T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    15,
+    "dislike",
+    "2026-07-15T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    16,
+    "clicked",
+    "2026-08-21T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    18,
+    "dislike",
+    "2026-06-27T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    21,
+    "watched",
+    "2026-06-27T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    22,
+    "dislike",
+    "2026-08-03T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    24,
+    "added",
+    "2026-06-18T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    27,
+    "dislike",
+    "2026-05-31T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    29,
+    "dislike",
+    "2026-08-22T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    35,
+    "added",
+    "2026-08-04T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    36,
+    "dislike",
+    "2026-05-13T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    38,
+    "watched",
+    "2026-07-26T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    42,
+    "clicked",
+    "2026-08-23T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    43,
+    "dislike",
+    "2026-06-01T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    45,
+    "dislike",
+    "2026-08-05T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    46,
+    "added",
+    "2026-05-23T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    50,
+    "dislike",
+    "2026-06-20T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    54,
+    "dislike",
+    "2026-07-09T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    55,
+    "clicked",
+    "2026-08-24T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    57,
+    "dislike",
+    "2026-07-09T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    62,
+    "like",
+    "2026-05-15T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    63,
+    "dislike",
+    "2026-06-12T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    64,
+    "dislike",
+    "2026-07-28T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    68,
+    "added",
+    "2026-08-25T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    71,
+    "dislike",
+    "2026-08-16T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    72,
+    "watched",
+    "2026-05-25T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    72,
+    "dislike",
+    "2026-05-16T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    78,
+    "dislike",
+    "2026-05-07T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    79,
+    "added",
+    "2026-06-13T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    81,
+    "clicked",
+    "2026-08-26T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    81,
+    "dislike",
+    "2026-08-17T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    85,
+    "dislike",
+    "2026-05-26T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    89,
+    "watched",
+    "2026-06-23T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    90,
+    "added",
+    "2026-07-30T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    90,
+    "dislike",
+    "2026-07-21T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    92,
+    "dislike",
+    "2026-06-14T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    94,
+    "clicked",
+    "2026-08-27T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    99,
+    "dislike",
+    "2026-07-03T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    100,
+    "like",
+    "2026-08-09T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    101,
+    "added",
+    "2026-05-18T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    106,
+    "dislike",
+    "2026-07-22T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    107,
+    "clicked",
+    "2026-08-28T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    108,
+    "dislike",
+    "2026-05-28T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    112,
+    "added",
+    "2026-07-04T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    113,
+    "dislike",
+    "2026-08-10T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    117,
+    "dislike",
+    "2026-05-01T08:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    119,
+    "like",
+    "2026-07-23T12:00:00.000000+00:00"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    120,
+    "dislike",
+    "2026-05-01T12:00:00.000000+00:00"
+   ],
+   [
+    "local:someone-else",
+    "tv",
+    3,
+    "added",
+    "2026-06-01T00:00:00.000000+00:00"
+   ]
+  ],
+  "rec_log": [
+   [
+    "local:replay-owner",
+    "movie",
+    5,
+    "2026-08-11T09:30:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    10,
+    "2026-06-17T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    15,
+    "2026-08-21T09:30:00.000000+00:00",
+    "ignored"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    20,
+    "2026-06-27T09:30:00.000000+00:00",
+    null
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    25,
+    "2026-05-03T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    30,
+    "2026-07-07T09:30:00.000000+00:00",
+    "clicked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    35,
+    "2026-05-13T09:30:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    40,
+    "2026-07-17T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    45,
+    "2026-05-23T09:30:00.000000+00:00",
+    "ignored"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    50,
+    "2026-07-27T09:30:00.000000+00:00",
+    null
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    55,
+    "2026-06-02T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    60,
+    "2026-08-06T09:30:00.000000+00:00",
+    "clicked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    65,
+    "2026-06-12T09:30:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    70,
+    "2026-08-16T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    75,
+    "2026-06-22T09:30:00.000000+00:00",
+    "ignored"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    80,
+    "2026-08-26T09:30:00.000000+00:00",
+    null
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    85,
+    "2026-07-02T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    90,
+    "2026-05-08T09:30:00.000000+00:00",
+    "clicked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    95,
+    "2026-07-12T09:30:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    100,
+    "2026-05-18T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    105,
+    "2026-07-22T09:30:00.000000+00:00",
+    "ignored"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    110,
+    "2026-05-28T09:30:00.000000+00:00",
+    null
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    115,
+    "2026-08-01T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    120,
+    "2026-06-07T09:30:00.000000+00:00",
+    "clicked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    125,
+    "2026-08-11T09:30:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    130,
+    "2026-06-17T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    135,
+    "2026-08-21T09:30:00.000000+00:00",
+    "ignored"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    140,
+    "2026-06-27T09:30:00.000000+00:00",
+    null
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    145,
+    "2026-05-03T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    150,
+    "2026-07-07T09:30:00.000000+00:00",
+    "clicked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    155,
+    "2026-05-13T09:30:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    160,
+    "2026-07-17T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    165,
+    "2026-05-23T09:30:00.000000+00:00",
+    "ignored"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    170,
+    "2026-07-27T09:30:00.000000+00:00",
+    null
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    175,
+    "2026-06-02T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    180,
+    "2026-08-06T09:30:00.000000+00:00",
+    "clicked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    185,
+    "2026-06-12T09:30:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    190,
+    "2026-08-16T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    195,
+    "2026-06-22T09:30:00.000000+00:00",
+    "ignored"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    200,
+    "2026-08-26T09:30:00.000000+00:00",
+    null
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    205,
+    "2026-07-02T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    210,
+    "2026-05-08T09:30:00.000000+00:00",
+    "clicked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    215,
+    "2026-07-12T09:30:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    220,
+    "2026-05-18T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    225,
+    "2026-07-22T09:30:00.000000+00:00",
+    "ignored"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    230,
+    "2026-05-28T09:30:00.000000+00:00",
+    null
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    235,
+    "2026-08-01T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "movie",
+    240,
+    "2026-06-07T09:30:00.000000+00:00",
+    "clicked"
+   ],
+   [
+    "local:someone-else",
+    "movie",
+    4,
+    "2026-07-02T00:00:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    5,
+    "2026-08-11T09:30:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    10,
+    "2026-06-17T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    15,
+    "2026-08-21T09:30:00.000000+00:00",
+    "ignored"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    20,
+    "2026-06-27T09:30:00.000000+00:00",
+    null
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    25,
+    "2026-05-03T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    30,
+    "2026-07-07T09:30:00.000000+00:00",
+    "clicked"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    35,
+    "2026-05-13T09:30:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    40,
+    "2026-07-17T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    45,
+    "2026-05-23T09:30:00.000000+00:00",
+    "ignored"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    50,
+    "2026-07-27T09:30:00.000000+00:00",
+    null
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    55,
+    "2026-06-02T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    60,
+    "2026-08-06T09:30:00.000000+00:00",
+    "clicked"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    65,
+    "2026-06-12T09:30:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    70,
+    "2026-08-16T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    75,
+    "2026-06-22T09:30:00.000000+00:00",
+    "ignored"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    80,
+    "2026-08-26T09:30:00.000000+00:00",
+    null
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    85,
+    "2026-07-02T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    90,
+    "2026-05-08T09:30:00.000000+00:00",
+    "clicked"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    95,
+    "2026-07-12T09:30:00.000000+00:00",
+    "added"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    100,
+    "2026-05-18T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    105,
+    "2026-07-22T09:30:00.000000+00:00",
+    "ignored"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    110,
+    "2026-05-28T09:30:00.000000+00:00",
+    null
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    115,
+    "2026-08-01T09:30:00.000000+00:00",
+    "disliked"
+   ],
+   [
+    "local:replay-owner",
+    "tv",
+    120,
+    "2026-06-07T09:30:00.000000+00:00",
+    "clicked"
+   ],
+   [
+    "local:someone-else",
+    "tv",
+    4,
+    "2026-07-02T00:00:00.000000+00:00",
+    "added"
+   ]
+  ],
+  "library": {
+   "movie": [
+    {
+     "tmdbId": 2,
+     "title": "Silent Heist 2",
+     "added": "2026-08-11T10:00:00Z"
+    },
+    {
+     "tmdbId": 6,
+     "title": "Broken Heist 6",
+     "added": "2026-07-06T10:00:00Z"
+    },
+    {
+     "tmdbId": 10,
+     "title": "Velvet Heist 10",
+     "added": "2026-05-31T10:00:00Z"
+    },
+    {
+     "tmdbId": 14,
+     "title": "Silent Harbor 14",
+     "added": "2026-08-23T10:00:00Z"
+    },
+    {
+     "tmdbId": 18,
+     "title": "Broken Harbor 18",
+     "added": "2026-07-18T10:00:00Z"
+    },
+    {
+     "tmdbId": 22,
+     "title": "Velvet Harbor 22",
+     "added": "2026-06-12T10:00:00Z"
+    },
+    {
+     "tmdbId": 26,
+     "title": "Silent Signal 26",
+     "added": "2026-05-07T10:00:00Z"
+    },
+    {
+     "tmdbId": 30,
+     "title": "Broken Signal 30",
+     "added": "2026-07-30T10:00:00Z"
+    },
+    {
+     "tmdbId": 34,
+     "title": "Velvet Signal 34",
+     "added": "2026-06-24T10:00:00Z"
+    },
+    {
+     "tmdbId": 38,
+     "title": "Silent Garden 38",
+     "added": "2026-05-19T10:00:00Z"
+    },
+    {
+     "tmdbId": 42,
+     "title": "Broken Garden 42",
+     "added": "2026-08-11T10:00:00Z"
+    },
+    {
+     "tmdbId": 46,
+     "title": "Velvet Garden 46",
+     "added": "2026-07-06T10:00:00Z"
+    },
+    {
+     "tmdbId": 50,
+     "title": "Silent Frontier 50",
+     "added": "2026-05-31T10:00:00Z"
+    },
+    {
+     "tmdbId": 54,
+     "title": "Broken Frontier 54",
+     "added": "2026-08-23T10:00:00Z"
+    },
+    {
+     "tmdbId": 58,
+     "title": "Velvet Frontier 58",
+     "added": "2026-07-18T10:00:00Z"
+    },
+    {
+     "tmdbId": 62,
+     "title": "Silent Archive 62",
+     "added": "2026-06-12T10:00:00Z"
+    },
+    {
+     "tmdbId": 66,
+     "title": "Broken Archive 66",
+     "added": "2026-05-07T10:00:00Z"
+    },
+    {
+     "tmdbId": 70,
+     "title": "Velvet Archive 70",
+     "added": "2026-07-30T10:00:00Z"
+    },
+    {
+     "tmdbId": 74,
+     "title": "Silent Empire 74",
+     "added": "2026-06-24T10:00:00Z"
+    },
+    {
+     "tmdbId": 78,
+     "title": "Broken Empire 78",
+     "added": "2026-05-19T10:00:00Z"
+    },
+    {
+     "tmdbId": 82,
+     "title": "Velvet Empire 82",
+     "added": "2026-08-11T10:00:00Z"
+    },
+    {
+     "tmdbId": 86,
+     "title": "Silent Orbit 86",
+     "added": "2026-07-06T10:00:00Z"
+    },
+    {
+     "tmdbId": 90,
+     "title": "Broken Orbit 90",
+     "added": "2026-05-31T10:00:00Z"
+    },
+    {
+     "tmdbId": 94,
+     "title": "Velvet Orbit 94",
+     "added": "2026-08-23T10:00:00Z"
+    },
+    {
+     "tmdbId": 98,
+     "title": "Silent Ledger 98",
+     "added": "2026-07-18T10:00:00Z"
+    },
+    {
+     "tmdbId": 102,
+     "title": "Broken Ledger 102",
+     "added": "2026-06-12T10:00:00Z"
+    },
+    {
+     "tmdbId": 106,
+     "title": "Velvet Ledger 106",
+     "added": "2026-05-07T10:00:00Z"
+    },
+    {
+     "tmdbId": 110,
+     "title": "Silent Echo 110",
+     "added": "2026-07-30T10:00:00Z"
+    },
+    {
+     "tmdbId": 114,
+     "title": "Broken Echo 114",
+     "added": "2026-06-24T10:00:00Z"
+    },
+    {
+     "tmdbId": 118,
+     "title": "Velvet Echo 118",
+     "added": "2026-05-19T10:00:00Z"
+    },
+    {
+     "tmdbId": 122,
+     "title": "Silent Heist 122",
+     "added": "2026-08-11T10:00:00Z"
+    },
+    {
+     "tmdbId": 126,
+     "title": "Broken Heist 126",
+     "added": "2026-07-06T10:00:00Z"
+    },
+    {
+     "tmdbId": 130,
+     "title": "Velvet Heist 130",
+     "added": "2026-05-31T10:00:00Z"
+    },
+    {
+     "tmdbId": 134,
+     "title": "Silent Harbor 134",
+     "added": "2026-08-23T10:00:00Z"
+    },
+    {
+     "tmdbId": 138,
+     "title": "Broken Harbor 138",
+     "added": "2026-07-18T10:00:00Z"
+    },
+    {
+     "tmdbId": 142,
+     "title": "Velvet Harbor 142",
+     "added": "2026-06-12T10:00:00Z"
+    },
+    {
+     "tmdbId": 146,
+     "title": "Silent Signal 146",
+     "added": "2026-05-07T10:00:00Z"
+    },
+    {
+     "tmdbId": 150,
+     "title": "Broken Signal 150",
+     "added": "2026-07-30T10:00:00Z"
+    },
+    {
+     "tmdbId": 154,
+     "title": "Velvet Signal 154",
+     "added": "2026-06-24T10:00:00Z"
+    },
+    {
+     "tmdbId": 158,
+     "title": "Silent Garden 158",
+     "added": "2026-05-19T10:00:00Z"
+    },
+    {
+     "tmdbId": 162,
+     "title": "Broken Garden 162",
+     "added": "2026-08-11T10:00:00Z"
+    },
+    {
+     "tmdbId": 166,
+     "title": "Velvet Garden 166",
+     "added": "2026-07-06T10:00:00Z"
+    },
+    {
+     "tmdbId": 170,
+     "title": "Silent Frontier 170",
+     "added": "2026-05-31T10:00:00Z"
+    },
+    {
+     "tmdbId": 174,
+     "title": "Broken Frontier 174",
+     "added": "2026-08-23T10:00:00Z"
+    },
+    {
+     "tmdbId": 178,
+     "title": "Velvet Frontier 178",
+     "added": "2026-07-18T10:00:00Z"
+    },
+    {
+     "tmdbId": 182,
+     "title": "Silent Archive 182",
+     "added": "2026-06-12T10:00:00Z"
+    },
+    {
+     "tmdbId": 186,
+     "title": "Broken Archive 186",
+     "added": "2026-05-07T10:00:00Z"
+    },
+    {
+     "tmdbId": 190,
+     "title": "Velvet Archive 190",
+     "added": "2026-07-30T10:00:00Z"
+    },
+    {
+     "tmdbId": 194,
+     "title": "Silent Empire 194",
+     "added": "2026-06-24T10:00:00Z"
+    },
+    {
+     "tmdbId": 198,
+     "title": "Broken Empire 198",
+     "added": "2026-05-19T10:00:00Z"
+    },
+    {
+     "tmdbId": 202,
+     "title": "Velvet Empire 202",
+     "added": "2026-08-11T10:00:00Z"
+    },
+    {
+     "tmdbId": 206,
+     "title": "Silent Orbit 206",
+     "added": "2026-07-06T10:00:00Z"
+    },
+    {
+     "tmdbId": 210,
+     "title": "Broken Orbit 210",
+     "added": "2026-05-31T10:00:00Z"
+    },
+    {
+     "tmdbId": 214,
+     "title": "Velvet Orbit 214",
+     "added": "2026-08-23T10:00:00Z"
+    },
+    {
+     "tmdbId": 218,
+     "title": "Silent Ledger 218",
+     "added": "2026-07-18T10:00:00Z"
+    },
+    {
+     "tmdbId": 222,
+     "title": "Broken Ledger 222",
+     "added": "2026-06-12T10:00:00Z"
+    },
+    {
+     "tmdbId": 226,
+     "title": "Velvet Ledger 226",
+     "added": "2026-05-07T10:00:00Z"
+    },
+    {
+     "tmdbId": 230,
+     "title": "Silent Echo 230",
+     "added": "2026-07-30T10:00:00Z"
+    },
+    {
+     "tmdbId": 234,
+     "title": "Broken Echo 234",
+     "added": "2026-06-24T10:00:00Z"
+    },
+    {
+     "tmdbId": 238,
+     "title": "Velvet Echo 238",
+     "added": "2026-05-19T10:00:00Z"
+    },
+    {
+     "tmdbId": null,
+     "title": "No Id",
+     "added": "2026-05-02T00:00:00Z"
+    },
+    {
+     "tmdbId": 0,
+     "title": "Zero Id",
+     "added": "2026-05-02T00:00:00Z"
+    },
+    {
+     "tmdbId": 90001,
+     "title": "Not In Catalog",
+     "added": "2026-07-20T00:00:00Z"
+    },
+    {
+     "tmdbId": 90002,
+     "title": "Not In Catalog Early",
+     "added": "2026-05-20T00:00:00Z"
+    }
+   ],
+   "tv": [
+    {
+     "tmdbId": 2,
+     "title": "Silent Heist 2",
+     "added": "2026-08-11T10:00:00Z"
+    },
+    {
+     "tmdbId": 6,
+     "title": "Broken Heist 6",
+     "added": "2026-07-06T10:00:00Z"
+    },
+    {
+     "tmdbId": 10,
+     "title": "Velvet Heist 10",
+     "added": "2026-05-31T10:00:00Z"
+    },
+    {
+     "tmdbId": 14,
+     "title": "Silent Harbor 14",
+     "added": "2026-08-23T10:00:00Z"
+    },
+    {
+     "tmdbId": 18,
+     "title": "Broken Harbor 18",
+     "added": "2026-07-18T10:00:00Z"
+    },
+    {
+     "tmdbId": 22,
+     "title": "Velvet Harbor 22",
+     "added": "2026-06-12T10:00:00Z"
+    },
+    {
+     "tmdbId": 26,
+     "title": "Silent Signal 26",
+     "added": "2026-05-07T10:00:00Z"
+    },
+    {
+     "tmdbId": 30,
+     "title": "Broken Signal 30",
+     "added": "2026-07-30T10:00:00Z"
+    },
+    {
+     "tmdbId": 34,
+     "title": "Velvet Signal 34",
+     "added": "2026-06-24T10:00:00Z"
+    },
+    {
+     "tmdbId": 38,
+     "title": "Silent Garden 38",
+     "added": "2026-05-19T10:00:00Z"
+    },
+    {
+     "tmdbId": 42,
+     "title": "Broken Garden 42",
+     "added": "2026-08-11T10:00:00Z"
+    },
+    {
+     "tmdbId": 46,
+     "title": "Velvet Garden 46",
+     "added": "2026-07-06T10:00:00Z"
+    },
+    {
+     "tmdbId": 50,
+     "title": "Silent Frontier 50",
+     "added": "2026-05-31T10:00:00Z"
+    },
+    {
+     "tmdbId": 54,
+     "title": "Broken Frontier 54",
+     "added": "2026-08-23T10:00:00Z"
+    },
+    {
+     "tmdbId": 58,
+     "title": "Velvet Frontier 58",
+     "added": "2026-07-18T10:00:00Z"
+    },
+    {
+     "tmdbId": 62,
+     "title": "Silent Archive 62",
+     "added": "2026-06-12T10:00:00Z"
+    },
+    {
+     "tmdbId": 66,
+     "title": "Broken Archive 66",
+     "added": "2026-05-07T10:00:00Z"
+    },
+    {
+     "tmdbId": 70,
+     "title": "Velvet Archive 70",
+     "added": "2026-07-30T10:00:00Z"
+    },
+    {
+     "tmdbId": 74,
+     "title": "Silent Empire 74",
+     "added": "2026-06-24T10:00:00Z"
+    },
+    {
+     "tmdbId": 78,
+     "title": "Broken Empire 78",
+     "added": "2026-05-19T10:00:00Z"
+    },
+    {
+     "tmdbId": 82,
+     "title": "Velvet Empire 82",
+     "added": "2026-08-11T10:00:00Z"
+    },
+    {
+     "tmdbId": 86,
+     "title": "Silent Orbit 86",
+     "added": "2026-07-06T10:00:00Z"
+    },
+    {
+     "tmdbId": 90,
+     "title": "Broken Orbit 90",
+     "added": "2026-05-31T10:00:00Z"
+    },
+    {
+     "tmdbId": 94,
+     "title": "Velvet Orbit 94",
+     "added": "2026-08-23T10:00:00Z"
+    },
+    {
+     "tmdbId": 98,
+     "title": "Silent Ledger 98",
+     "added": "2026-07-18T10:00:00Z"
+    },
+    {
+     "tmdbId": 102,
+     "title": "Broken Ledger 102",
+     "added": "2026-06-12T10:00:00Z"
+    },
+    {
+     "tmdbId": 106,
+     "title": "Velvet Ledger 106",
+     "added": "2026-05-07T10:00:00Z"
+    },
+    {
+     "tmdbId": 110,
+     "title": "Silent Echo 110",
+     "added": "2026-07-30T10:00:00Z"
+    },
+    {
+     "tmdbId": 114,
+     "title": "Broken Echo 114",
+     "added": "2026-06-24T10:00:00Z"
+    },
+    {
+     "tmdbId": 118,
+     "title": "Velvet Echo 118",
+     "added": "2026-05-19T10:00:00Z"
+    },
+    {
+     "tmdbId": null,
+     "title": "No Id",
+     "added": "2026-05-02T00:00:00Z"
+    },
+    {
+     "tmdbId": 0,
+     "title": "Zero Id",
+     "added": "2026-05-02T00:00:00Z"
+    },
+    {
+     "tmdbId": 90001,
+     "title": "Not In Catalog",
+     "added": "2026-07-20T00:00:00Z"
+    },
+    {
+     "tmdbId": 90002,
+     "title": "Not In Catalog Early",
+     "added": "2026-05-20T00:00:00Z"
+    }
+   ]
+  },
+  "user_feedback_json": {
+   "local:replay-owner": {
+    "movie": {
+     "liked": [
+      {
+       "id": 3
+      },
+      {
+       "id": 23
+      },
+      {
+       "id": 43
+      },
+      {
+       "id": 63
+      }
+     ],
+     "disliked": [
+      {
+       "id": 8
+      },
+      {
+       "id": 28
+      },
+      {
+       "id": 48
+      },
+      {
+       "id": 0
+      }
+     ]
+    },
+    "tv": {
+     "liked": [
+      {
+       "id": 3
+      },
+      {
+       "id": 33
+      }
+     ],
+     "disliked": [
+      {
+       "id": 8
+      },
+      {
+       "id": 38
+      }
+     ]
+    }
+   },
+   "local:someone-else": {
+    "movie": {
+     "liked": [
+      {
+       "id": 5
+      }
+     ]
+    }
+   }
+  },
+  "rejections": {
+   "movie": [
+    {
+     "id": 14
+    },
+    {
+     "id": 34
+    },
+    {
+     "id": 54
+    },
+    {
+     "id": 74
+    }
+   ],
+   "tv": [
+    {
+     "id": 14
+    },
+    {
+     "id": 44
+    }
+   ]
+  }
+ },
+ "cases": [
+  {
+   "recipe": "ranker",
+   "kind": "movie",
+   "cutoff": "2026-06-15",
+   "params": {
+    "kids_genre_cap": 0.15
+   },
+   "out": {
+    "recipe": "ranker",
+    "kind": "movie",
+    "cutoff": "2026-06-15",
+    "ctx": {
+     "lib": 25,
+     "eng": 17,
+     "dis": 25,
+     "rej": 1
+    },
+    "auc_all": [
+     0.5189,
+     0.068,
+     51,
+     28
+    ],
+    "auc_imp": [
+     0.6528,
+     0.137,
+     8,
+     9
+    ],
+    "future_recall@20": 0.1379,
+    "future_recall@50": 0.2414,
+    "future_n": 29,
+    "slate_kids@20": 3,
+    "slate_vote_avg@20": 7.17,
+    "slate_judged_pos/neg": [
+     7,
+     4
+    ],
+    "judged@50_pos/neg": [
+     15,
+     10
+    ],
+    "slate_ils@20": 0.135,
+    "slate_top_genre_share@20": 0.3,
+    "diag": {
+     "path": "ranker",
+     "pool": 147,
+     "train_auc": 0.878,
+     "kids_returned": 7,
+     "returned": 50
+    },
+    "weights": {
+     "sim_pos_max": -0.125,
+     "sim_pos_topk": 0.195,
+     "neg_excess_max": -0.044,
+     "neg_excess_topk": -0.151,
+     "cast_pos": -0.232,
+     "cast_neg": 0.131,
+     "crew_pos": 0.473,
+     "crew_neg": -0.482,
+     "kw_pos": 0.276,
+     "kw_neg": -0.237,
+     "genre_lo": 0.112,
+     "lang_lo": 0.098,
+     "decade_lo": 0.403,
+     "rating": -0.063,
+     "log_votes": 0.05,
+     "log_vote_rate": 0.189,
+     "log_pop": 0.069,
+     "age": -0.284
+    }
+   }
+  },
+  {
+   "recipe": "ranker",
+   "kind": "movie",
+   "cutoff": "2026-07-01",
+   "params": {
+    "kids_genre_cap": 0.15
+   },
+   "out": {
+    "recipe": "ranker",
+    "kind": "movie",
+    "cutoff": "2026-07-01",
+    "ctx": {
+     "lib": 31,
+     "eng": 23,
+     "dis": 33,
+     "rej": 3
+    },
+    "auc_all": [
+     0.5129,
+     0.0742,
+     42,
+     24
+    ],
+    "auc_imp": [
+     0.6944,
+     0.1301,
+     9,
+     8
+    ],
+    "future_recall@20": 0.1667,
+    "future_recall@50": 0.375,
+    "future_n": 24,
+    "slate_kids@20": 3,
+    "slate_vote_avg@20": 6.96,
+    "slate_judged_pos/neg": [
+     4,
+     3
+    ],
+    "judged@50_pos/neg": [
+     13,
+     9
+    ],
+    "slate_ils@20": 0.246,
+    "slate_top_genre_share@20": 0.5,
+    "diag": {
+     "path": "ranker",
+     "pool": 134,
+     "train_auc": 0.9079,
+     "kids_returned": 7,
+     "returned": 50
+    },
+    "weights": {
+     "sim_pos_max": -0.123,
+     "sim_pos_topk": 0.298,
+     "neg_excess_max": -0.137,
+     "neg_excess_topk": 0.404,
+     "cast_pos": -0.26,
+     "cast_neg": 0.003,
+     "crew_pos": 0.385,
+     "crew_neg": -0.565,
+     "kw_pos": 0.366,
+     "kw_neg": -0.239,
+     "genre_lo": 0.175,
+     "lang_lo": 0.272,
+     "decade_lo": 0.279,
+     "rating": -0.047,
+     "log_votes": 0.072,
+     "log_vote_rate": 0.062,
+     "log_pop": 0.047,
+     "age": -0.295
+    }
+   }
+  },
+  {
+   "recipe": "ranker",
+   "kind": "tv",
+   "cutoff": "2026-06-15",
+   "params": {
+    "kids_genre_cap": 0.15
+   },
+   "out": {
+    "recipe": "ranker",
+    "kind": "tv",
+    "cutoff": "2026-06-15",
+    "ctx": {
+     "lib": 13,
+     "eng": 5,
+     "dis": 14,
+     "rej": 1
+    },
+    "auc_all": [
+     0.6696,
+     0.0893,
+     28,
+     12
+    ],
+    "auc_imp": [
+     0.8125,
+     0.1638,
+     4,
+     4
+    ],
+    "future_recall@20": 0.2667,
+    "future_recall@50": 0.6,
+    "future_n": 15,
+    "slate_kids@20": 3,
+    "slate_vote_avg@20": 7.13,
+    "slate_judged_pos/neg": [
+     5,
+     1
+    ],
+    "judged@50_pos/neg": [
+     19,
+     5
+    ],
+    "slate_ils@20": 0.127,
+    "slate_top_genre_share@20": 0.25,
+    "diag": {
+     "path": "ranker",
+     "pool": 74,
+     "train_auc": 0.8796,
+     "kids_returned": 7,
+     "returned": 50
+    },
+    "weights": {
+     "sim_pos_max": -0.068,
+     "sim_pos_topk": 0.238,
+     "neg_excess_max": 0.056,
+     "neg_excess_topk": -0.13,
+     "cast_pos": -0.363,
+     "cast_neg": -0.074,
+     "crew_pos": 0.251,
+     "crew_neg": -0.351,
+     "kw_pos": 0.392,
+     "kw_neg": -0.106,
+     "genre_lo": -0.0,
+     "lang_lo": 0.131,
+     "decade_lo": 0.28,
+     "rating": -0.017,
+     "log_votes": 0.035,
+     "log_vote_rate": 0.098,
+     "log_pop": 0.18,
+     "age": -0.258
+    }
+   }
+  },
+  {
+   "recipe": "ranker",
+   "kind": "tv",
+   "cutoff": "2026-07-01",
+   "params": {
+    "kids_genre_cap": 0.15
+   },
+   "out": {
+    "recipe": "ranker",
+    "kind": "tv",
+    "cutoff": "2026-07-01",
+    "ctx": {
+     "lib": 16,
+     "eng": 8,
+     "dis": 17,
+     "rej": 1
+    },
+    "auc_all": [
+     0.5573,
+     0.1051,
+     23,
+     11
+    ],
+    "auc_imp": [
+     0.5625,
+     0.2146,
+     4,
+     4
+    ],
+    "future_recall@20": 0.0769,
+    "future_recall@50": 0.6923,
+    "future_n": 13,
+    "slate_kids@20": 3,
+    "slate_vote_avg@20": 6.99,
+    "slate_judged_pos/neg": [
+     3,
+     0
+    ],
+    "judged@50_pos/neg": [
+     15,
+     7
+    ],
+    "slate_ils@20": 0.124,
+    "slate_top_genre_share@20": 0.25,
+    "diag": {
+     "path": "ranker",
+     "pool": 68,
+     "train_auc": 0.8878,
+     "kids_returned": 7,
+     "returned": 50
+    },
+    "weights": {
+     "sim_pos_max": 0.058,
+     "sim_pos_topk": 0.214,
+     "neg_excess_max": -0.044,
+     "neg_excess_topk": 0.047,
+     "cast_pos": -0.181,
+     "cast_neg": -0.162,
+     "crew_pos": 0.465,
+     "crew_neg": -0.381,
+     "kw_pos": 0.448,
+     "kw_neg": -0.039,
+     "genre_lo": -0.03,
+     "lang_lo": 0.208,
+     "decade_lo": 0.231,
+     "rating": -0.017,
+     "log_votes": -0.042,
+     "log_vote_rate": 0.084,
+     "log_pop": 0.063,
+     "age": -0.32
+    }
+   }
+  },
+  {
+   "recipe": "fused",
+   "kind": "movie",
+   "cutoff": "2026-06-15",
+   "params": {},
+   "out": {
+    "recipe": "fused",
+    "kind": "movie",
+    "cutoff": "2026-06-15",
+    "ctx": {
+     "lib": 25,
+     "eng": 17,
+     "dis": 25,
+     "rej": 1
+    },
+    "auc_all": [
+     0.6821,
+     0.0604,
+     51,
+     28
+    ],
+    "auc_imp": [
+     0.5833,
+     0.1424,
+     8,
+     9
+    ],
+    "future_recall@20": 0.2414,
+    "future_recall@50": 0.5172,
+    "future_n": 29,
+    "slate_kids@20": 4,
+    "slate_vote_avg@20": 7.32,
+    "slate_judged_pos/neg": [
+     9,
+     0
+    ],
+    "judged@50_pos/neg": [
+     19,
+     4
+    ],
+    "slate_ils@20": 0.289,
+    "slate_top_genre_share@20": 0.45,
+    "diag": {
+     "path": "fused",
+     "raw": 237,
+     "kept": 158,
+     "kids_returned": 15,
+     "returned": 50
+    },
+    "weights": {
+     "content": 1.0,
+     "cast": 0.7,
+     "crew": 0.5
+    }
+   }
+  },
+  {
+   "recipe": "fused",
+   "kind": "movie",
+   "cutoff": "2026-07-01",
+   "params": {},
+   "out": {
+    "recipe": "fused",
+    "kind": "movie",
+    "cutoff": "2026-07-01",
+    "ctx": {
+     "lib": 31,
+     "eng": 23,
+     "dis": 33,
+     "rej": 3
+    },
+    "auc_all": [
+     0.6667,
+     0.0671,
+     42,
+     24
+    ],
+    "auc_imp": [
+     0.5972,
+     0.1406,
+     9,
+     8
+    ],
+    "future_recall@20": 0.375,
+    "future_recall@50": 0.625,
+    "future_n": 24,
+    "slate_kids@20": 5,
+    "slate_vote_avg@20": 7.09,
+    "slate_judged_pos/neg": [
+     12,
+     0
+    ],
+    "judged@50_pos/neg": [
+     19,
+     3
+    ],
+    "slate_ils@20": 0.361,
+    "slate_top_genre_share@20": 0.55,
+    "diag": {
+     "path": "fused",
+     "raw": 237,
+     "kept": 150,
+     "kids_returned": 16,
+     "returned": 50
+    },
+    "weights": {
+     "content": 1.0,
+     "cast": 0.7,
+     "crew": 0.5
+    }
+   }
+  },
+  {
+   "recipe": "fused",
+   "kind": "tv",
+   "cutoff": "2026-06-15",
+   "params": {},
+   "out": {
+    "recipe": "fused",
+    "kind": "tv",
+    "cutoff": "2026-06-15",
+    "ctx": {
+     "lib": 13,
+     "eng": 5,
+     "dis": 14,
+     "rej": 1
+    },
+    "auc_all": [
+     0.6815,
+     0.088,
+     28,
+     12
+    ],
+    "auc_imp": [
+     0.375,
+     0.2087,
+     4,
+     4
+    ],
+    "future_recall@20": 0.3333,
+    "future_recall@50": 0.7333,
+    "future_n": 15,
+    "slate_kids@20": 4,
+    "slate_vote_avg@20": 6.89,
+    "slate_judged_pos/neg": [
+     6,
+     2
+    ],
+    "judged@50_pos/neg": [
+     17,
+     5
+    ],
+    "slate_ils@20": 0.259,
+    "slate_top_genre_share@20": 0.4,
+    "diag": {
+     "path": "fused",
+     "raw": 119,
+     "kept": 78,
+     "kids_returned": 6,
+     "returned": 50
+    },
+    "weights": {
+     "content": 1.0,
+     "cast": 0.7,
+     "crew": 0.5
+    }
+   }
+  },
+  {
+   "recipe": "fused",
+   "kind": "tv",
+   "cutoff": "2026-07-01",
+   "params": {},
+   "out": {
+    "recipe": "fused",
+    "kind": "tv",
+    "cutoff": "2026-07-01",
+    "ctx": {
+     "lib": 16,
+     "eng": 8,
+     "dis": 17,
+     "rej": 1
+    },
+    "auc_all": [
+     0.7391,
+     0.0864,
+     23,
+     11
+    ],
+    "auc_imp": [
+     0.375,
+     0.2087,
+     4,
+     4
+    ],
+    "future_recall@20": 0.5385,
+    "future_recall@50": 0.7692,
+    "future_n": 13,
+    "slate_kids@20": 6,
+    "slate_vote_avg@20": 7.12,
+    "slate_judged_pos/neg": [
+     7,
+     1
+    ],
+    "judged@50_pos/neg": [
+     15,
+     5
+    ],
+    "slate_ils@20": 0.246,
+    "slate_top_genre_share@20": 0.35,
+    "diag": {
+     "path": "fused",
+     "raw": 119,
+     "kept": 75,
+     "kids_returned": 6,
+     "returned": 50
+    },
+    "weights": {
+     "content": 1.0,
+     "cast": 0.7,
+     "crew": 0.5
+    }
+   }
+  }
+ ]
+}

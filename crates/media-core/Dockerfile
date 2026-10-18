@@ -26,6 +26,8 @@ COPY crates ./crates
 # default. compose interpolates an unset var to an EMPTY string, and empty is
 # a cargo parse error, so normalize empty → unset before building.
 ARG CARGO_BUILD_JOBS
+# C sources: libwebp-sys (lossy WebP) and the bundled SQLite build with the
+# cc crate. The rust slim image already ships gcc + libc6-dev, so no apt step.
 # BuildKit cache mounts make rebuilds INCREMENTAL: target/ + the crate
 # registry persist across builds, so a source change recompiles only the
 # changed crates instead of the whole workspace cold (the load storm that

@@ -25,7 +25,7 @@ import { throwApiError } from '../api/errors'
 // server regardless of where the user clicks from. The LAN URL
 // (http://theemeraldexchange.local:32400/web) was mDNS-only and broke
 // for every household member outside the house.
-const PLEX_WEB_BASE = 'https://app.plex.tv/desktop'
+export const PLEX_URL = 'https://app.plex.tv/desktop'
 const PLEX_LIBRARY_LINKS_PATH = '/api/plex/library-links'
 const PLEX_SERVER_ID_PATH = '/api/plex/server-id'
 
@@ -66,9 +66,9 @@ async function fetchServerId(): Promise<string | null> {
 // is missing (PLEX_SERVER_ID env var unset), falls back to the Plex
 // root URL.
 export function buildPlexDeepLink(serverId: string | null, ratingKey: string): string {
-  if (!serverId) return PLEX_WEB_BASE
+  if (!serverId) return PLEX_URL
   const key = encodeURIComponent(`/library/metadata/${ratingKey}`)
-  return `${PLEX_WEB_BASE}/index.html#!/server/${serverId}/details?key=${key}`
+  return `${PLEX_URL}/index.html#!/server/${serverId}/details?key=${key}`
 }
 
 // Plex search URL — lands the user on Plex web's search results for
@@ -76,7 +76,7 @@ export function buildPlexDeepLink(serverId: string | null, ratingKey: string): s
 // the item, or the library was built with an agent that doesn't emit
 // any of the three external ids we index by).
 export function buildPlexSearchLink(title: string): string {
-  return `${PLEX_WEB_BASE}/index.html#!/search?query=${encodeURIComponent(title)}`
+  return `${PLEX_URL}/index.html#!/search?query=${encodeURIComponent(title)}`
 }
 
 export type LinkLookup = {

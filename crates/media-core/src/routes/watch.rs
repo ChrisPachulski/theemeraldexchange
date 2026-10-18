@@ -68,9 +68,10 @@ pub(super) async fn get_watch(
             let obj = v.as_object_mut().expect("json object");
             match r.media_kind.as_str() {
                 "movie" => {
-                    if let Some((title, poster)) = movie_meta.get(&r.media_id) {
+                    if let Some((title, poster, blurhash)) = movie_meta.get(&r.media_id) {
                         obj.insert("title".into(), json!(title));
                         obj.insert("poster_path".into(), json!(poster));
+                        obj.insert("poster_blurhash".into(), json!(blurhash));
                     }
                 }
                 "episode" => {
@@ -78,6 +79,7 @@ pub(super) async fn get_watch(
                         obj.insert("title".into(), json!(e.episode_title));
                         obj.insert("show_title".into(), json!(e.show_title));
                         obj.insert("poster_path".into(), json!(e.poster_path));
+                        obj.insert("poster_blurhash".into(), json!(e.poster_blurhash));
                         obj.insert("season".into(), json!(e.season));
                         obj.insert("episode".into(), json!(e.episode));
                     }

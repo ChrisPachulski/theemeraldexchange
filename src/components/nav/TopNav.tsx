@@ -1,18 +1,13 @@
 import { useRef } from 'react'
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
-import { authModeFromUser, useAuth } from '../../lib/auth'
+import { useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useRatingGate, useSectionAccess } from '../../lib/hooks/usePolicy'
 import { UserMenu } from '../auth/UserMenu'
-import { usePlexUser } from '../../lib/hooks/usePlexLinks'
+import { PLEX_URL, isPlexUser } from '../../lib/hooks/usePlexLinks'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import './TopNav.css'
-
-// app.plex.tv is Plex's hosted web client — works on AND off network.
-// The LAN URL (http://theemeraldexchange.local:32400/web) was mDNS-only
-// and broke for every household member outside the house.
-const PLEX_URL = 'https://app.plex.tv/desktop'
 
 type NavRoute = Exclude<Route, 'home'>
 
@@ -64,9 +59,9 @@ type Props = {
 
 export function TopNav({ active }: Props) {
   const { transitionTo, navigate } = useNavTransition()
-  const plexUser = usePlexUser()
   const { isAdmin, user } = useAuth()
-  const plexAdmin = isAdmin && user !== null && authModeFromUser(user) === 'plex'
+  const plexUser = isPlexUser(user)
+  const plexAdmin = isAdmin && plexUser
   const limits = useLimits()
   const sections = useSectionAccess()
   const ratingGate = useRatingGate()

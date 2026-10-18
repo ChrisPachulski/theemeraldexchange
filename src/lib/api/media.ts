@@ -6,6 +6,7 @@
 
 import { throwApiError, ApiError } from './errors'
 import { apiUrl } from './base'
+import { mediaImage } from './images'
 import { withTimeout, type RequestOpts } from './timeout'
 import { notifySessionExpiredResponse } from '../sessionExpiry'
 import { getPlaybackPrefs } from '../playbackPrefs'
@@ -64,6 +65,7 @@ type RawMovieRow = {
   file_id: number
   overview?: string | null
   poster_path?: string | null
+  poster_blurhash?: string | null
   content_rating?: string | null
 }
 
@@ -77,6 +79,7 @@ type RawShowRow = {
   imdb_id?: string | null
   overview?: string | null
   poster_path?: string | null
+  poster_blurhash?: string | null
   content_rating?: string | null
 }
 
@@ -109,6 +112,7 @@ type RawMusicAlbum = {
   year: number | null
   track_count: number
   art_url: string | null
+  art_blurhash?: string | null
 }
 
 type RawMusicTrack = {
@@ -134,6 +138,8 @@ export type MediaMovie = {
   fileId: number
   overview: string | null
   posterPath: string | null
+  /** Blurhash of the poster, null until media-core has described it. */
+  posterBlurhash: string | null
   /** MPAA / TV certification from TMDB; null when unrated. */
   contentRating: string | null
 }
@@ -148,6 +154,8 @@ export type MediaShow = {
   imdbId: string | null
   overview: string | null
   posterPath: string | null
+  /** Blurhash of the poster, null until media-core has described it. */
+  posterBlurhash: string | null
   /** MPAA / TV certification from TMDB; null when unrated. */
   contentRating: string | null
 }
@@ -184,8 +192,9 @@ export type MusicAlbum = {
   title: string
   year: number | null
   trackCount: number
-  /** Absolute album-art URL, or null when the scan found no art. */
+  /** Absolute album-art URL (sized for a list row), or null when the scan found no art. */
   artUrl: string | null
+  artBlurhash: string | null
 }
 
 export type MusicTrack = {
@@ -297,6 +306,7 @@ export type WatchEntry = {
   title: string | null
   showTitle: string | null
   posterPath: string | null
+  posterBlurhash: string | null
   season: number | null
   episode: number | null
 }
@@ -311,6 +321,7 @@ type RawWatchRow = {
   title?: string | null
   show_title?: string | null
   poster_path?: string | null
+  poster_blurhash?: string | null
   season?: number | null
   episode?: number | null
 }
@@ -528,6 +539,7 @@ function normMovie(r: RawMovieRow): MediaMovie {
     fileId: r.file_id,
     overview: r.overview ?? null,
     posterPath: r.poster_path ?? null,
+    posterBlurhash: r.poster_blurhash ?? null,
     contentRating: r.content_rating ?? null,
   }
 }
@@ -543,6 +555,7 @@ function normShow(r: RawShowRow): MediaShow {
     imdbId: r.imdb_id ?? null,
     overview: r.overview ?? null,
     posterPath: r.poster_path ?? null,
+    posterBlurhash: r.poster_blurhash ?? null,
     contentRating: r.content_rating ?? null,
   }
 }
@@ -577,6 +590,9 @@ function normMusicArtist(r: RawMusicArtist): MusicArtist {
   return { id: r.id, name: r.name, albumCount: r.album_count }
 }
 
+// The music list's 48px art tile, crisp at 3x.
+const ALBUM_ART_WIDTH = 185
+
 function normMusicAlbum(r: RawMusicAlbum): MusicAlbum {
   return {
     id: r.id,
@@ -584,7 +600,8 @@ function normMusicAlbum(r: RawMusicAlbum): MusicAlbum {
     title: r.title,
     year: r.year ?? null,
     trackCount: r.track_count,
-    artUrl: r.art_url ? apiUrl(r.art_url) : null,
+    artUrl: r.art_url ? mediaImage('album', r.id, ALBUM_ART_WIDTH) : null,
+    artBlurhash: r.art_blurhash ?? null,
   }
 }
 
@@ -667,6 +684,7 @@ function normWatch(r: RawWatchRow): WatchEntry {
     title: r.title ?? null,
     showTitle: r.show_title ?? null,
     posterPath: r.poster_path ?? null,
+    posterBlurhash: r.poster_blurhash ?? null,
     season: r.season ?? null,
     episode: r.episode ?? null,
   }

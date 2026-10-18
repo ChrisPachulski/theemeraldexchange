@@ -708,8 +708,13 @@ mod tests {
         let db = crate::db::Db::connect_memory().await.unwrap();
         let mut config = Config::from_env().unwrap();
         config.transcoder_url = Some(url.to_string());
+        config.tmdb_image_base = crate::routes::testsupport::DEAD_ORIGIN.into();
         AppState {
             db,
+            artwork: Arc::new(crate::artwork::Store::open(
+                config.images_dir.clone(),
+                config.image_cache_bytes,
+            )),
             config: Arc::new(config),
             tmdb: crate::tmdb::TmdbClient::new(None),
             scanning: Arc::new(std::sync::atomic::AtomicBool::new(false)),

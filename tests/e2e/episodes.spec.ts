@@ -233,12 +233,12 @@ test('Browse mode shelves the library and its genre chips open the filtered grid
 
 test('Browse mode on TV resumes a show from its Continue watching card', async ({ page }) => {
   await setup(page, { watch: [watchRow('episode', 102, 300, 1500)] })
-  // A real 500px-wide poster: an unsized shelf card would stretch to it.
-  const poster = 'https://image.tmdb.org/t/p/original/test-show.jpg'
+  // A real 500px-wide poster: an unsized shelf card would stretch to it. The
+  // TMDB remoteUrl is served by the image route, never fetched from TMDB.
   await page.route('**/api/sonarr/api/v3/series', (r) =>
-    r.fulfill(json([{ ...SHOW, images: [{ coverType: 'poster', remoteUrl: poster }] }, EMPTY_SHOW])),
+    r.fulfill(json([{ ...SHOW, images: [{ coverType: 'poster', remoteUrl: 'https://image.tmdb.org/t/p/original/testshow.jpg' }] }, EMPTY_SHOW])),
   )
-  await page.route(poster, (r) =>
+  await page.route('**/api/media/images/tmdb/testshow.jpg**', (r) =>
     r.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="500" height="750"/>' }),
   )
   await page.goto('/#/tv')

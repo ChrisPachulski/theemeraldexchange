@@ -1,0 +1,64 @@
+[package]
+name = "recommender"
+version = "0.1.0"
+edition.workspace = true
+license-file.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "The Emerald Exchange recommender: owns exchange.db (catalog, embeddings, household signals) and serves /score and /events/* to the gateway."
+publish = false
+
+[[bin]]
+name = "eex-recommender"
+path = "src/main.rs"
+
+[lib]
+name = "recommender"
+path = "src/lib.rs"
+
+[dependencies]
+# The schema_migrations migrator, PrincipalMode and verify_principal.
+media-core = { path = "../media-core" }
+# parse_sub and internal-principal claims.
+emerald-contracts = { path = "../emerald-contracts" }
+axum = { version = "0.8", features = ["json"] }
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+# /metrics/funnel reads its query by hand (FastAPI semantics: last value wins).
+form_urlencoded = "1"
+sentry = { version = "0.49", default-features = false, features = ["backtrace", "contexts", "panic", "rustls", "reqwest", "tracing"] }
+sentry-tracing = "0.49"
+# The TMDB ingest client (redirects off, the api_key scrubbed from errors).
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
+# The sqlite sqlx links; sqlite-vec registers on it through sqlite3_auto_extension.
+libsqlite3-sys = "0.37"
+# Pinned to the Python lock's sqlite-vec so the vec0 shadow tables match.
+sqlite-vec = "=0.1.9"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+# numpy PCG64 (same LCG + XSL-RR output) for the ranker's seeded draws.
+rand_pcg = "0.10"
+chrono = "0.4"
+# MiniLM on CPU: BertModel over the pinned model.safetensors + tokenizer.json.
+candle-core = "0.11"
+candle-nn = "0.11"
+candle-transformers = "0.11"
+# fancy-regex instead of the default onig/esaxx C++ builds.
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
+# The encoder's capped thread pool.
+rayon = "1"
+# featurize's perturbation seeds (blake2s, 4-byte digest).
+blake2 = "0.10"
+# verify-embedding: baseline digest and payload, and its scratch DB.
+sha2.workspace = true
+base64.workspace = true
+tempfile = "3"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+# Paused clocks for the TMDB rate-limit pacing test.
+tokio = { version = "1", features = ["test-util"] }
+tower = { version = "0.5", features = ["util"] }

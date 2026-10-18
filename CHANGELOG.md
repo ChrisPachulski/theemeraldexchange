@@ -17,6 +17,15 @@ per-feature release; the current package version is 0.9.0.
   `409 last_admin`, and is advertised through `accountDeletionEnabled` on
   `/api/limits` (App Store Guideline 5.1.1(v)).
 - media-core `DELETE /api/media/watch` erases the acting user's watch rows.
+- Own artwork pipeline: media-core serves `GET /api/media/images/{kind}/{id}?w=`
+  (`kind` = `tmdb`, `album`, `audiobook` or `photo`) as a resized lossy WebP
+  (EXIF-oriented, widths 92 to 1920) from a disk-capped LRU store under
+  `/data/images` (`MEDIA_IMAGE_CACHE_MB`, default 2048). TMDB originals are
+  fetched once (library posters after each scan, the rest on first view), and
+  catalog rows carry blurhash placeholders (`poster_blurhash` on movies and
+  shows, `art_blurhash` on albums and audiobooks, `blurhash` on photos). Album and audiobook covers come from folder
+  images or the tag picture via lofty instead of an ffmpeg extraction.
+  Migration 0016 adds the `images` table and `audiobooks.art_path`.
 - Owner invites: `POST /api/admin/invites` accepts `role: 'admin'`, and the
   member who redeems that invite (or is re-granted by it) becomes an admin.
   Migration 0012 adds `invites.role`.
@@ -65,6 +74,12 @@ per-feature release; the current package version is 0.9.0.
   deploy bind-mounts the private YouTube resolver binary over the image's stub.
 - A tracked pre-push hook (`npm run hooks:install`) runs rustfmt/clippy and
   tsc/eslint on what the push touches.
+- The SPA loads TMDB posters, cast and credit photos and album art through the
+  media-core image route with `srcset` and blurhash placeholders; the
+  hardcoded `image.tmdb.org` bases and the old album-art route are gone, and
+  nothing falls back to TMDB's CDN (Sonarr's TVDB images and YouTube thumbnails
+  still load from their sources). Without media-core, TMDB posters show the
+  letter tiles.
 
 ## 2026-09
 

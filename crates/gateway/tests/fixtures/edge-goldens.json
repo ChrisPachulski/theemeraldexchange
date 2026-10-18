@@ -1,0 +1,490 @@
+{
+  "env": {
+    "SESSION_SECRET": "gateway-goldens-session-secret-0123456789abcdef",
+    "STREAM_TOKEN_SECRET": "gateway-goldens-stream-secret-0123456789abcdef",
+    "DEVICE_TOKEN_SECRET": "gateway-goldens-device-secret-0123456789abcdef",
+    "INTERNAL_PRINCIPAL_SECRET": "gateway-goldens-internal-secret-0123456789abcdef",
+    "ADMIN_SUBS": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+    "ALLOWED_ORIGINS": "https://app.example",
+    "SERVE_SPA": "1",
+    "SONARR_API_KEY": "golden-sonarr-key",
+    "DEFAULT_SONARR_ROOT_FOLDER_PATH": "/tv",
+    "DEFAULT_ROOT_FOLDER_PATH": "/media",
+    "USE_MEDIA_CORE": "1",
+    "MUSIC_LIBRARY_PATHS": "/music",
+    "DVR_ENABLED": "1",
+    "MIN_FREE_GB": "50",
+    "MAX_MOVIE_SIZE_GB": "12.5",
+    "DEFAULT_PROFILE_NAME": "Choose Me",
+    "EEX_RELEASE": "golden-sha",
+    "APPLE_CLIENT_ID": "com.example.app",
+    "WORKOS_CLIENT_ID": "client_golden",
+    "WORKOS_API_KEY": "sk_golden",
+    "WORKOS_REDIRECT_URI": "https://api.example/api/auth/workos/callback"
+  },
+  "exchange_versions": [
+    1,
+    2,
+    5
+  ],
+  "member": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+  "spa": {
+    "index": "<!doctype html><title>eex golden</title>",
+    "asset": "console.log(\"golden\")\n"
+  },
+  "scenarios": [
+    {
+      "name": "health",
+      "path": "/api/health",
+      "request_headers": {
+        "X-Request-Id": "golden-health"
+      },
+      "request_id_generated": false,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "golden-health",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"ok\":true}",
+      "logs": [
+        "[app] <-- GET /api/health [golden-health] ua=\"-\"",
+        "[app] --> GET /api/health 200 <ms>ms [golden-health]"
+      ]
+    },
+    {
+      "name": "health with a hostile Origin",
+      "path": "/api/health",
+      "request_headers": {
+        "Origin": "https://evil.example"
+      },
+      "request_id_generated": true,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"ok\":true}",
+      "logs": [
+        "[app] <-- GET /api/health [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/health 200 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "health, request id regenerated",
+      "path": "/api/health",
+      "request_headers": {
+        "X-Request-Id": "bad id!"
+      },
+      "request_id_generated": true,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"ok\":true}",
+      "logs": [
+        "[app] <-- GET /api/health [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/health 200 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "cors read exposes Retry-After",
+      "path": "/api/health",
+      "request_headers": {
+        "Origin": "https://app.example"
+      },
+      "request_id_generated": true,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-origin": "https://app.example",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"ok\":true}",
+      "logs": [
+        "[app] <-- GET /api/health [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/health 200 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "limits without a session",
+      "path": "/api/limits",
+      "request_id_generated": true,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"minFreeGb\":50,\"maxMovieGb\":12.5,\"maxTvGbPerEpisode\":5,\"useLocalRecommender\":false,\"defaultProfileName\":\"choose me\",\"defaultSonarrRootFolderPath\":null,\"defaultRadarrRootFolderPath\":null,\"iptvEnabled\":true,\"mediaEnabled\":true,\"musicEnabled\":true,\"youtubeEnabled\":false,\"sonarrEnabled\":true,\"radarrEnabled\":false,\"sabEnabled\":false,\"accountDeletionEnabled\":true,\"dvrEnabled\":true}",
+      "logs": [
+        "[app] <-- GET /api/limits [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/limits 200 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "limits with a session",
+      "path": "/api/limits",
+      "cookie": true,
+      "request_id_generated": true,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"minFreeGb\":50,\"maxMovieGb\":12.5,\"maxTvGbPerEpisode\":5,\"useLocalRecommender\":false,\"defaultProfileName\":\"choose me\",\"defaultSonarrRootFolderPath\":\"/tv\",\"defaultRadarrRootFolderPath\":\"/media\",\"iptvEnabled\":true,\"mediaEnabled\":true,\"musicEnabled\":true,\"youtubeEnabled\":false,\"sonarrEnabled\":true,\"radarrEnabled\":false,\"sabEnabled\":false,\"accountDeletionEnabled\":true,\"dvrEnabled\":true}",
+      "logs": [
+        "[app] <-- GET /api/limits [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/limits 200 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "version",
+      "path": "/api/version",
+      "request_id_generated": true,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"server_id\":\"<server_id>\",\"release\":\"golden-sha\",\"auth_modes\":[\"plex\",\"apple\",\"workos\"],\"accepting_device_pairs\":true,\"schemas\":{\"exchange\":{\"current\":5},\"media\":{\"current\":null}}}",
+      "logs": [
+        "[app] <-- GET /api/version [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/version 200 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "cors preflight",
+      "method": "OPTIONS",
+      "path": "/api/settings/anthropic-key",
+      "request_headers": {
+        "Origin": "https://app.example",
+        "Access-Control-Request-Method": "PUT",
+        "Access-Control-Request-Headers": "content-type,x-eex-expected-sub"
+      },
+      "request_id_generated": true,
+      "status": 204,
+      "headers": {
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-origin": "https://app.example",
+        "access-control-allow-credentials": "true",
+        "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+        "access-control-allow-headers": "Content-Type,X-Anthropic-Api-Key,X-EEX-Expected-Sub,Authorization,X-App-Version",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "",
+      "logs": [
+        "[app] <-- OPTIONS /api/settings/anthropic-key [<request-id>] ua=\"-\"",
+        "[app] --> OPTIONS /api/settings/anthropic-key 204 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "redacted log line",
+      "path": "/api/nope?t=stream-secret&token=tok&code=c0de&inviteCode=inv&id_token=eyJx&ok=1",
+      "request_headers": {
+        "X-Request-Id": "golden-log",
+        "User-Agent": "golden \"agent\" aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "request_id_generated": false,
+      "status": 404,
+      "headers": {
+        "content-type": "text/plain; charset=UTF-8",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "golden-log",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "404 Not Found",
+      "logs": [
+        "[app] <-- GET /api/nope?t=[redacted]&token=[redacted]&code=[redacted]&inviteCode=[redacted]&id_token=[redacted]&ok=1 [golden-log] ua=\"golden agent aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+        "[app] --> GET /api/nope?t=[redacted]&token=[redacted]&code=[redacted]&inviteCode=[redacted]&id_token=[redacted]&ok=1 404 <ms>ms [golden-log]"
+      ]
+    },
+    {
+      "name": "unknown /api path",
+      "path": "/api/definitely-not-a-route",
+      "request_id_generated": true,
+      "status": 404,
+      "headers": {
+        "content-type": "text/plain; charset=UTF-8",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "404 Not Found",
+      "logs": [
+        "[app] <-- GET /api/definitely-not-a-route [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/definitely-not-a-route 404 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "413 chunked",
+      "method": "POST",
+      "path": "/api/media/watch",
+      "cookie": true,
+      "request_headers": {
+        "Origin": "https://app.example",
+        "Content-Type": "application/json"
+      },
+      "chunked_bytes": 1048577,
+      "request_id_generated": true,
+      "status": 413,
+      "headers": {
+        "content-type": "application/json",
+        "x-request-id": "<request-id>"
+      },
+      "body": "{\"error\":\"payload_too_large\"}",
+      "logs": []
+    },
+    {
+      "name": "413 content-length",
+      "method": "POST",
+      "path": "/api/iptv/anything",
+      "cookie": true,
+      "request_headers": {
+        "Origin": "https://app.example",
+        "Content-Type": "application/json"
+      },
+      "body_bytes": 1048577,
+      "request_id_generated": true,
+      "status": 413,
+      "headers": {
+        "content-type": "application/json",
+        "x-request-id": "<request-id>"
+      },
+      "body": "{\"error\":\"payload_too_large\"}",
+      "logs": []
+    },
+    {
+      "name": "csrf reject",
+      "method": "POST",
+      "path": "/api/auth/logout",
+      "cookie": true,
+      "request_headers": {
+        "Origin": "https://evil.example"
+      },
+      "request_id_generated": true,
+      "status": 403,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"error\":\"forbidden\",\"reason\":\"bad_origin\"}",
+      "logs": [
+        "[app] <-- POST /api/auth/logout [<request-id>] ua=\"-\"",
+        "[app] --> POST /api/auth/logout 403 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "spa index",
+      "path": "/",
+      "request_id_generated": true,
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "<!doctype html><title>eex golden</title>",
+      "logs": [
+        "[app] <-- GET / [<request-id>] ua=\"-\"",
+        "[app] --> GET / 200 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "spa deep link",
+      "path": "/settings/some/deep/route",
+      "request_id_generated": true,
+      "status": 200,
+      "headers": {
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "<!doctype html><title>eex golden</title>",
+      "logs": [
+        "[app] <-- GET /settings/some/deep/route [<request-id>] ua=\"-\"",
+        "[app] --> GET /settings/some/deep/route 200 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "spa asset",
+      "path": "/assets/app.js",
+      "request_id_generated": true,
+      "status": 200,
+      "headers": {
+        "content-type": "text/javascript; charset=utf-8",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "console.log(\"golden\")\n",
+      "logs": [
+        "[app] <-- GET /assets/app.js [<request-id>] ua=\"-\"",
+        "[app] --> GET /assets/app.js 200 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "plex library-links without a session",
+      "path": "/api/plex/library-links",
+      "request_id_generated": true,
+      "status": 401,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"error\":\"unauthenticated\"}",
+      "logs": [
+        "[app] <-- GET /api/plex/library-links [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/plex/library-links 401 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "plex library-links as a member, no plex token",
+      "path": "/api/plex/library-links",
+      "cookie": true,
+      "request_id_generated": true,
+      "status": 409,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"error\":\"no_plex_token\"}",
+      "logs": [
+        "[app] <-- GET /api/plex/library-links [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/plex/library-links 409 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "plex server-id as a member",
+      "path": "/api/plex/server-id",
+      "cookie": true,
+      "request_id_generated": true,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"serverId\":null}",
+      "logs": [
+        "[app] <-- GET /api/plex/server-id [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/plex/server-id 200 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "plex remote-access as a member",
+      "path": "/api/plex/remote-access",
+      "cookie": true,
+      "request_id_generated": true,
+      "status": 403,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+      "logs": [
+        "[app] <-- GET /api/plex/remote-access [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/plex/remote-access 403 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "plex users as a member",
+      "path": "/api/users",
+      "cookie": true,
+      "request_id_generated": true,
+      "status": 403,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+      "logs": [
+        "[app] <-- GET /api/users [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/users 403 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "plex users without a session",
+      "path": "/api/users",
+      "request_id_generated": true,
+      "status": 401,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"error\":\"unauthenticated\"}",
+      "logs": [
+        "[app] <-- GET /api/users [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/users 401 <ms>ms [<request-id>]"
+      ]
+    }
+  ]
+}

@@ -1,8 +1,9 @@
 name: E2E Integration
 
 # Real client↔server e2e tiers (playwright.config.ts, PW_INTEGRATION=1):
-#   - `integration`     — real Hono backend + Vite, upstreams stubbed at the
-#                         HTTP boundary, zero route mocks.
+#   - `integration`     — the real Rust gateway (eex-gateway) + Vite,
+#                         upstreams stubbed at the HTTP boundary, zero route
+#                         mocks.
 #   - `playback-chrome` — real-codec MSE playback gate on BRANDED Chrome
 #                         (bundled Chromium lacks H.264/AAC and would
 #                         false-negative the exact grey-box bug class this
@@ -14,10 +15,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'server/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'src/**'
       - 'tests/**'
-      - 'crates/emerald-contracts-napi/**'
       - 'playwright.config.ts'
       - 'vite.config.ts'
       - 'package.json'
@@ -26,10 +28,11 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'server/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'src/**'
       - 'tests/**'
-      - 'crates/emerald-contracts-napi/**'
       - 'playwright.config.ts'
       - 'vite.config.ts'
       - 'package.json'
@@ -56,13 +59,28 @@ jobs:
           node-version: '26'
           cache: npm
 
-      # The @emerald/contracts-napi file: dep builds its .node during `npm ci`
-      # (prepare script). The crate's rust-version is 1.96, so the runner's
-      # default rust is too old — pin 1.96 explicitly, otherwise the addon
-      # silently fails to build and the real backend can't boot.
+      # The integration tier boots the real gateway binary. The workspace's
+      # rust-version is 1.96, so the runner's default rust is too old — pin
+      # 1.96 explicitly.
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
         with:
           toolchain: '1.96'
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-e2e-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-e2e-
+            ${{ runner.os }}-cargo-
+
+      # tests/e2e/helpers/integrationServer.ts starts target/debug/eex-gateway.
+      - name: Build the gateway
+        run: cargo build -p gateway --bin eex-gateway
 
       - name: Install dependencies
         run: npm ci
@@ -84,14 +102,14 @@ jobs:
       - name: Install real Chrome (proprietary codecs)
         run: npx playwright install chrome
 
-      # The bare self-host journey boots the production server, whose runtime
-      # contract intentionally rejects FFmpeg versions below 6.0.
+      # The gateway's boot gate refuses an ffprobe below 6.0 (the trailer mux
+      # needs it); the runner's apt ships 6.x.
       - name: Install FFmpeg runtime
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends --yes ffmpeg
 
-      - name: Integration tier (real backend, zero mocks)
+      - name: Integration tier (real Rust gateway, zero mocks)
         run: npm run test:e2e:integration
 
       - name: Playback tier (real-Chrome MSE gate)

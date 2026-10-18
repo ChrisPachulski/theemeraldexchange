@@ -1,0 +1,3080 @@
+{
+  "env": {
+    "SESSION_SECRET": "tmdb-goldens-session-secret-0123456789abcdef",
+    "STREAM_TOKEN_SECRET": "tmdb-goldens-stream-secret-0123456789abcdef",
+    "DEVICE_TOKEN_SECRET": "tmdb-goldens-device-secret-0123456789abcdef",
+    "INTERNAL_PRINCIPAL_SECRET": "tmdb-goldens-internal-principal-placeholder-zzz",
+    "ALLOWED_ORIGINS": "https://app.example",
+    "SERVE_SPA": "0",
+    "TMDB_API_KEY": "placeholder-tmdb-key",
+    "OMDB_API_KEY": "placeholder-omdb-key"
+  },
+  "members": {
+    "alice": {
+      "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+      "username": "alice",
+      "role": "user"
+    },
+    "admin": {
+      "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "username": "admin",
+      "role": "admin"
+    }
+  },
+  "scenarios": [
+    {
+      "name": "tmdb unauthenticated",
+      "env": {},
+      "unset": [],
+      "upstream": [],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "anon GET /api/tmdb/credits?type=movie&tmdbId=550",
+          "path": "/api/tmdb/credits?type=movie&tmdbId=550",
+          "status": 401,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "anon GET /api/tmdb/trending/movie",
+          "path": "/api/tmdb/trending/movie",
+          "status": 401,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "anon GET /api/tmdb/videos?type=movie&tmdbId=550",
+          "path": "/api/tmdb/videos?type=movie&tmdbId=550",
+          "status": 401,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "anon GET /api/tmdb/related?type=movie&tmdbId=550",
+          "path": "/api/tmdb/related?type=movie&tmdbId=550",
+          "status": 401,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "anon GET /api/tmdb/person/287",
+          "path": "/api/tmdb/person/287",
+          "status": 401,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "anon GET /api/tmdb/person/287/credits",
+          "path": "/api/tmdb/person/287/credits",
+          "status": 401,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "anon GET /api/tmdb/trailer?key=dQw4w9WgXcQ",
+          "path": "/api/tmdb/trailer?key=dQw4w9WgXcQ",
+          "status": 401,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "anon GET /api/tmdb/trailer/dQw4w9WgXcQ/stream.mp4",
+          "path": "/api/tmdb/trailer/dQw4w9WgXcQ/stream.mp4",
+          "status": 401,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "anon GET /api/ratings?ids=tt0903747",
+          "path": "/api/ratings?ids=tt0903747",
+          "status": 401,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "tmdb not configured",
+      "env": {},
+      "unset": [
+        "TMDB_API_KEY"
+      ],
+      "upstream": [],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/credits?type=movie&tmdbId=550",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=movie&tmdbId=550",
+          "status": 503,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_not_configured\"}",
+          "body_len": 31,
+          "body_sum": 3008,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits",
+          "as": "alice",
+          "path": "/api/tmdb/credits",
+          "status": 503,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_not_configured\"}",
+          "body_len": 31,
+          "body_sum": 3008,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trending/movie",
+          "as": "alice",
+          "path": "/api/tmdb/trending/movie",
+          "status": 503,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_not_configured\"}",
+          "body_len": 31,
+          "body_sum": 3008,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trending/anime",
+          "as": "alice",
+          "path": "/api/tmdb/trending/anime",
+          "status": 503,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_not_configured\"}",
+          "body_len": 31,
+          "body_sum": 3008,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/videos?type=movie&tmdbId=550",
+          "as": "alice",
+          "path": "/api/tmdb/videos?type=movie&tmdbId=550",
+          "status": 503,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_not_configured\"}",
+          "body_len": 31,
+          "body_sum": 3008,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/related?type=movie&tmdbId=550",
+          "as": "alice",
+          "path": "/api/tmdb/related?type=movie&tmdbId=550",
+          "status": 503,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_not_configured\"}",
+          "body_len": 31,
+          "body_sum": 3008,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/person/287",
+          "as": "alice",
+          "path": "/api/tmdb/person/287",
+          "status": 503,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_not_configured\"}",
+          "body_len": 31,
+          "body_sum": 3008,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/person/abc/credits",
+          "as": "alice",
+          "path": "/api/tmdb/person/abc/credits",
+          "status": 503,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_not_configured\"}",
+          "body_len": 31,
+          "body_sum": 3008,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "credits movie with an api key",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tmdb/3/movie/550/credits",
+          "status": 200,
+          "text": "{\"id\":550,\"cast\":[{\"name\":\"Edward Norton\",\"character\":\"Narrator\"}],\"crew\":[]}",
+          "ct": "application/json"
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/credits?type=movie&tmdbId=550",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=movie&tmdbId=550",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"id\":550,\"cast\":[{\"name\":\"Edward Norton\",\"character\":\"Narrator\"}],\"crew\":[]}",
+          "body_len": 77,
+          "body_sum": 6451,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/550/credits",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "admin GET /api/tmdb/credits?type=movie&tmdbId=%20550%20&tmdbId=7",
+          "as": "admin",
+          "path": "/api/tmdb/credits?type=movie&tmdbId=%20550%20&tmdbId=7",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"id\":550,\"cast\":[{\"name\":\"Edward Norton\",\"character\":\"Narrator\"}],\"crew\":[]}",
+          "body_len": 77,
+          "body_sum": 6451,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/550/credits",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "credits movie with a read token",
+      "env": {
+        "TMDB_READ_ACCESS_TOKEN": "placeholder-tmdb-read-token",
+        "TMDB_API_KEY": "placeholder-fallback-key"
+      },
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tmdb/3/movie/550/credits",
+          "status": 200,
+          "text": "{\"cast\":[],\"crew\":[]}",
+          "ct": "application/json"
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/credits?type=movie&tmdbId=550",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=movie&tmdbId=550",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"cast\":[],\"crew\":[]}",
+          "body_len": 21,
+          "body_sum": 1772,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/550/credits",
+              "query": "",
+              "authorization": "Bearer placeholder-tmdb-read-token",
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "credits failures",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tmdb/3/movie/550/credits",
+          "status": 500,
+          "text": "{\"status_message\":\"boom\"}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/movie/551/credits",
+          "status": 200,
+          "text": "not json",
+          "ct": "text/html"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/find/8511",
+          "status": 502,
+          "text": "{\"status_message\":\"gone\"}",
+          "ct": "application/json",
+          "query": {
+            "external_source": "tvdb_id"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/find/8512",
+          "status": 200,
+          "text": "{\"tv_results\":[{\"id\":12345}]}",
+          "ct": "application/json",
+          "query": {
+            "external_source": "tvdb_id"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/tv/12345/aggregate_credits",
+          "status": 500,
+          "text": "{\"status_message\":\"nope\"}",
+          "ct": "application/json"
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/credits?type=movie&tmdbId=550",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=movie&tmdbId=550",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_credits_failed\",\"status\":500}",
+          "body_len": 44,
+          "body_sum": 3967,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/550/credits",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=movie&tmdbId=551",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=movie&tmdbId=551",
+          "status": 500,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"internal\"}",
+          "body_len": 20,
+          "body_sum": 1857,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/551/credits",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=tv&tvdbId=8511",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=tv&tvdbId=8511",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_find_failed\",\"status\":502}",
+          "body_len": 41,
+          "body_sum": 3636,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/find/8511",
+              "query": "external_source=tvdb_id&api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=tv&tvdbId=8512",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=tv&tvdbId=8512",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_credits_failed\",\"status\":500}",
+          "body_len": 44,
+          "body_sum": 3967,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/find/8512",
+              "query": "external_source=tvdb_id&api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/tmdb/3/tv/12345/aggregate_credits",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=tv&tvdbId=4040",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=tv&tvdbId=4040",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_find_failed\",\"status\":404}",
+          "body_len": 41,
+          "body_sum": 3637,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/find/4040",
+              "query": "external_source=tvdb_id&api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "credits tv",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tmdb/3/find/8511",
+          "status": 200,
+          "text": "{\"movie_results\":[],\"tv_results\":[{\"id\":12345,\"name\":\"Shogun\"}]}",
+          "ct": "application/json",
+          "query": {
+            "external_source": "tvdb_id"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/tv/12345/aggregate_credits",
+          "status": 200,
+          "text": "{\"cast\":[{\"name\":\"Anna Sawai\",\"roles\":[{\"character\":\"Mariko\"}]}],\"crew\":[],\"id\":12345}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/find/99999",
+          "status": 200,
+          "text": "{\"tv_results\":[]}",
+          "ct": "application/json",
+          "query": {
+            "external_source": "tvdb_id"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/find/99998",
+          "status": 200,
+          "text": "{\"tv_results\":[{\"id\":0}]}",
+          "ct": "application/json",
+          "query": {
+            "external_source": "tvdb_id"
+          }
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/credits?type=tv&tvdbId=8511",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=tv&tvdbId=8511",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"cast\":[{\"name\":\"Anna Sawai\",\"roles\":[{\"character\":\"Mariko\"}]}],\"crew\":[],\"id\":12345}",
+          "body_len": 86,
+          "body_sum": 7073,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/find/8511",
+              "query": "external_source=tvdb_id&api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/tmdb/3/tv/12345/aggregate_credits",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=tv&tvdbId=99999",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=tv&tvdbId=99999",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"cast\":[],\"crew\":[]}",
+          "body_len": 21,
+          "body_sum": 1772,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/find/99999",
+              "query": "external_source=tvdb_id&api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=tv&tvdbId=99998",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=tv&tvdbId=99998",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"cast\":[],\"crew\":[]}",
+          "body_len": 21,
+          "body_sum": 1772,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/find/99998",
+              "query": "external_source=tvdb_id&api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "credits malformed queries",
+      "env": {},
+      "unset": [],
+      "upstream": [],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/credits",
+          "as": "alice",
+          "path": "/api/tmdb/credits",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_query\"}",
+          "body_len": 25,
+          "body_sum": 2400,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=tv",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=tv",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_tvdbId\"}",
+          "body_len": 26,
+          "body_sum": 2439,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=movie",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=movie",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_tmdbId\"}",
+          "body_len": 26,
+          "body_sum": 2430,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=movie&tmdbId=abc",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=movie&tmdbId=abc",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_tmdbId\"}",
+          "body_len": 26,
+          "body_sum": 2430,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=movie&tmdbId=-5",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=movie&tmdbId=-5",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_tmdbId\"}",
+          "body_len": 26,
+          "body_sum": 2430,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=movie&tmdbId=1.5",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=movie&tmdbId=1.5",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_tmdbId\"}",
+          "body_len": 26,
+          "body_sum": 2430,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=movie&tmdbId=9007199254740993",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=movie&tmdbId=9007199254740993",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_tmdbId\"}",
+          "body_len": 26,
+          "body_sum": 2430,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=tv&tvdbId=0",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=tv&tvdbId=0",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_tvdbId\"}",
+          "body_len": 26,
+          "body_sum": 2439,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/credits?type=TV&tvdbId=1",
+          "as": "alice",
+          "path": "/api/tmdb/credits?type=TV&tvdbId=1",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_query\"}",
+          "body_len": 25,
+          "body_sum": 2400,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "person",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tmdb/3/person/287",
+          "status": 200,
+          "text": "{\"id\":287,\"name\":\"Brad Pitt\",\"profile_path\":\"/bp.jpg\",\"biography\":\"Actor.\",\"known_for_department\":\"Acting\",\"birthday\":\"1963-12-18\"}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/person/287/combined_credits",
+          "status": 200,
+          "text": "{\"id\":287,\"cast\":[{\"id\":1877,\"media_type\":\"tv\",\"name\":\"True Detective\",\"poster_path\":\"/td.jpg\",\"first_air_date\":\"2014-01-12\",\"character\":\"Self\",\"vote_average\":6.1,\"popularity\":9},{\"id\":550,\"media_type\":\"movie\",\"title\":\"Fight Club\",\"poster_path\":\"/fc.jpg\",\"release_date\":\"1999-10-15\",\"character\":\"Tyler Durden\",\"vote_average\":8.4,\"popularity\":42},{\"id\":999,\"media_type\":\"movie\",\"poster_path\":\"/x.jpg\",\"character\":\"no-title-dropped\"},{\"id\":5,\"media_type\":\"person\",\"name\":\"Not a title\",\"popularity\":99},{\"id\":6,\"media_type\":\"movie\",\"title\":\"Tie A\",\"vote_average\":5,\"popularity\":9},{\"id\":7,\"media_type\":\"movie\",\"title\":\"Tie B\",\"vote_average\":7,\"popularity\":9},{\"id\":8,\"media_type\":\"movie\",\"title\":\"\",\"name\":\"Named\",\"popularity\":1},{\"media_type\":\"tv\",\"name\":\"No id\"}],\"crew\":[]}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/person/288",
+          "status": 200,
+          "text": "{\"name\":\"Sparse\"}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/person/288/combined_credits",
+          "status": 200,
+          "text": "{}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/person/289",
+          "status": 500,
+          "text": "{\"status_message\":\"boom\"}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/person/290",
+          "status": 200,
+          "text": "{\"id\":290,\"name\":\"X\"}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/person/290/combined_credits",
+          "status": 500,
+          "text": "{\"status_message\":\"nope\"}",
+          "ct": "application/json"
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/person/287",
+          "as": "alice",
+          "path": "/api/tmdb/person/287",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"id\":287,\"name\":\"Brad Pitt\",\"profile_path\":\"/bp.jpg\",\"biography\":\"Actor.\",\"known_for_department\":\"Acting\",\"cast\":[{\"id\":550,\"media_type\":\"movie\",\"title\":\"Fight Club\",\"name\":null,\"poster_path\":\"/fc.jpg\",\"release_date\":\"1999-10-15\",\"first_air_date\":null,\"character\":\"Tyler Durden\",\"vote_average\":8.4},{\"id\":7,\"media_type\":\"movie\",\"title\":\"Tie B\",\"name\":null,\"poster_path\":null,\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":7},{\"id\":1877,\"media_type\":\"tv\",\"title\":null,\"name\":\"True Detective\",\"poster_path\":\"/td.jpg\",\"release_date\":null,\"first_air_date\":\"2014-01-12\",\"character\":\"Self\",\"vote_average\":6.1},{\"id\":6,\"media_type\":\"movie\",\"title\":\"Tie A\",\"name\":null,\"poster_path\":null,\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":5},{\"id\":8,\"media_type\":\"movie\",\"title\":\"\",\"name\":\"Named\",\"poster_path\":null,\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"media_type\":\"tv\",\"title\":null,\"name\":\"No id\",\"poster_path\":null,\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null}]}",
+          "body_len": 1086,
+          "body_sum": 93962,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/person/287",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/tmdb/3/person/287/combined_credits",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/person/287/credits",
+          "as": "alice",
+          "path": "/api/tmdb/person/287/credits",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"cast\":[{\"id\":550,\"media_type\":\"movie\",\"title\":\"Fight Club\",\"name\":null,\"poster_path\":\"/fc.jpg\",\"release_date\":\"1999-10-15\",\"first_air_date\":null,\"character\":\"Tyler Durden\",\"vote_average\":8.4},{\"id\":7,\"media_type\":\"movie\",\"title\":\"Tie B\",\"name\":null,\"poster_path\":null,\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":7},{\"id\":1877,\"media_type\":\"tv\",\"title\":null,\"name\":\"True Detective\",\"poster_path\":\"/td.jpg\",\"release_date\":null,\"first_air_date\":\"2014-01-12\",\"character\":\"Self\",\"vote_average\":6.1},{\"id\":6,\"media_type\":\"movie\",\"title\":\"Tie A\",\"name\":null,\"poster_path\":null,\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":5},{\"id\":8,\"media_type\":\"movie\",\"title\":\"\",\"name\":\"Named\",\"poster_path\":null,\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"media_type\":\"tv\",\"title\":null,\"name\":\"No id\",\"poster_path\":null,\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null}]}",
+          "body_len": 980,
+          "body_sum": 85066,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/person/287/combined_credits",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/person/288",
+          "as": "alice",
+          "path": "/api/tmdb/person/288",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"name\":\"Sparse\",\"profile_path\":null,\"biography\":null,\"known_for_department\":null,\"cast\":[]}",
+          "body_len": 92,
+          "body_sum": 8493,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/person/288",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/tmdb/3/person/288/combined_credits",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/person/289",
+          "as": "alice",
+          "path": "/api/tmdb/person/289",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_person_failed\",\"status\":500}",
+          "body_len": 43,
+          "body_sum": 3880,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/person/289",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/person/290",
+          "as": "alice",
+          "path": "/api/tmdb/person/290",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_credits_failed\"}",
+          "body_len": 31,
+          "body_sum": 2972,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/person/290",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/tmdb/3/person/290/combined_credits",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/person/290/credits",
+          "as": "alice",
+          "path": "/api/tmdb/person/290/credits",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_credits_failed\"}",
+          "body_len": 31,
+          "body_sum": 2972,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/person/290/combined_credits",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/person/abc",
+          "as": "alice",
+          "path": "/api/tmdb/person/abc",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_personId\"}",
+          "body_len": 28,
+          "body_sum": 2670,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/person/0",
+          "as": "alice",
+          "path": "/api/tmdb/person/0",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_personId\"}",
+          "body_len": 28,
+          "body_sum": 2670,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "person filmography cap",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tmdb/3/person/287",
+          "status": 200,
+          "text": "{\"id\":287,\"name\":\"Brad Pitt\"}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/person/287/combined_credits",
+          "status": 200,
+          "text": "{\"cast\":[{\"id\":1,\"media_type\":\"movie\",\"title\":\"M1\",\"poster_path\":\"/p0.jpg\",\"popularity\":1},{\"id\":2,\"media_type\":\"movie\",\"title\":\"M2\",\"poster_path\":\"/p1.jpg\",\"popularity\":2},{\"id\":3,\"media_type\":\"movie\",\"title\":\"M3\",\"poster_path\":\"/p2.jpg\",\"popularity\":3},{\"id\":4,\"media_type\":\"movie\",\"title\":\"M4\",\"poster_path\":\"/p3.jpg\",\"popularity\":4},{\"id\":5,\"media_type\":\"movie\",\"title\":\"M5\",\"poster_path\":\"/p4.jpg\",\"popularity\":5},{\"id\":6,\"media_type\":\"movie\",\"title\":\"M6\",\"poster_path\":\"/p5.jpg\",\"popularity\":6},{\"id\":7,\"media_type\":\"movie\",\"title\":\"M7\",\"poster_path\":\"/p6.jpg\",\"popularity\":7},{\"id\":8,\"media_type\":\"movie\",\"title\":\"M8\",\"poster_path\":\"/p7.jpg\",\"popularity\":8},{\"id\":9,\"media_type\":\"movie\",\"title\":\"M9\",\"poster_path\":\"/p8.jpg\",\"popularity\":9},{\"id\":10,\"media_type\":\"movie\",\"title\":\"M10\",\"poster_path\":\"/p9.jpg\",\"popularity\":10},{\"id\":11,\"media_type\":\"movie\",\"title\":\"M11\",\"poster_path\":\"/p10.jpg\",\"popularity\":11},{\"id\":12,\"media_type\":\"movie\",\"title\":\"M12\",\"poster_path\":\"/p11.jpg\",\"popularity\":12},{\"id\":13,\"media_type\":\"movie\",\"title\":\"M13\",\"poster_path\":\"/p12.jpg\",\"popularity\":13},{\"id\":14,\"media_type\":\"movie\",\"title\":\"M14\",\"poster_path\":\"/p13.jpg\",\"popularity\":14},{\"id\":15,\"media_type\":\"movie\",\"title\":\"M15\",\"poster_path\":\"/p14.jpg\",\"popularity\":15},{\"id\":16,\"media_type\":\"movie\",\"title\":\"M16\",\"poster_path\":\"/p15.jpg\",\"popularity\":16},{\"id\":17,\"media_type\":\"movie\",\"title\":\"M17\",\"poster_path\":\"/p16.jpg\",\"popularity\":17},{\"id\":18,\"media_type\":\"movie\",\"title\":\"M18\",\"poster_path\":\"/p17.jpg\",\"popularity\":18},{\"id\":19,\"media_type\":\"movie\",\"title\":\"M19\",\"poster_path\":\"/p18.jpg\",\"popularity\":19},{\"id\":20,\"media_type\":\"movie\",\"title\":\"M20\",\"poster_path\":\"/p19.jpg\",\"popularity\":20},{\"id\":21,\"media_type\":\"movie\",\"title\":\"M21\",\"poster_path\":\"/p20.jpg\",\"popularity\":21},{\"id\":22,\"media_type\":\"movie\",\"title\":\"M22\",\"poster_path\":\"/p21.jpg\",\"popularity\":22},{\"id\":23,\"media_type\":\"movie\",\"title\":\"M23\",\"poster_path\":\"/p22.jpg\",\"popularity\":23},{\"id\":24,\"media_type\":\"movie\",\"title\":\"M24\",\"poster_path\":\"/p23.jpg\",\"popularity\":24},{\"id\":25,\"media_type\":\"movie\",\"title\":\"M25\",\"poster_path\":\"/p24.jpg\",\"popularity\":25},{\"id\":26,\"media_type\":\"movie\",\"title\":\"M26\",\"poster_path\":\"/p25.jpg\",\"popularity\":26},{\"id\":27,\"media_type\":\"movie\",\"title\":\"M27\",\"poster_path\":\"/p26.jpg\",\"popularity\":27},{\"id\":28,\"media_type\":\"movie\",\"title\":\"M28\",\"poster_path\":\"/p27.jpg\",\"popularity\":28},{\"id\":29,\"media_type\":\"movie\",\"title\":\"M29\",\"poster_path\":\"/p28.jpg\",\"popularity\":29},{\"id\":30,\"media_type\":\"movie\",\"title\":\"M30\",\"poster_path\":\"/p29.jpg\",\"popularity\":30},{\"id\":31,\"media_type\":\"movie\",\"title\":\"M31\",\"poster_path\":\"/p30.jpg\",\"popularity\":31},{\"id\":32,\"media_type\":\"movie\",\"title\":\"M32\",\"poster_path\":\"/p31.jpg\",\"popularity\":32},{\"id\":33,\"media_type\":\"movie\",\"title\":\"M33\",\"poster_path\":\"/p32.jpg\",\"popularity\":33},{\"id\":34,\"media_type\":\"movie\",\"title\":\"M34\",\"poster_path\":\"/p33.jpg\",\"popularity\":34},{\"id\":35,\"media_type\":\"movie\",\"title\":\"M35\",\"poster_path\":\"/p34.jpg\",\"popularity\":35},{\"id\":36,\"media_type\":\"movie\",\"title\":\"M36\",\"poster_path\":\"/p35.jpg\",\"popularity\":36},{\"id\":37,\"media_type\":\"movie\",\"title\":\"M37\",\"poster_path\":\"/p36.jpg\",\"popularity\":37},{\"id\":38,\"media_type\":\"movie\",\"title\":\"M38\",\"poster_path\":\"/p37.jpg\",\"popularity\":38},{\"id\":39,\"media_type\":\"movie\",\"title\":\"M39\",\"poster_path\":\"/p38.jpg\",\"popularity\":39},{\"id\":40,\"media_type\":\"movie\",\"title\":\"M40\",\"poster_path\":\"/p39.jpg\",\"popularity\":40},{\"id\":41,\"media_type\":\"movie\",\"title\":\"M41\",\"poster_path\":\"/p40.jpg\",\"popularity\":41},{\"id\":42,\"media_type\":\"movie\",\"title\":\"M42\",\"poster_path\":\"/p41.jpg\",\"popularity\":42},{\"id\":43,\"media_type\":\"movie\",\"title\":\"M43\",\"poster_path\":\"/p42.jpg\",\"popularity\":43},{\"id\":44,\"media_type\":\"movie\",\"title\":\"M44\",\"poster_path\":\"/p43.jpg\",\"popularity\":44},{\"id\":45,\"media_type\":\"movie\",\"title\":\"M45\",\"poster_path\":\"/p44.jpg\",\"popularity\":45},{\"id\":46,\"media_type\":\"movie\",\"title\":\"M46\",\"poster_path\":\"/p45.jpg\",\"popularity\":46},{\"id\":47,\"media_type\":\"movie\",\"title\":\"M47\",\"poster_path\":\"/p46.jpg\",\"popularity\":47},{\"id\":48,\"media_type\":\"movie\",\"title\":\"M48\",\"poster_path\":\"/p47.jpg\",\"popularity\":48},{\"id\":49,\"media_type\":\"movie\",\"title\":\"M49\",\"poster_path\":\"/p48.jpg\",\"popularity\":49},{\"id\":50,\"media_type\":\"movie\",\"title\":\"M50\",\"poster_path\":\"/p49.jpg\",\"popularity\":50},{\"id\":51,\"media_type\":\"movie\",\"title\":\"M51\",\"poster_path\":\"/p50.jpg\",\"popularity\":51},{\"id\":52,\"media_type\":\"movie\",\"title\":\"M52\",\"poster_path\":\"/p51.jpg\",\"popularity\":52},{\"id\":53,\"media_type\":\"movie\",\"title\":\"M53\",\"poster_path\":\"/p52.jpg\",\"popularity\":53},{\"id\":54,\"media_type\":\"movie\",\"title\":\"M54\",\"poster_path\":\"/p53.jpg\",\"popularity\":54},{\"id\":55,\"media_type\":\"movie\",\"title\":\"M55\",\"poster_path\":\"/p54.jpg\",\"popularity\":55},{\"id\":56,\"media_type\":\"movie\",\"title\":\"M56\",\"poster_path\":\"/p55.jpg\",\"popularity\":56},{\"id\":57,\"media_type\":\"movie\",\"title\":\"M57\",\"poster_path\":\"/p56.jpg\",\"popularity\":57},{\"id\":58,\"media_type\":\"movie\",\"title\":\"M58\",\"poster_path\":\"/p57.jpg\",\"popularity\":58},{\"id\":59,\"media_type\":\"movie\",\"title\":\"M59\",\"poster_path\":\"/p58.jpg\",\"popularity\":59},{\"id\":60,\"media_type\":\"movie\",\"title\":\"M60\",\"poster_path\":\"/p59.jpg\",\"popularity\":60}]}",
+          "ct": "application/json"
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/person/287",
+          "as": "alice",
+          "path": "/api/tmdb/person/287",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"id\":287,\"name\":\"Brad Pitt\",\"profile_path\":null,\"biography\":null,\"known_for_department\":null,\"cast\":[{\"id\":60,\"media_type\":\"movie\",\"title\":\"M60\",\"name\":null,\"poster_path\":\"/p59.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":59,\"media_type\":\"movie\",\"title\":\"M59\",\"name\":null,\"poster_path\":\"/p58.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":58,\"media_type\":\"movie\",\"title\":\"M58\",\"name\":null,\"poster_path\":\"/p57.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":57,\"media_type\":\"movie\",\"title\":\"M57\",\"name\":null,\"poster_path\":\"/p56.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":56,\"media_type\":\"movie\",\"title\":\"M56\",\"name\":null,\"poster_path\":\"/p55.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":55,\"media_type\":\"movie\",\"title\":\"M55\",\"name\":null,\"poster_path\":\"/p54.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":54,\"media_type\":\"movie\",\"title\":\"M54\",\"name\":null,\"poster_path\":\"/p53.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":53,\"media_type\":\"movie\",\"title\":\"M53\",\"name\":null,\"poster_path\":\"/p52.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":52,\"media_type\":\"movie\",\"title\":\"M52\",\"name\":null,\"poster_path\":\"/p51.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":51,\"media_type\":\"movie\",\"title\":\"M51\",\"name\":null,\"poster_path\":\"/p50.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":50,\"media_type\":\"movie\",\"title\":\"M50\",\"name\":null,\"poster_path\":\"/p49.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":49,\"media_type\":\"movie\",\"title\":\"M49\",\"name\":null,\"poster_path\":\"/p48.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":48,\"media_type\":\"movie\",\"title\":\"M48\",\"name\":null,\"poster_path\":\"/p47.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":47,\"media_type\":\"movie\",\"title\":\"M47\",\"name\":null,\"poster_path\":\"/p46.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":46,\"media_type\":\"movie\",\"title\":\"M46\",\"name\":null,\"poster_path\":\"/p45.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":45,\"media_type\":\"movie\",\"title\":\"M45\",\"name\":null,\"poster_path\":\"/p44.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":44,\"media_type\":\"movie\",\"title\":\"M44\",\"name\":null,\"poster_path\":\"/p43.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":43,\"media_type\":\"movie\",\"title\":\"M43\",\"name\":null,\"poster_path\":\"/p42.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":42,\"media_type\":\"movie\",\"title\":\"M42\",\"name\":null,\"poster_path\":\"/p41.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":41,\"media_type\":\"movie\",\"title\":\"M41\",\"name\":null,\"poster_path\":\"/p40.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":40,\"media_type\":\"movie\",\"title\":\"M40\",\"name\":null,\"poster_path\":\"/p39.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":39,\"media_type\":\"movie\",\"title\":\"M39\",\"name\":null,\"poster_path\":\"/p38.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":38,\"media_type\":\"movie\",\"title\":\"M38\",\"name\":null,\"poster_path\":\"/p37.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":37,\"media_type\":\"movie\",\"title\":\"M37\",\"name\":null,\"poster_path\":\"/p36.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":36,\"media_type\":\"movie\",\"title\":\"M36\",\"name\":null,\"poster_path\":\"/p35.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":35,\"media_type\":\"movie\",\"title\":\"M35\",\"name\":null,\"poster_path\":\"/p34.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":34,\"media_type\":\"movie\",\"title\":\"M34\",\"name\":null,\"poster_path\":\"/p33.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":33,\"media_type\":\"movie\",\"title\":\"M33\",\"name\":null,\"poster_path\":\"/p32.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":32,\"media_type\":\"movie\",\"title\":\"M32\",\"name\":null,\"poster_path\":\"/p31.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":31,\"media_type\":\"movie\",\"title\":\"M31\",\"name\":null,\"poster_path\":\"/p30.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":30,\"media_type\":\"movie\",\"title\":\"M30\",\"name\":null,\"poster_path\":\"/p29.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":29,\"media_type\":\"movie\",\"title\":\"M29\",\"name\":null,\"poster_path\":\"/p28.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":28,\"media_type\":\"movie\",\"title\":\"M28\",\"name\":null,\"poster_path\":\"/p27.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":27,\"media_type\":\"movie\",\"title\":\"M27\",\"name\":null,\"poster_path\":\"/p26.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":26,\"media_type\":\"movie\",\"title\":\"M26\",\"name\":null,\"poster_path\":\"/p25.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":25,\"media_type\":\"movie\",\"title\":\"M25\",\"name\":null,\"poster_path\":\"/p24.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":24,\"media_type\":\"movie\",\"title\":\"M24\",\"name\":null,\"poster_path\":\"/p23.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":23,\"media_type\":\"movie\",\"title\":\"M23\",\"name\":null,\"poster_path\":\"/p22.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":22,\"media_type\":\"movie\",\"title\":\"M22\",\"name\":null,\"poster_path\":\"/p21.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null},{\"id\":21,\"media_type\":\"movie\",\"title\":\"M21\",\"name\":null,\"poster_path\":\"/p20.jpg\",\"release_date\":null,\"first_air_date\":null,\"character\":null,\"vote_average\":null}]}",
+          "body_len": 6543,
+          "body_sum": 569397,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/person/287",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/tmdb/3/person/287/combined_credits",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "trending",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tmdb/3/trending/movie/week",
+          "status": 200,
+          "text": "{\"page\":1,\"results\":[{\"id\":1,\"title\":\"Foo\"}],\"total_pages\":1}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/trending/tv/week",
+          "status": 500,
+          "text": "{\"status_message\":\"boom\"}",
+          "ct": "application/json"
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/trending/movie",
+          "as": "alice",
+          "path": "/api/tmdb/trending/movie",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"page\":1,\"results\":[{\"id\":1,\"title\":\"Foo\"}],\"total_pages\":1}",
+          "body_len": 61,
+          "body_sum": 5070,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/trending/movie/week",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "admin GET /api/tmdb/trending/tv",
+          "as": "admin",
+          "path": "/api/tmdb/trending/tv",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_trending_failed\",\"status\":500}",
+          "body_len": 45,
+          "body_sum": 4076,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/trending/tv/week",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trending/anime",
+          "as": "alice",
+          "path": "/api/tmdb/trending/anime",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_type\"}",
+          "body_len": 24,
+          "body_sum": 2284,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "videos ranking",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tmdb/3/movie/550/videos",
+          "status": 200,
+          "text": "{\"id\":550,\"results\":[{\"key\":\"9bZkp7q19f0\",\"name\":\"Featurette\",\"site\":\"YouTube\",\"type\":\"Featurette\"},{\"key\":\"kJQP7kiw5Fk\",\"name\":\"Teaser\",\"site\":\"YouTube\",\"type\":\"Teaser\"},{\"key\":\"abc123ABC_-\",\"name\":\"Fan Trailer\",\"site\":\"YouTube\",\"type\":\"Trailer\",\"official\":false},{\"key\":\"dQw4w9WgXcQ\",\"name\":\"Official Trailer\",\"site\":\"YouTube\",\"type\":\"Trailer\",\"official\":true},{\"key\":\"12345678901\",\"name\":\"Vimeo clip\",\"site\":\"Vimeo\",\"type\":\"Trailer\"},{\"key\":\"short\",\"name\":\"Bad id\",\"site\":\"YouTube\",\"type\":\"Trailer\"},{\"key\":\"zzzzzzzzzzz\",\"name\":\"Clip\",\"site\":\"YouTube\",\"type\":\"Clip\",\"official\":true},{\"key\":\"yyyyyyyyyyy\",\"site\":\"YouTube\",\"type\":\"Trailer\",\"official\":1}]}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/movie/551/videos",
+          "status": 200,
+          "text": "{}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/movie/552/videos",
+          "status": 500,
+          "text": "{\"error\":\"boom\"}",
+          "ct": "application/json"
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/videos?type=movie&tmdbId=550",
+          "as": "alice",
+          "path": "/api/tmdb/videos?type=movie&tmdbId=550",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"videos\":[{\"key\":\"dQw4w9WgXcQ\",\"name\":\"Official Trailer\",\"type\":\"Trailer\",\"official\":true},{\"key\":\"yyyyyyyyyyy\",\"type\":\"Trailer\",\"official\":1},{\"key\":\"abc123ABC_-\",\"name\":\"Fan Trailer\",\"type\":\"Trailer\",\"official\":false},{\"key\":\"kJQP7kiw5Fk\",\"name\":\"Teaser\",\"type\":\"Teaser\",\"official\":false},{\"key\":\"9bZkp7q19f0\",\"name\":\"Featurette\",\"type\":\"Featurette\",\"official\":false},{\"key\":\"zzzzzzzzzzz\",\"name\":\"Clip\",\"type\":\"Clip\",\"official\":true}]}",
+          "body_len": 438,
+          "body_sum": 37111,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/550/videos",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/videos?type=movie&tmdbId=551",
+          "as": "alice",
+          "path": "/api/tmdb/videos?type=movie&tmdbId=551",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"videos\":[]}",
+          "body_len": 13,
+          "body_sum": 1208,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/551/videos",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/videos?type=movie&tmdbId=552",
+          "as": "alice",
+          "path": "/api/tmdb/videos?type=movie&tmdbId=552",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_videos_failed\",\"status\":500}",
+          "body_len": 43,
+          "body_sum": 3867,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/552/videos",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "videos tv and find failures",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tmdb/3/find/77777",
+          "status": 200,
+          "text": "{\"tv_results\":[{\"id\":1396}]}",
+          "ct": "application/json",
+          "query": {
+            "external_source": "tvdb_id"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/tv/1396/videos",
+          "status": 200,
+          "text": "{\"results\":[{\"key\":\"dQw4w9WgXcQ\",\"name\":\"Official Trailer\",\"site\":\"YouTube\",\"type\":\"Trailer\",\"official\":true}]}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/find/77778",
+          "status": 200,
+          "text": "{\"tv_results\":[]}",
+          "ct": "application/json",
+          "query": {
+            "external_source": "tvdb_id"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/find/77779",
+          "status": 500,
+          "text": "{\"status_message\":\"down\"}",
+          "ct": "application/json",
+          "query": {
+            "external_source": "tvdb_id"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/find/77780",
+          "status": 200,
+          "text": "{\"tv_results\":[{\"id\":0}]}",
+          "ct": "application/json",
+          "query": {
+            "external_source": "tvdb_id"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/tv/0/videos",
+          "status": 200,
+          "text": "{\"results\":[]}",
+          "ct": "application/json"
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/videos?type=tv&tvdbId=77777",
+          "as": "alice",
+          "path": "/api/tmdb/videos?type=tv&tvdbId=77777",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"videos\":[{\"key\":\"dQw4w9WgXcQ\",\"name\":\"Official Trailer\",\"type\":\"Trailer\",\"official\":true}]}",
+          "body_len": 93,
+          "body_sum": 8030,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/find/77777",
+              "query": "external_source=tvdb_id&api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/tmdb/3/tv/1396/videos",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/videos?type=tv&tvdbId=77778",
+          "as": "alice",
+          "path": "/api/tmdb/videos?type=tv&tvdbId=77778",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_find_failed\"}",
+          "body_len": 28,
+          "body_sum": 2639,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/find/77778",
+              "query": "external_source=tvdb_id&api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/videos?type=tv&tvdbId=77779",
+          "as": "alice",
+          "path": "/api/tmdb/videos?type=tv&tvdbId=77779",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_find_failed\"}",
+          "body_len": 28,
+          "body_sum": 2639,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/find/77779",
+              "query": "external_source=tvdb_id&api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/videos?type=tv&tvdbId=77780",
+          "as": "alice",
+          "path": "/api/tmdb/videos?type=tv&tvdbId=77780",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"videos\":[]}",
+          "body_len": 13,
+          "body_sum": 1208,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/find/77780",
+              "query": "external_source=tvdb_id&api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/tmdb/3/tv/0/videos",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/videos?tmdbId=550",
+          "as": "alice",
+          "path": "/api/tmdb/videos?tmdbId=550",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_query\"}",
+          "body_len": 25,
+          "body_sum": 2400,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/videos?type=movie",
+          "as": "alice",
+          "path": "/api/tmdb/videos?type=movie",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_tmdbId\"}",
+          "body_len": 26,
+          "body_sum": 2430,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/videos?type=tv",
+          "as": "alice",
+          "path": "/api/tmdb/videos?type=tv",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_tvdbId\"}",
+          "body_len": 26,
+          "body_sum": 2439,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/videos?type=tv&tmdbId=550",
+          "as": "alice",
+          "path": "/api/tmdb/videos?type=tv&tmdbId=550",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_tvdbId\"}",
+          "body_len": 26,
+          "body_sum": 2439,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "related",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/tmdb/3/movie/550/recommendations",
+          "status": 200,
+          "text": "{\"page\":1,\"results\":[{\"id\":1,\"title\":\"Movie 1\",\"poster_path\":\"/p1.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":2,\"title\":\"Movie 2\",\"poster_path\":\"/p2.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":3,\"title\":\"Movie 3\",\"poster_path\":\"/p3.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":4,\"title\":\"Movie 4\",\"poster_path\":\"/p4.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":5,\"title\":\"Movie 5\",\"poster_path\":\"/p5.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":6,\"title\":\"Movie 6\",\"poster_path\":\"/p6.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":7,\"title\":\"Movie 7\",\"poster_path\":\"/p7.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":8,\"title\":\"Movie 8\",\"poster_path\":\"/p8.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":9,\"title\":\"Movie 9\",\"poster_path\":\"/p9.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":10,\"title\":\"Movie 10\",\"poster_path\":\"/p10.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":11,\"title\":\"Movie 11\",\"poster_path\":\"/p11.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":12,\"title\":\"Movie 12\",\"poster_path\":\"/p12.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":13,\"title\":\"Movie 13\",\"poster_path\":\"/p13.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":14,\"title\":\"Movie 14\",\"poster_path\":\"/p14.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":15,\"title\":\"Movie 15\",\"poster_path\":\"/p15.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":16,\"title\":\"Movie 16\",\"poster_path\":\"/p16.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":17,\"title\":\"Movie 17\",\"poster_path\":\"/p17.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":18,\"title\":\"Movie 18\",\"poster_path\":\"/p18.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":19,\"title\":\"Movie 19\",\"poster_path\":\"/p19.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":20,\"title\":\"Movie 20\",\"poster_path\":\"/p20.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":21,\"title\":\"Movie 21\",\"poster_path\":\"/p21.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":22,\"title\":\"Movie 22\",\"poster_path\":\"/p22.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":23,\"title\":\"Movie 23\",\"poster_path\":\"/p23.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":24,\"title\":\"Movie 24\",\"poster_path\":\"/p24.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":25,\"title\":\"Movie 25\",\"poster_path\":\"/p25.jpg\",\"release_date\":\"2021-05-04\"},{\"id\":999,\"title\":\"No poster\",\"poster_path\":null,\"release_date\":\"2020-01-01\"}]}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/movie/551/recommendations",
+          "status": 200,
+          "text": "{\"results\":[]}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/movie/551/similar",
+          "status": 200,
+          "text": "{\"results\":[{\"id\":12,\"title\":\"Similar\",\"poster_path\":\"/s.jpg\",\"release_date\":\"2019-01-01\"}]}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/movie/552/recommendations",
+          "status": 500,
+          "text": "{\"status_message\":\"boom\"}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/movie/552/similar",
+          "status": 404,
+          "text": "{\"status_message\":\"gone\"}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/find/81189",
+          "status": 200,
+          "text": "{\"tv_results\":[{\"id\":1396}]}",
+          "ct": "application/json",
+          "query": {
+            "external_source": "tvdb_id"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/tv/1396/recommendations",
+          "status": 200,
+          "text": "{\"results\":[{\"id\":60059,\"name\":\"Better Call Saul\",\"poster_path\":\"/bcs.jpg\",\"first_air_date\":\"2015-02-08\"},{\"id\":2,\"name\":\"No date\",\"poster_path\":\"/nd.jpg\",\"first_air_date\":\"\"},{\"id\":3,\"title\":\"\",\"name\":\"Empty title\",\"poster_path\":\"/et.jpg\",\"release_date\":\"abcd\"},{\"id\":4,\"poster_path\":\"/nt.jpg\"}]}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/tmdb/3/find/81190",
+          "status": 200,
+          "text": "{\"tv_results\":[]}",
+          "ct": "application/json",
+          "query": {
+            "external_source": "tvdb_id"
+          }
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/related?type=movie&tmdbId=550",
+          "as": "alice",
+          "path": "/api/tmdb/related?type=movie&tmdbId=550",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"items\":[{\"tmdbId\":1,\"title\":\"Movie 1\",\"year\":2021,\"posterPath\":\"/p1.jpg\"},{\"tmdbId\":2,\"title\":\"Movie 2\",\"year\":2021,\"posterPath\":\"/p2.jpg\"},{\"tmdbId\":3,\"title\":\"Movie 3\",\"year\":2021,\"posterPath\":\"/p3.jpg\"},{\"tmdbId\":4,\"title\":\"Movie 4\",\"year\":2021,\"posterPath\":\"/p4.jpg\"},{\"tmdbId\":5,\"title\":\"Movie 5\",\"year\":2021,\"posterPath\":\"/p5.jpg\"},{\"tmdbId\":6,\"title\":\"Movie 6\",\"year\":2021,\"posterPath\":\"/p6.jpg\"},{\"tmdbId\":7,\"title\":\"Movie 7\",\"year\":2021,\"posterPath\":\"/p7.jpg\"},{\"tmdbId\":8,\"title\":\"Movie 8\",\"year\":2021,\"posterPath\":\"/p8.jpg\"},{\"tmdbId\":9,\"title\":\"Movie 9\",\"year\":2021,\"posterPath\":\"/p9.jpg\"},{\"tmdbId\":10,\"title\":\"Movie 10\",\"year\":2021,\"posterPath\":\"/p10.jpg\"},{\"tmdbId\":11,\"title\":\"Movie 11\",\"year\":2021,\"posterPath\":\"/p11.jpg\"},{\"tmdbId\":12,\"title\":\"Movie 12\",\"year\":2021,\"posterPath\":\"/p12.jpg\"},{\"tmdbId\":13,\"title\":\"Movie 13\",\"year\":2021,\"posterPath\":\"/p13.jpg\"},{\"tmdbId\":14,\"title\":\"Movie 14\",\"year\":2021,\"posterPath\":\"/p14.jpg\"},{\"tmdbId\":15,\"title\":\"Movie 15\",\"year\":2021,\"posterPath\":\"/p15.jpg\"},{\"tmdbId\":16,\"title\":\"Movie 16\",\"year\":2021,\"posterPath\":\"/p16.jpg\"},{\"tmdbId\":17,\"title\":\"Movie 17\",\"year\":2021,\"posterPath\":\"/p17.jpg\"},{\"tmdbId\":18,\"title\":\"Movie 18\",\"year\":2021,\"posterPath\":\"/p18.jpg\"},{\"tmdbId\":19,\"title\":\"Movie 19\",\"year\":2021,\"posterPath\":\"/p19.jpg\"},{\"tmdbId\":20,\"title\":\"Movie 20\",\"year\":2021,\"posterPath\":\"/p20.jpg\"}]}",
+          "body_len": 1364,
+          "body_sum": 105270,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/550/recommendations",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/related?type=movie&tmdbId=551",
+          "as": "alice",
+          "path": "/api/tmdb/related?type=movie&tmdbId=551",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"items\":[{\"tmdbId\":12,\"title\":\"Similar\",\"year\":2019,\"posterPath\":\"/s.jpg\"}]}",
+          "body_len": 77,
+          "body_sum": 6318,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/551/recommendations",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/551/similar",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/related?type=movie&tmdbId=552",
+          "as": "alice",
+          "path": "/api/tmdb/related?type=movie&tmdbId=552",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"items\":[]}",
+          "body_len": 12,
+          "body_sum": 1104,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/552/recommendations",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/tmdb/3/movie/552/similar",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/related?type=tv&tvdbId=81189",
+          "as": "alice",
+          "path": "/api/tmdb/related?type=tv&tvdbId=81189",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"items\":[{\"tmdbId\":60059,\"title\":\"Better Call Saul\",\"year\":2015,\"posterPath\":\"/bcs.jpg\"},{\"tmdbId\":2,\"title\":\"No date\",\"year\":null,\"posterPath\":\"/nd.jpg\"},{\"tmdbId\":3,\"title\":\"\",\"year\":null,\"posterPath\":\"/et.jpg\"},{\"tmdbId\":4,\"title\":\"\",\"year\":null,\"posterPath\":\"/nt.jpg\"}]}",
+          "body_len": 275,
+          "body_sum": 22541,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/find/81189",
+              "query": "external_source=tvdb_id&api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/tmdb/3/tv/1396/recommendations",
+              "query": "api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/related?type=tv&tvdbId=81190",
+          "as": "alice",
+          "path": "/api/tmdb/related?type=tv&tvdbId=81190",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"tmdb_find_failed\"}",
+          "body_len": 28,
+          "body_sum": 2639,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/tmdb/3/find/81190",
+              "query": "external_source=tvdb_id&api_key=placeholder-tmdb-key",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/related?tmdbId=550",
+          "as": "alice",
+          "path": "/api/tmdb/related?tmdbId=550",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_query\"}",
+          "body_len": 25,
+          "body_sum": 2400,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "trailer resolution order",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/gv/video?id=1",
+          "status": 200,
+          "text": "",
+          "ct": "video/mp4",
+          "bytes": 1572864,
+          "seed": 0
+        },
+        {
+          "method": "GET",
+          "path": "/gv/audio",
+          "status": 200,
+          "text": "",
+          "ct": "video/mp4",
+          "bytes": 1000,
+          "seed": 7
+        },
+        {
+          "method": "GET",
+          "path": "/gv/v403",
+          "status": 403,
+          "text": "",
+          "ct": "video/mp4",
+          "bytes": 10,
+          "seed": 0
+        },
+        {
+          "method": "GET",
+          "path": "/gv/a-ok",
+          "status": 200,
+          "text": "",
+          "ct": "video/mp4",
+          "bytes": 10,
+          "seed": 1
+        }
+      ],
+      "resolve": {
+        "hlsAAAAAAAA": {
+          "video_id": "x",
+          "hls": "{GV}/hls/master.m3u8",
+          "progressive": "{GV}/p.mp4",
+          "video": {
+            "url": "{GV}/gv/x",
+            "mime": "v",
+            "height": null,
+            "bitrate": null
+          },
+          "audio": {
+            "url": "{GV}/gv/y",
+            "mime": "a",
+            "height": null,
+            "bitrate": null
+          },
+          "duration_secs": null
+        },
+        "muxAAAAAAAA": {
+          "video_id": "x",
+          "hls": null,
+          "progressive": "{GV}/p360.mp4",
+          "video": {
+            "url": "{GV}/gv/video?id=1",
+            "mime": "video/mp4; codecs=\"avc1.640028\"",
+            "height": 1080,
+            "bitrate": 4500000
+          },
+          "audio": {
+            "url": "{GV}/gv/audio",
+            "mime": "audio/mp4; codecs=\"mp4a.40.2\"",
+            "height": null,
+            "bitrate": 128000
+          },
+          "duration_secs": 212
+        },
+        "mfpAAAAAAAA": {
+          "video_id": "x",
+          "hls": null,
+          "progressive": "{GV}/p360.mp4",
+          "video": {
+            "url": "{GV}/gv/v403",
+            "mime": "video/mp4; codecs=\"avc1.640028\"",
+            "height": 1080,
+            "bitrate": 4500000
+          },
+          "audio": {
+            "url": "{GV}/gv/a-ok",
+            "mime": "audio/mp4; codecs=\"mp4a.40.2\"",
+            "height": null,
+            "bitrate": 128000
+          },
+          "duration_secs": 212
+        },
+        "ffxAAAAAAAA": {
+          "video_id": "x",
+          "hls": null,
+          "progressive": null,
+          "video": {
+            "url": "{GV}/gv/a-ok",
+            "mime": "video/mp4; codecs=\"avc1.640028\"",
+            "height": 1080,
+            "bitrate": 4500000
+          },
+          "audio": {
+            "url": "{GV}/gv/a-ok",
+            "mime": "audio/mp4; codecs=\"mp4a.40.2\"",
+            "height": null,
+            "bitrate": 128000
+          },
+          "duration_secs": 212
+        },
+        "proAAAAAAAA": {
+          "video_id": "x",
+          "hls": null,
+          "progressive": "{GV}/only.mp4",
+          "video": {
+            "url": "{GV}/gv/x",
+            "mime": "v",
+            "height": null,
+            "bitrate": null
+          },
+          "audio": null,
+          "duration_secs": null
+        },
+        "nulAAAAAAAA": {
+          "video_id": "x",
+          "hls": null,
+          "progressive": null,
+          "video": null,
+          "audio": null,
+          "duration_secs": null
+        }
+      },
+      "ytdlp": {
+        "ffxAAAAAAAA": "https://rr1.googlevideo.example/videoplayback?itag=18&id=ffx\n",
+        "ydlAAAAAAAA": "WARNING: something\nhttps://rr2.googlevideo.example/videoplayback?itag=18\nhttps://second.example/\n"
+      },
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/tmdb/trailer?key=hlsAAAAAAAA",
+          "as": "alice",
+          "path": "/api/tmdb/trailer?key=hlsAAAAAAAA",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"url\":\"{GV}/hls/master.m3u8\"}",
+          "body_len": 48,
+          "body_sum": 3591,
+          "calls": [],
+          "ytresolve": [
+            "hlsAAAAAAAA"
+          ],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trailer?key=muxAAAAAAAA",
+          "as": "alice",
+          "path": "/api/tmdb/trailer?key=muxAAAAAAAA",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"url\":\"https://app.example/api/tmdb/trailer/muxAAAAAAAA/stream.mp4?t=<token>\"}",
+          "body_len": 378,
+          "body_sum": 33249,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/gv/video",
+              "query": "id=1&range=0-1048575",
+              "authorization": null,
+              "user_agent": null,
+              "accept": null
+            },
+            {
+              "method": "GET",
+              "path": "/gv/audio",
+              "query": "range=0-1048575",
+              "authorization": null,
+              "user_agent": null,
+              "accept": null
+            },
+            {
+              "method": "GET",
+              "path": "/gv/video",
+              "query": "id=1&range=1048576-2097151",
+              "authorization": null,
+              "user_agent": null,
+              "accept": null
+            }
+          ],
+          "ytresolve": [
+            "muxAAAAAAAA"
+          ],
+          "ytdlp": [],
+          "ffmpeg": [
+            "-nostdin -loglevel error -i <mux>/muxAAAAAAAA.v.part -i <mux>/muxAAAAAAAA.a.part -map 0:v:0 -map 1:a:0 -c copy -movflags +faststart -f mp4 -y <mux>/muxAAAAAAAA.out.part"
+          ]
+        },
+        {
+          "name": "stream full",
+          "from_url": {},
+          "status": 200,
+          "content_type": "video/mp4",
+          "content_range": null,
+          "body": null,
+          "body_len": 1573864,
+          "body_sum": 200666500,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "stream range",
+          "from_url": {},
+          "range": "bytes=1048570-1048579",
+          "status": 206,
+          "content_type": "video/mp4",
+          "content_range": "bytes 1048570-1048579/1573864",
+          "body": null,
+          "body_len": 10,
+          "body_sum": 1521,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "stream suffix",
+          "from_url": {},
+          "range": "bytes=-10",
+          "status": 206,
+          "content_type": "video/mp4",
+          "content_range": "bytes 1573854-1573863/1573864",
+          "body": null,
+          "body_len": 10,
+          "body_sum": 2335,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "stream open-ended",
+          "from_url": {},
+          "range": "bytes=1572800-",
+          "status": 206,
+          "content_type": "video/mp4",
+          "content_range": "bytes 1572800-1573863/1573864",
+          "body": null,
+          "body_len": 1064,
+          "body_sum": 140644,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "stream past the end",
+          "from_url": {},
+          "range": "bytes=99999999-",
+          "status": 416,
+          "content_type": null,
+          "content_range": "bytes */1573864",
+          "body": "",
+          "body_len": 0,
+          "body_sum": 0,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "stream token for another id",
+          "from_url": {
+            "id": "proAAAAAAAA"
+          },
+          "status": 401,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"token_mismatch\"}",
+          "body_len": 26,
+          "body_sum": 2490,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "stream bad token",
+          "from_url": {
+            "token": "garbage"
+          },
+          "status": 401,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_token\"}",
+          "body_len": 25,
+          "body_sum": 2379,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice re-taps the muxed trailer",
+          "as": "alice",
+          "path": "/api/tmdb/trailer?key=muxAAAAAAAA",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"url\":\"https://app.example/api/tmdb/trailer/muxAAAAAAAA/stream.mp4?t=<token>\"}",
+          "body_len": 378,
+          "body_sum": 33222,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trailer?key=mfpAAAAAAAA",
+          "as": "alice",
+          "path": "/api/tmdb/trailer?key=mfpAAAAAAAA",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"url\":\"{GV}/p360.mp4\"}",
+          "body_len": 41,
+          "body_sum": 2770,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/gv/v403",
+              "query": "range=0-1048575",
+              "authorization": null,
+              "user_agent": null,
+              "accept": null
+            },
+            {
+              "method": "GET",
+              "path": "/gv/a-ok",
+              "query": "range=0-1048575",
+              "authorization": null,
+              "user_agent": null,
+              "accept": null
+            }
+          ],
+          "ytresolve": [
+            "mfpAAAAAAAA"
+          ],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trailer?key=ffxAAAAAAAA",
+          "as": "alice",
+          "path": "/api/tmdb/trailer?key=ffxAAAAAAAA",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"url\":\"https://rr1.googlevideo.example/videoplayback?itag=18&id=ffx\"}",
+          "body_len": 70,
+          "body_sum": 6484,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/gv/a-ok",
+              "query": "range=0-1048575",
+              "authorization": null,
+              "user_agent": null,
+              "accept": null
+            },
+            {
+              "method": "GET",
+              "path": "/gv/a-ok",
+              "query": "range=0-1048575",
+              "authorization": null,
+              "user_agent": null,
+              "accept": null
+            }
+          ],
+          "ytresolve": [
+            "ffxAAAAAAAA"
+          ],
+          "ytdlp": [
+            "--no-cache-dir --no-playlist --quiet -f best[ext=mp4][acodec!=none][vcodec!=none]/18/best[ext=mp4]/best -g https://www.youtube.com/watch?v=ffxAAAAAAAA"
+          ],
+          "ffmpeg": [
+            "-nostdin -loglevel error -i <mux>/ffxAAAAAAAA.v.part -i <mux>/ffxAAAAAAAA.a.part -map 0:v:0 -map 1:a:0 -c copy -movflags +faststart -f mp4 -y <mux>/ffxAAAAAAAA.out.part"
+          ]
+        },
+        {
+          "name": "alice GET /api/tmdb/trailer?key=proAAAAAAAA",
+          "as": "alice",
+          "path": "/api/tmdb/trailer?key=proAAAAAAAA",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"url\":\"{GV}/only.mp4\"}",
+          "body_len": 41,
+          "body_sum": 2955,
+          "calls": [],
+          "ytresolve": [
+            "proAAAAAAAA"
+          ],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trailer?key=ydlAAAAAAAA",
+          "as": "alice",
+          "path": "/api/tmdb/trailer?key=ydlAAAAAAAA",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"url\":\"https://rr2.googlevideo.example/videoplayback?itag=18\"}",
+          "body_len": 63,
+          "body_sum": 5857,
+          "calls": [],
+          "ytresolve": [
+            "ydlAAAAAAAA"
+          ],
+          "ytdlp": [
+            "--no-cache-dir --no-playlist --quiet -f best[ext=mp4][acodec!=none][vcodec!=none]/18/best[ext=mp4]/best -g https://www.youtube.com/watch?v=ydlAAAAAAAA"
+          ],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice re-taps the yt-dlp trailer",
+          "as": "alice",
+          "path": "/api/tmdb/trailer?key=ydlAAAAAAAA",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"url\":\"https://rr2.googlevideo.example/videoplayback?itag=18\"}",
+          "body_len": 63,
+          "body_sum": 5857,
+          "calls": [],
+          "ytresolve": [
+            "ydlAAAAAAAA"
+          ],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trailer?key=nulAAAAAAAA",
+          "as": "alice",
+          "path": "/api/tmdb/trailer?key=nulAAAAAAAA",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"trailer_unavailable\"}",
+          "body_len": 31,
+          "body_sum": 3002,
+          "calls": [],
+          "ytresolve": [
+            "nulAAAAAAAA"
+          ],
+          "ytdlp": [
+            "--no-cache-dir --no-playlist --quiet -f best[ext=mp4][acodec!=none][vcodec!=none]/18/best[ext=mp4]/best -g https://www.youtube.com/watch?v=nulAAAAAAAA"
+          ],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trailer?key=badAAAAAAAA",
+          "as": "alice",
+          "path": "/api/tmdb/trailer?key=badAAAAAAAA",
+          "status": 502,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"trailer_unavailable\"}",
+          "body_len": 31,
+          "body_sum": 3002,
+          "calls": [],
+          "ytresolve": [
+            "badAAAAAAAA"
+          ],
+          "ytdlp": [
+            "--no-cache-dir --no-playlist --quiet -f best[ext=mp4][acodec!=none][vcodec!=none]/18/best[ext=mp4]/best -g https://www.youtube.com/watch?v=badAAAAAAAA"
+          ],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trailer?key=short",
+          "as": "alice",
+          "path": "/api/tmdb/trailer?key=short",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_key\"}",
+          "body_len": 23,
+          "body_sum": 2163,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trailer",
+          "as": "alice",
+          "path": "/api/tmdb/trailer",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_key\"}",
+          "body_len": 23,
+          "body_sum": 2163,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trailer/notMuxedYet/stream.mp4",
+          "as": "alice",
+          "path": "/api/tmdb/trailer/notMuxedYet/stream.mp4",
+          "status": 404,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"trailer_not_ready\"}",
+          "body_len": 29,
+          "body_sum": 2811,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/tmdb/trailer/bad/stream.mp4",
+          "as": "alice",
+          "path": "/api/tmdb/trailer/bad/stream.mp4",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_key\"}",
+          "body_len": 23,
+          "body_sum": 2163,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "anon GET /api/tmdb/trailer/muxAAAAAAAA/stream.mp4?t=",
+          "path": "/api/tmdb/trailer/muxAAAAAAAA/stream.mp4?t=",
+          "status": 401,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"unauthenticated\"}",
+          "body_len": 27,
+          "body_sum": 2602,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "ratings merge and cache",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/wikidata/sparql",
+          "status": 200,
+          "text": "{\"results\":{\"bindings\":[{\"imdb\":{\"type\":\"literal\",\"value\":\"tt0903747\"},\"rt\":{\"type\":\"literal\",\"value\":\"tv/breaking_bad\"}},{\"imdb\":{\"type\":\"literal\",\"value\":\"tt0903747\"},\"rt\":{\"type\":\"literal\",\"value\":\"tv/duplicate\"}},{\"imdb\":{\"type\":\"literal\",\"value\":\"tt0000001\"},\"rt\":{\"type\":\"literal\",\"value\":\"Not A Slug\"}}]}}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/rt/tv/breaking_bad",
+          "status": 200,
+          "text": "<script>{\"audienceScore\":{\"bandedRatingCount\":\"25,000+ Ratings\",\"score\":\"97\",\"title\":\"Avg. Popcornmeter\"},\"criticsScore\":{\"averageRating\":\"9.20\",\"score\":\"96\",\"title\":\"Avg. Tomatometer\"}}</script>",
+          "ct": "text/html"
+        },
+        {
+          "method": "GET",
+          "path": "/omdb/",
+          "status": 200,
+          "text": "{\"Response\":\"True\",\"imdbRating\":\"9.5\",\"Metascore\":\"87\",\"Ratings\":[{\"Source\":\"Internet Movie Database\",\"Value\":\"9.5/10\"},{\"Source\":\"Rotten Tomatoes\",\"Value\":\"90%\"}]}",
+          "ct": "application/json",
+          "query": {
+            "i": "tt0903747"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/omdb/",
+          "status": 200,
+          "text": "{\"Response\":\"False\",\"Error\":\"Incorrect IMDb ID.\"}",
+          "ct": "application/json",
+          "query": {
+            "i": "tt0000001"
+          }
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/ratings?ids=tt0903747,tt0000001",
+          "as": "alice",
+          "path": "/api/ratings?ids=tt0903747,tt0000001",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"ratings\":{\"tt0903747\":{\"imdb\":9.5,\"rt\":96,\"rtAudience\":97,\"metacritic\":87},\"tt0000001\":{\"imdb\":null,\"rt\":null,\"rtAudience\":null,\"metacritic\":null}},\"pending\":[]}",
+          "body_len": 163,
+          "body_sum": 13432,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/wikidata/sparql",
+              "query": "format=json&query=SELECT+%3Fimdb+%3Frt+WHERE+%7B+VALUES+%3Fimdb+%7B+%22tt0903747%22+%22tt0000001%22+%7D+%3Fitem+wdt%3AP345+%3Fimdb+.+%3Fitem+wdt%3AP1258+%3Frt+%7D",
+              "authorization": null,
+              "user_agent": "EmeraldExchange/1.0 (self-hosted media library; ratings enrichment)",
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/omdb/",
+              "query": "apikey=placeholder-omdb-key&i=tt0903747",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/rt/tv/breaking_bad",
+              "query": "",
+              "authorization": null,
+              "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+              "accept": "text/html"
+            },
+            {
+              "method": "GET",
+              "path": "/omdb/",
+              "query": "apikey=placeholder-omdb-key&i=tt0000001",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "repeat is served from server.db",
+          "as": "alice",
+          "path": "/api/ratings?ids=tt0903747,tt0000001",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"ratings\":{\"tt0903747\":{\"imdb\":9.5,\"rt\":96,\"rtAudience\":97,\"metacritic\":87},\"tt0000001\":{\"imdb\":null,\"rt\":null,\"rtAudience\":null,\"metacritic\":null}},\"pending\":[]}",
+          "body_len": 163,
+          "body_sum": 13432,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "admin GET /api/ratings?ids=%20tt0903747%20,tt0903747,,",
+          "as": "admin",
+          "path": "/api/ratings?ids=%20tt0903747%20,tt0903747,,",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"ratings\":{\"tt0903747\":{\"imdb\":9.5,\"rt\":96,\"rtAudience\":97,\"metacritic\":87}},\"pending\":[]}",
+          "body_len": 91,
+          "body_sum": 7306,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "ratings invalid ids",
+      "env": {},
+      "unset": [],
+      "upstream": [],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/ratings",
+          "as": "alice",
+          "path": "/api/ratings",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_ids\"}",
+          "body_len": 23,
+          "body_sum": 2154,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/ratings?ids=",
+          "as": "alice",
+          "path": "/api/ratings?ids=",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_ids\"}",
+          "body_len": 23,
+          "body_sum": 2154,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/ratings?ids=breaking-bad",
+          "as": "alice",
+          "path": "/api/ratings?ids=breaking-bad",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_ids\"}",
+          "body_len": 23,
+          "body_sum": 2154,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/ratings?ids=tt0903747,tt12",
+          "as": "alice",
+          "path": "/api/ratings?ids=tt0903747,tt12",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_ids\"}",
+          "body_len": 23,
+          "body_sum": 2154,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "alice GET /api/ratings?ids=tt1000000,tt1000001,tt1000002,tt1000003,tt1000004,tt1000005,tt1000006,tt1000007,tt1000008,tt1000009,tt1000010,tt1000011,tt1000012,tt1000013,tt1000014,tt1000015,tt1000016,tt1000017,tt1000018,tt1000019,tt1000020,tt1000021,tt1000022,tt1000023,tt1000024,tt1000025,tt1000026,tt1000027,tt1000028,tt1000029,tt1000030,tt1000031,tt1000032,tt1000033,tt1000034,tt1000035,tt1000036,tt1000037,tt1000038,tt1000039,tt1000040,tt1000041,tt1000042,tt1000043,tt1000044,tt1000045,tt1000046,tt1000047,tt1000048,tt1000049,tt1000050,tt1000051,tt1000052,tt1000053,tt1000054,tt1000055,tt1000056,tt1000057,tt1000058,tt1000059,tt1000060",
+          "as": "alice",
+          "path": "/api/ratings?ids=tt1000000,tt1000001,tt1000002,tt1000003,tt1000004,tt1000005,tt1000006,tt1000007,tt1000008,tt1000009,tt1000010,tt1000011,tt1000012,tt1000013,tt1000014,tt1000015,tt1000016,tt1000017,tt1000018,tt1000019,tt1000020,tt1000021,tt1000022,tt1000023,tt1000024,tt1000025,tt1000026,tt1000027,tt1000028,tt1000029,tt1000030,tt1000031,tt1000032,tt1000033,tt1000034,tt1000035,tt1000036,tt1000037,tt1000038,tt1000039,tt1000040,tt1000041,tt1000042,tt1000043,tt1000044,tt1000045,tt1000046,tt1000047,tt1000048,tt1000049,tt1000050,tt1000051,tt1000052,tt1000053,tt1000054,tt1000055,tt1000056,tt1000057,tt1000058,tt1000059,tt1000060",
+          "status": 400,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"error\":\"invalid_ids\"}",
+          "body_len": 23,
+          "body_sum": 2154,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "ratings upstream failures",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/wikidata/sparql",
+          "status": 200,
+          "text": "{\"results\":{\"bindings\":[{\"imdb\":{\"type\":\"literal\",\"value\":\"tt0000002\"},\"rt\":{\"type\":\"literal\",\"value\":\"m/rt_down\"}},{\"imdb\":{\"type\":\"literal\",\"value\":\"tt0000003\"},\"rt\":{\"type\":\"literal\",\"value\":\"m/rt_gone\"}},{\"imdb\":{\"type\":\"literal\",\"value\":\"tt0000004\"},\"rt\":{\"type\":\"literal\",\"value\":\"m/rt_null\"}}]}}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/rt/m/rt_down",
+          "status": 500,
+          "text": "down",
+          "ct": "text/html"
+        },
+        {
+          "method": "GET",
+          "path": "/rt/m/rt_gone",
+          "status": 404,
+          "text": "gone",
+          "ct": "text/html"
+        },
+        {
+          "method": "GET",
+          "path": "/rt/m/rt_null",
+          "status": 200,
+          "text": "<html>no scores</html>",
+          "ct": "text/html"
+        },
+        {
+          "method": "GET",
+          "path": "/omdb/",
+          "status": 500,
+          "text": "oops",
+          "ct": "text/html",
+          "query": {
+            "i": "tt0000001"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/omdb/",
+          "status": 200,
+          "text": "{\"Response\":\"True\",\"imdbRating\":\"9.5\",\"Metascore\":\"87\",\"Ratings\":[{\"Source\":\"Internet Movie Database\",\"Value\":\"9.5/10\"},{\"Source\":\"Rotten Tomatoes\",\"Value\":\"90%\"}]}",
+          "ct": "application/json",
+          "query": {
+            "i": "tt0000002"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/omdb/",
+          "status": 200,
+          "text": "{\"Response\":\"True\",\"imdbRating\":\"N/A\",\"Metascore\":\"61\",\"Ratings\":[{\"Source\":\"Rotten Tomatoes\",\"Value\":\"77%\"}]}",
+          "ct": "application/json",
+          "query": {
+            "i": "tt0000003"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/omdb/",
+          "status": 200,
+          "text": "{\"Response\":\"True\",\"imdbRating\":\"7.0\",\"Metascore\":\"N/A\",\"Ratings\":[]}",
+          "ct": "application/json",
+          "query": {
+            "i": "tt0000004"
+          }
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/ratings?ids=tt0000001,tt0000002,tt0000003,tt0000004",
+          "as": "alice",
+          "path": "/api/ratings?ids=tt0000001,tt0000002,tt0000003,tt0000004",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"ratings\":{\"tt0000003\":{\"imdb\":null,\"rt\":77,\"rtAudience\":null,\"metacritic\":61},\"tt0000004\":{\"imdb\":7,\"rt\":null,\"rtAudience\":null,\"metacritic\":null}},\"pending\":[]}",
+          "body_len": 163,
+          "body_sum": 13629,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/wikidata/sparql",
+              "query": "format=json&query=SELECT+%3Fimdb+%3Frt+WHERE+%7B+VALUES+%3Fimdb+%7B+%22tt0000001%22+%22tt0000002%22+%22tt0000003%22+%22tt0000004%22+%7D+%3Fitem+wdt%3AP345+%3Fimdb+.+%3Fitem+wdt%3AP1258+%3Frt+%7D",
+              "authorization": null,
+              "user_agent": "EmeraldExchange/1.0 (self-hosted media library; ratings enrichment)",
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/omdb/",
+              "query": "apikey=placeholder-omdb-key&i=tt0000001",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/omdb/",
+              "query": "apikey=placeholder-omdb-key&i=tt0000002",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/rt/m/rt_down",
+              "query": "",
+              "authorization": null,
+              "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+              "accept": "text/html"
+            },
+            {
+              "method": "GET",
+              "path": "/omdb/",
+              "query": "apikey=placeholder-omdb-key&i=tt0000003",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/omdb/",
+              "query": "apikey=placeholder-omdb-key&i=tt0000004",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/rt/m/rt_gone",
+              "query": "",
+              "authorization": null,
+              "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+              "accept": "text/html"
+            },
+            {
+              "method": "GET",
+              "path": "/rt/m/rt_null",
+              "query": "",
+              "authorization": null,
+              "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+              "accept": "text/html"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "failures are retried, answers are not",
+          "as": "alice",
+          "path": "/api/ratings?ids=tt0000001,tt0000002,tt0000003,tt0000004",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"ratings\":{\"tt0000003\":{\"imdb\":null,\"rt\":77,\"rtAudience\":null,\"metacritic\":61},\"tt0000004\":{\"imdb\":7,\"rt\":null,\"rtAudience\":null,\"metacritic\":null}},\"pending\":[]}",
+          "body_len": 163,
+          "body_sum": 13629,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/wikidata/sparql",
+              "query": "format=json&query=SELECT+%3Fimdb+%3Frt+WHERE+%7B+VALUES+%3Fimdb+%7B+%22tt0000001%22+%22tt0000002%22+%7D+%3Fitem+wdt%3AP345+%3Fimdb+.+%3Fitem+wdt%3AP1258+%3Frt+%7D",
+              "authorization": null,
+              "user_agent": "EmeraldExchange/1.0 (self-hosted media library; ratings enrichment)",
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/omdb/",
+              "query": "apikey=placeholder-omdb-key&i=tt0000001",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/omdb/",
+              "query": "apikey=placeholder-omdb-key&i=tt0000002",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/rt/m/rt_down",
+              "query": "",
+              "authorization": null,
+              "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+              "accept": "text/html"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "ratings without wikidata or an omdb key",
+      "env": {},
+      "unset": [
+        "OMDB_API_KEY"
+      ],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/wikidata/sparql",
+          "status": 503,
+          "text": "{\"results\":{\"bindings\":[]}}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/omdb/",
+          "status": 200,
+          "text": "{\"Response\":\"True\",\"imdbRating\":\"9.5\",\"Metascore\":\"87\",\"Ratings\":[{\"Source\":\"Internet Movie Database\",\"Value\":\"9.5/10\"},{\"Source\":\"Rotten Tomatoes\",\"Value\":\"90%\"}]}",
+          "ct": "application/json",
+          "query": {
+            "i": "tt0000005"
+          }
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/ratings?ids=tt0000005",
+          "as": "alice",
+          "path": "/api/ratings?ids=tt0000005",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"ratings\":{\"tt0000005\":{\"imdb\":null,\"rt\":null,\"rtAudience\":null,\"metacritic\":null}},\"pending\":[]}",
+          "body_len": 98,
+          "body_sum": 8563,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/wikidata/sparql",
+              "query": "format=json&query=SELECT+%3Fimdb+%3Frt+WHERE+%7B+VALUES+%3Fimdb+%7B+%22tt0000005%22+%7D+%3Fitem+wdt%3AP345+%3Fimdb+.+%3Fitem+wdt%3AP1258+%3Frt+%7D",
+              "authorization": null,
+              "user_agent": "EmeraldExchange/1.0 (self-hosted media library; ratings enrichment)",
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "ratings ttl",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/wikidata/sparql",
+          "status": 200,
+          "text": "{\"results\":{\"bindings\":[]}}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/omdb/",
+          "status": 200,
+          "text": "{\"Response\":\"True\",\"imdbRating\":\"9.5\",\"Metascore\":\"87\",\"Ratings\":[{\"Source\":\"Internet Movie Database\",\"Value\":\"9.5/10\"},{\"Source\":\"Rotten Tomatoes\",\"Value\":\"90%\"}]}",
+          "ct": "application/json",
+          "query": {
+            "i": "tt0000006"
+          }
+        },
+        {
+          "method": "GET",
+          "path": "/omdb/",
+          "status": 200,
+          "text": "{\"Response\":\"True\",\"imdbRating\":\"9.5\",\"Metascore\":\"87\",\"Ratings\":[{\"Source\":\"Internet Movie Database\",\"Value\":\"9.5/10\"},{\"Source\":\"Rotten Tomatoes\",\"Value\":\"90%\"}]}",
+          "ct": "application/json",
+          "query": {
+            "i": "tt0000007"
+          }
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [
+        {
+          "imdb_id": "tt0000006",
+          "imdb": 1.5,
+          "rt": 10,
+          "rt_audience": 20,
+          "metacritic": 30,
+          "age_ms": 60000
+        },
+        {
+          "imdb_id": "tt0000007",
+          "imdb": 1.5,
+          "rt": 10,
+          "rt_audience": null,
+          "metacritic": 30,
+          "age_ms": 691200000
+        }
+      ],
+      "steps": [
+        {
+          "name": "alice GET /api/ratings?ids=tt0000006,tt0000007",
+          "as": "alice",
+          "path": "/api/ratings?ids=tt0000006,tt0000007",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"ratings\":{\"tt0000006\":{\"imdb\":1.5,\"rt\":10,\"rtAudience\":20,\"metacritic\":30},\"tt0000007\":{\"imdb\":9.5,\"rt\":90,\"rtAudience\":null,\"metacritic\":87}},\"pending\":[]}",
+          "body_len": 158,
+          "body_sum": 12409,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/wikidata/sparql",
+              "query": "format=json&query=SELECT+%3Fimdb+%3Frt+WHERE+%7B+VALUES+%3Fimdb+%7B+%22tt0000007%22+%7D+%3Fitem+wdt%3AP345+%3Fimdb+.+%3Fitem+wdt%3AP1258+%3Frt+%7D",
+              "authorization": null,
+              "user_agent": "EmeraldExchange/1.0 (self-hosted media library; ratings enrichment)",
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/omdb/",
+              "query": "apikey=placeholder-omdb-key&i=tt0000007",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    },
+    {
+      "name": "ratings pending past the sync wait",
+      "env": {},
+      "unset": [],
+      "upstream": [
+        {
+          "method": "GET",
+          "path": "/wikidata/sparql",
+          "status": 200,
+          "text": "{\"results\":{\"bindings\":[{\"imdb\":{\"type\":\"literal\",\"value\":\"tt0000008\"},\"rt\":{\"type\":\"literal\",\"value\":\"m/slow\"}}]}}",
+          "ct": "application/json"
+        },
+        {
+          "method": "GET",
+          "path": "/rt/m/slow",
+          "status": 200,
+          "text": "<script>{\"audienceScore\":{\"bandedRatingCount\":\"25,000+ Ratings\",\"score\":\"\",\"title\":\"Avg. Popcornmeter\"},\"criticsScore\":{\"averageRating\":\"9.20\",\"score\":\"55\",\"title\":\"Avg. Tomatometer\"}}</script>",
+          "ct": "text/html",
+          "delay_ms": 1500
+        },
+        {
+          "method": "GET",
+          "path": "/omdb/",
+          "status": 200,
+          "text": "{\"Response\":\"True\",\"imdbRating\":\"9.5\",\"Metascore\":\"87\",\"Ratings\":[{\"Source\":\"Internet Movie Database\",\"Value\":\"9.5/10\"},{\"Source\":\"Rotten Tomatoes\",\"Value\":\"90%\"}]}",
+          "ct": "application/json",
+          "query": {
+            "i": "tt0000008"
+          }
+        }
+      ],
+      "resolve": {},
+      "ytdlp": {},
+      "seed": [],
+      "steps": [
+        {
+          "name": "alice GET /api/ratings?ids=tt0000008",
+          "as": "alice",
+          "path": "/api/ratings?ids=tt0000008",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"ratings\":{},\"pending\":[\"tt0000008\"]}",
+          "body_len": 38,
+          "body_sum": 3121,
+          "calls": [
+            {
+              "method": "GET",
+              "path": "/wikidata/sparql",
+              "query": "format=json&query=SELECT+%3Fimdb+%3Frt+WHERE+%7B+VALUES+%3Fimdb+%7B+%22tt0000008%22+%7D+%3Fitem+wdt%3AP345+%3Fimdb+.+%3Fitem+wdt%3AP1258+%3Frt+%7D",
+              "authorization": null,
+              "user_agent": "EmeraldExchange/1.0 (self-hosted media library; ratings enrichment)",
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/omdb/",
+              "query": "apikey=placeholder-omdb-key&i=tt0000008",
+              "authorization": null,
+              "user_agent": null,
+              "accept": "application/json"
+            },
+            {
+              "method": "GET",
+              "path": "/rt/m/slow",
+              "query": "",
+              "authorization": null,
+              "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+              "accept": "text/html"
+            }
+          ],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "in flight: no second fill",
+          "as": "alice",
+          "path": "/api/ratings?ids=tt0000008",
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"ratings\":{},\"pending\":[\"tt0000008\"]}",
+          "body_len": 38,
+          "body_sum": 3121,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        },
+        {
+          "name": "after the fill lands",
+          "as": "alice",
+          "path": "/api/ratings?ids=tt0000008",
+          "wait_ms": 2000,
+          "status": 200,
+          "content_type": "application/json",
+          "content_range": null,
+          "body": "{\"ratings\":{\"tt0000008\":{\"imdb\":9.5,\"rt\":55,\"rtAudience\":null,\"metacritic\":87}},\"pending\":[]}",
+          "body_len": 93,
+          "body_sum": 7610,
+          "calls": [],
+          "ytresolve": [],
+          "ytdlp": [],
+          "ffmpeg": []
+        }
+      ]
+    }
+  ]
+}

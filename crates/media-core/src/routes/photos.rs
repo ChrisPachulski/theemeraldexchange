@@ -2,8 +2,15 @@
 
 use super::*;
 
-/// `(id, width, height, taken_at, mtime)` from `photos`.
-pub(super) type PhotoListRow = (i64, Option<i64>, Option<i64>, Option<String>, String);
+/// `(id, width, height, taken_at, mtime, blurhash)` from `photos` + `images`.
+pub(super) type PhotoListRow = (
+    i64,
+    Option<i64>,
+    Option<i64>,
+    Option<String>,
+    String,
+    Option<String>,
+);
 
 pub(super) async fn list_photos(
     State(state): State<AppState>,
@@ -13,7 +20,8 @@ pub(super) async fn list_photos(
     // Timeline order: EXIF taken-at when present, file mtime otherwise (both
     // stored in lexicographically-chronological shapes).
     let rows: Vec<PhotoListRow> = sqlx::query_as(
-        "SELECT id, width, height, taken_at, mtime FROM photos \
+        "SELECT p.id, p.width, p.height, taken_at, mtime, img.blurhash FROM photos p \
+         LEFT JOIN images img ON img.key = 'photo/' || p.id \
          ORDER BY COALESCE(taken_at, mtime) DESC LIMIT ? OFFSET ?",
     )
     .bind(limit)
@@ -25,7 +33,7 @@ pub(super) async fn list_photos(
         .await?;
     let items: Vec<Value> = rows
         .into_iter()
-        .map(|(id, width, height, taken_at, mtime)| {
+        .map(|(id, width, height, taken_at, mtime, blurhash)| {
             json!({
                 "id": id,
                 "width": width,
@@ -33,6 +41,8 @@ pub(super) async fn list_photos(
                 "taken_at": taken_at,
                 "mtime": mtime,
                 "url": format!("/api/media/photos/{id}/file"),
+                "thumb_url": format!("/api/media/images/photo/{id}"),
+                "blurhash": blurhash,
             })
         })
         .collect();
@@ -53,8 +63,8 @@ pub(super) async fn photo_file(
         tracing::warn!(path = %path, "refusing to serve photo outside photo roots");
         return Err(AppError::NotFound);
     }
-    // ponytail: originals only, read fully (photos are MBs, not GBs). Add an
-    // ffmpeg-scaled thumbnail cache when the grid UI needs one.
+    // Full-size original, read fully (photos are MBs, not GBs); the grid uses
+    // the resized /images/photo/{id}.
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|_| AppError::NotFound)?;
@@ -107,6 +117,10 @@ mod tests {
         assert_eq!(list["total"], 1);
         let id = list["items"][0]["id"].as_i64().unwrap();
         assert_eq!(list["items"][0]["taken_at"], "2025-12-25T10:00:00");
+        assert_eq!(
+            list["items"][0]["thumb_url"],
+            format!("/api/media/images/photo/{id}")
+        );
 
         // photo_roots is empty in tests → containment skipped → file serves.
         let file = app

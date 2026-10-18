@@ -11,7 +11,7 @@ import type { AuthMode, Role } from './types'
 // only ever called from the admin InvitesPanel, not on the hot auth path.
 // The server contract is the parallel-model authZ layer: members are the
 // allowlist; invites are the owner-issued grant that creates a member on
-// first Apple/Plex login.
+// first sign-in.
 
 export type InviteStatus = 'active' | 'expired' | 'exhausted' | 'revoked'
 

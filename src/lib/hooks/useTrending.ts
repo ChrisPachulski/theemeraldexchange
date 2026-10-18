@@ -14,7 +14,7 @@ export type TrendingItem = {
   id: number
   /** TV uses `name`, movies use `title`. TMDB returns whichever applies. */
   title: string
-  /** TMDB poster_path; relative to https://image.tmdb.org/t/p/wNNN. */
+  /** TMDB poster_path (a bare `/x.jpg`), loaded through tmdbImage. */
   posterPath: string | null
   overview?: string
   /** Year extracted from release_date / first_air_date. */

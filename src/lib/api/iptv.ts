@@ -207,7 +207,7 @@ export type EpgGridDto = {
 }
 
 // One `GET /epg/search` hit: a programme whose title or description matched,
-// plus the channel it airs on (server/services/iptvEpgQuery.ts epgSearch).
+// plus the channel it airs on (crates/iptv/src/catalog.rs, the search route).
 export type EpgSearchHit = {
   streamId: number
   channelName: string
@@ -312,7 +312,6 @@ export function preferAvplayer(): boolean {
 }
 
 export const iptvApi = Object.assign({
-  health: () => get<{ expiresAt: string | null; maxConnections: number; status: string }>('/health'),
   categories: (kind: IptvKind) => get<CategoryDto[]>('/categories', { kind }),
   listLive: (params: ListParams = {}) => get<PagedDto<ChannelDto>>('/live', params),
   listVod: (params: ListParams = {}) => get<PagedDto<VodDto>>('/vod', params),
