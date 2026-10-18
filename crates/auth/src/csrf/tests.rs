@@ -397,7 +397,8 @@ const HOSTILE: &str = "https://attacker.example.test";
 const COOKIE: &str = "eex.session=x";
 
 /// auth::router (its real /api/auth/google reads the body, so a 403 proves the
-/// gate answers before any parsing) plus stand-ins for the routes the gateway
+/// gate answers before any parsing; its real /api/auth/logout needs no session)
+/// plus stand-ins for the routes the gateway
 /// will mount, under the global gate, with the suggestions read behind the
 /// trusted gate.
 async fn composed() -> (crate::testutil::TestDb, Router) {
@@ -413,7 +414,6 @@ async fn composed() -> (crate::testutil::TestDb, Router) {
             "/api/suggestions/{type}",
             get(ok).route_layer(from_fn_with_state(config.clone(), require_trusted_origin)),
         )
-        .route("/api/auth/logout", post(ok))
         .route("/api/sab/api/queue/{id}/pause", post(ok))
         .route("/api/sab/api/queue/{id}/resume", post(ok))
         .route("/api/sab/api/queue/{id}", axum::routing::delete(ok))

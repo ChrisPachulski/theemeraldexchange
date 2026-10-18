@@ -16,6 +16,7 @@ pub mod ratelimit;
 pub mod reconcile;
 pub mod session;
 mod signin;
+pub mod workos;
 
 #[cfg(test)]
 mod testutil;
@@ -26,7 +27,9 @@ pub use reconcile::{Principal, Rejection, RequireAdmin, RequireAuth, authenticat
 
 use std::sync::Arc;
 
-use axum::routing::get;
+use axum::http::header;
+use axum::response::IntoResponse;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -46,6 +49,8 @@ pub struct AuthState {
     pub apple_jwks: Arc<jwks::Jwks>,
     pub google_jwks: Arc<jwks::Jwks>,
     apple_nonces: Arc<signin::Nonces>,
+    /// The WorkOS endpoints and native states (tests point it at a fake).
+    pub workos: Arc<workos::Workos>,
     /// Pins the clock in tests so committed goldens never expire.
     #[cfg(test)]
     pub(crate) fixed_now: Option<i64>,
@@ -63,6 +68,7 @@ impl AuthState {
             apple_jwks: Arc::new(jwks::Jwks::apple()),
             google_jwks: Arc::new(jwks::Jwks::google()),
             apple_nonces: Arc::default(),
+            workos: Arc::default(),
             config: Arc::new(config),
             pool,
             #[cfg(test)]
@@ -83,7 +89,9 @@ impl AuthState {
 pub fn router(state: AuthState) -> Router {
     Router::new()
         .route("/api/me", get(me))
+        .route("/api/auth/logout", post(logout))
         .merge(signin::routes())
+        .merge(workos::routes())
         .with_state(state)
 }
 
@@ -91,6 +99,15 @@ pub fn router(state: AuthState) -> Router {
 /// device's name.
 async fn me(RequireAuth(p): RequireAuth) -> Json<serde_json::Value> {
     Json(serde_json::json!({ "user": p.session }))
+}
+
+/// POST /api/auth/logout: clears the session cookie, nothing else. The
+/// session is stateless and Plex is gone, so there is nothing to revoke.
+async fn logout() -> impl IntoResponse {
+    (
+        [(header::SET_COOKIE, session::clear_cookie())],
+        Json(serde_json::json!({ "ok": true })),
+    )
 }
 
 #[derive(Debug, thiserror::Error)]

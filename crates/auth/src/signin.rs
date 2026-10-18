@@ -47,14 +47,28 @@ pub(crate) fn routes() -> Router<AuthState> {
 /// The app hands Apple the SHA-256 hex of one and sends the raw value back
 /// beside the identity token; a nonce burns on first use, so a captured token
 /// cannot mint a second device token. In memory: a restart costs an in-flight
-/// login one retry.
-#[derive(Default)]
+/// login one retry. The native WorkOS states ride the same store with their
+/// own TTL.
 pub(crate) struct Nonces {
     map: Mutex<HashMap<String, Instant>>,
+    ttl: Duration,
+}
+
+impl Default for Nonces {
+    fn default() -> Nonces {
+        Nonces::new(NONCE_TTL)
+    }
 }
 
 impl Nonces {
-    fn issue(&self) -> String {
+    pub(crate) fn new(ttl: Duration) -> Nonces {
+        Nonces {
+            map: Mutex::default(),
+            ttl,
+        }
+    }
+
+    pub(crate) fn issue(&self) -> String {
         self.issue_at(Instant::now())
     }
 
@@ -62,7 +76,8 @@ impl Nonces {
         let mut map = self.map.lock().unwrap();
         map.retain(|_, expires| *expires > now);
         // ponytail: O(n) oldest-first eviction under a flood; the apple rate
-        // limit keeps it unreachable in practice.
+        // limit keeps it unreachable in practice (workos/native/start has
+        // none, so there the cap is what bounds memory).
         while map.len() >= NONCE_CAP {
             let Some(oldest) = map.iter().min_by_key(|(_, e)| **e).map(|(k, _)| k.clone()) else {
                 break;
@@ -70,7 +85,7 @@ impl Nonces {
             map.remove(&oldest);
         }
         let nonce = URL_SAFE_NO_PAD.encode(rand::random::<[u8; 32]>());
-        map.insert(nonce.clone(), now + NONCE_TTL);
+        map.insert(nonce.clone(), now + self.ttl);
         nonce
     }
 
@@ -99,11 +114,11 @@ async fn methods(State(st): State<AuthState>) -> Json<Value> {
     }))
 }
 
-fn error(status: StatusCode, body: Value) -> Response {
+pub(crate) fn error(status: StatusCode, body: Value) -> Response {
     (status, Json(body)).into_response()
 }
 
-fn not_configured(outcome: &Reporter, provider: &str) -> Response {
+pub(crate) fn not_configured(outcome: &Reporter, provider: &str) -> Response {
     outcome.record(Outcome::Transient, Reason::NotConfigured);
     error(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -111,7 +126,7 @@ fn not_configured(outcome: &Reporter, provider: &str) -> Response {
     )
 }
 
-fn internal(e: Error) -> Response {
+pub(crate) fn internal(e: Error) -> Response {
     tracing::error!(event = "auth_signin", error = %e, "sign-in store error");
     Rejection::Internal.into_response()
 }
@@ -270,14 +285,7 @@ async fn google_inner(
         Ok(id) => id,
         Err(e) => return Ok(rejected(outcome, e)),
     };
-    // Google's name, then the email local-part, then the sub.
-    let display_name = match (&identity.name, identity.email.as_deref()) {
-        (Some(name), _) => name.clone(),
-        (None, Some(email)) if !email.is_empty() => {
-            email.split('@').next().unwrap_or_default().to_string()
-        }
-        _ => identity.sub.clone(),
-    };
+    let display_name = display_name(&identity);
     admit(
         st,
         uri,
@@ -290,22 +298,41 @@ async fn google_inner(
     .await
 }
 
-fn text<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
+/// The provider's name, then the email local-part, then the sub (Google and
+/// WorkOS). The sub is the stable key; the name is advisory chrome.
+pub(crate) fn display_name(identity: &Identity) -> String {
+    match (&identity.name, identity.email.as_deref()) {
+        (Some(name), _) => name.clone(),
+        (None, Some(email)) if !email.is_empty() => {
+            email.split('@').next().unwrap_or_default().to_string()
+        }
+        _ => identity.sub.clone(),
+    }
+}
+
+pub(crate) fn text<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
     body.get(key).and_then(Value::as_str)
 }
 
 /// The JSON body under the 8 KB cap. Unparseable JSON reads as null (the
 /// field checks then answer 400); an oversized or broken stream is a 413.
-async fn read_body(body: Body, outcome: &Reporter) -> std::result::Result<Value, Response> {
-    match axum::body::to_bytes(body, MAX_BODY_BYTES).await {
+pub(crate) async fn read_body(
+    body: Body,
+    outcome: &Reporter,
+) -> std::result::Result<Value, Response> {
+    json_body(body, MAX_BODY_BYTES).await.inspect_err(|_| {
+        outcome.record(Outcome::Invalid, Reason::InvalidRequest);
+    })
+}
+
+/// [`read_body`] under `limit` bytes, without an outcome.
+pub(crate) async fn json_body(body: Body, limit: usize) -> std::result::Result<Value, Response> {
+    match axum::body::to_bytes(body, limit).await {
         Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null)),
-        Err(_) => {
-            outcome.record(Outcome::Invalid, Reason::InvalidRequest);
-            Err(error(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                json!({ "error": "body_too_large" }),
-            ))
-        }
+        Err(_) => Err(error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            json!({ "error": "body_too_large" }),
+        )),
     }
 }
 

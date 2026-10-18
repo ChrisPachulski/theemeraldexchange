@@ -106,6 +106,11 @@ pub fn verify(key: &SessionKey, token: &str, now: i64) -> Option<Session> {
 /// The `eex.session` value from the Cookie header(s), parsed the way Hono's
 /// getCookie does: first well-formed pair wins, surrounding quotes stripped.
 pub fn read_cookie(headers: &HeaderMap) -> Option<&str> {
+    read_named_cookie(headers, COOKIE_NAME)
+}
+
+/// Cookie `name`, parsed as [`read_cookie`] parses `eex.session`.
+pub fn read_named_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     let ws: &[char] = &[' ', '\t'];
     let valid = |v: &str| {
         v.bytes()
@@ -117,7 +122,7 @@ pub fn read_cookie(headers: &HeaderMap) -> Option<&str> {
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
         .filter_map(|pair| pair.split_once('='))
-        .filter(|(name, _)| name.trim_matches(ws) == COOKIE_NAME)
+        .filter(|(n, _)| n.trim_matches(ws) == name)
         .map(|(_, v)| {
             let v = v.trim_matches(ws);
             v.strip_prefix('"')
