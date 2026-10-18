@@ -72,10 +72,19 @@ fn jwe_regex() -> &'static Regex {
     R.get_or_init(|| Regex::new(r#"eyJ[A-Za-z0-9_-]{8,}\.[^"'\s;,]*"#).expect("static regex"))
 }
 
+/// Plex PIN poll URL: `/api/v2/pins/<id>`. With the public client id a PIN
+/// id can be polled for its token, so the id becomes `REDACTED`.
+fn plex_pin_url_regex() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(?i)((?:https?://plex\.tv)?/api/v2/pins/)[0-9]+").expect("static regex")
+    })
+}
+
 /// Recursively scrub `value` in-place. Object keys matching any
 /// `PII_KEYS` substring (case-insensitive) have their values replaced
-/// with `"REDACTED"`. String values have stream-token / JWE patterns
-/// redacted inline.
+/// with `"REDACTED"`. String values have stream-token / JWE / Plex PIN
+/// patterns redacted inline.
 pub fn scrub_value(value: &mut Value) {
     match value {
         Value::Object(map) => {
@@ -107,13 +116,17 @@ pub fn matches_pii_key(key: &str) -> bool {
 }
 
 /// Apply value-regex redactions to a string. Order matters and is
-/// contract-stable: stream-grant tokens first, JWE compact second.
+/// contract-stable: stream-grant tokens first, JWE compact second, Plex
+/// PIN ids third.
 fn redact_string(s: &str) -> String {
     let mut out = s.to_string();
     out = stream_token_regex()
         .replace_all(&out, "t=REDACTED")
         .into_owned();
     out = jwe_regex().replace_all(&out, "REDACTED.").into_owned();
+    out = plex_pin_url_regex()
+        .replace_all(&out, "${1}REDACTED")
+        .into_owned();
     out
 }
 
@@ -156,6 +169,22 @@ mod tests {
         let mut v = json!({"sqlParam": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0.abc.def.ghi.jkl"});
         scrub_value(&mut v);
         assert_eq!(v["sqlParam"], "REDACTED.");
+    }
+
+    #[test]
+    fn scrubs_plex_pin_ids_in_urls() {
+        let mut v = json!({
+            "url": "https://plex.tv/api/v2/pins/987654321",
+            "message": "GET HTTPS://PLEX.TV/api/v2/pins/123 -> 429; also /api/v2/pins/55?x=1",
+            "other": "/api/v2/pins/abc",
+        });
+        scrub_value(&mut v);
+        assert_eq!(v["url"], "https://plex.tv/api/v2/pins/REDACTED");
+        assert_eq!(
+            v["message"],
+            "GET HTTPS://PLEX.TV/api/v2/pins/REDACTED -> 429; also /api/v2/pins/REDACTED?x=1"
+        );
+        assert_eq!(v["other"], "/api/v2/pins/abc");
     }
 
     #[test]

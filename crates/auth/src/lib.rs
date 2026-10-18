@@ -15,6 +15,7 @@ pub mod invites;
 pub mod jwks;
 pub mod members;
 pub mod outcome;
+pub mod plex;
 pub mod ratelimit;
 pub mod reconcile;
 pub mod rekey;
