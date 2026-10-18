@@ -59,6 +59,11 @@ ENV DVR_DIR=/data/recordings
 ENV DB_BACKUP_DIR=/data/backups
 # Remux and capture scratch: a tmpfs in compose.
 ENV IPTV_REMUX_TMP_DIR=/tmp/iptv-remux
+# SQLite temp tables (the EPG sync stages ~300 MB in one) spill to a file in
+# TMPDIR, and /tmp is a RAM tmpfs charged to mem_limit that never shrinks;
+# 2026-10-17 that OOM-killed the backend mid-sync twice while it ran this
+# stack. Keep them on the data disk.
+ENV SQLITE_TMPDIR=/data
 
 EXPOSE 8004
 
