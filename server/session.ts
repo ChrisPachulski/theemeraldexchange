@@ -39,7 +39,7 @@ import { contracts, type ContractsTypes } from './services/contractsBinding.js'
 import { env } from './env.js'
 import { deriveKey, INFO_SESSION, INFO_DEVICE_TOKEN } from './services/keyDerivation.js'
 import { parseSub } from './services/sub.js'
-import { generateUlid } from './services/iptvStreamToken.js'
+import { ulid } from './services/ulid.js'
 import { serverDb, ensureServerId } from './services/serverDb.js'
 
 // Device-token JWE encrypt/decrypt is delegated to the Rust crate
@@ -189,7 +189,7 @@ export async function mintDeviceToken(input: DeviceTokenInput): Promise<string> 
   const key = getDeviceKey()
   const now = Math.floor(Date.now() / 1000)
   const exp = now + DEVICE_TOKEN_TTL_SECS
-  const jti = generateUlid()
+  const jti = ulid()
 
   // Delegated to crates/emerald-contracts via N-API. The crate hard-codes
   // the JWE protected header to {alg:'dir', enc:'A256GCM', kid} and the

@@ -150,8 +150,8 @@ pub fn json_fixture(name: &str) -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
-/// The epg-sync-scenario.json run that gen-epg-goldens.ts replays on the TS
-/// stack: a panel serving its catalog, and a sync wired to it and its feeds.
+/// The epg-sync-scenario.json run the TS stack replayed to write the goldens:
+/// a panel serving its catalog, and a sync wired to it and its feeds.
 pub struct Scenario {
     pub panel: Panel,
     pub sync: Arc<CatalogSync>,

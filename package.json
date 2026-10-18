@@ -15,6 +15,7 @@
     "build": "tsc -b && vite build && tsc -p server/tsconfig.json",
     "build:spa": "tsc -b && vite build",
     "build:server": "tsc -p server/tsconfig.json",
+    "typecheck": "tsc -b && tsc -p server/tsconfig.json",
     "start": "tsx server/index.ts",
     "lint": "eslint .",
     "test": "vitest run",

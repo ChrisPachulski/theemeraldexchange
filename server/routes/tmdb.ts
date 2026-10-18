@@ -25,7 +25,7 @@ import {
   MEDIA_DIRECT_KIND,
 } from '../services/mediaStreamToken.js'
 import { memberStatus } from '../services/membership.js'
-import { publicBaseUrl } from './iptv.js'
+import { publicBaseUrl } from '../services/publicBaseUrl.js'
 
 export const tmdb = new Hono<Env>()
 

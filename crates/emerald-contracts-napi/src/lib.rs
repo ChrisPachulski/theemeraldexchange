@@ -127,26 +127,6 @@ pub fn stream_token_verify(secret: Buffer, token: String) -> Result<StreamClaims
     Ok(claims_to_js(c))
 }
 
-#[napi(object)]
-pub struct DualKeyVerifyResult {
-    pub claims: StreamClaimsJs,
-    pub used_fallback: bool,
-}
-
-#[napi]
-pub fn stream_token_verify_dual_key(
-    primary: Buffer,
-    fallback: Buffer,
-    token: String,
-) -> Result<DualKeyVerifyResult> {
-    let (c, used) = stream_token::verify_dual_key(primary.as_ref(), fallback.as_ref(), &token)
-        .map_err(|e| Error::from_reason(format!("verify failed: {:?}", e)))?;
-    Ok(DualKeyVerifyResult {
-        claims: claims_to_js(c),
-        used_fallback: used,
-    })
-}
-
 #[napi]
 pub fn stream_token_enforce_time_window(claims: StreamClaimsJs, now_secs: i64) -> Result<()> {
     let parsed = claims_from_js(&claims)?;
@@ -330,50 +310,4 @@ pub fn pii_scrub_value(json_str: String) -> Result<String> {
         serde_json::from_str(&json_str).map_err(|e| Error::from_reason(format!("{}", e)))?;
     scrub_value(&mut v);
     serde_json::to_string(&v).map_err(|e| Error::from_reason(format!("{}", e)))
-}
-
-// ---------------------------------------------------------------------------
-// XMLTV parsing (server/services/iptvEpg.ts streamXmltv)
-// ---------------------------------------------------------------------------
-
-#[path = "../../iptv/src/xmltv.rs"]
-mod xmltv;
-
-/// Incremental XMLTV parser. Each call returns the rows completed so far as a
-/// JSON string `{programmes, channels}`: one string crosses the boundary per
-/// chunk instead of millions of objects.
-#[napi]
-pub struct XmltvParser {
-    inner: xmltv::Parser,
-}
-
-#[napi]
-impl XmltvParser {
-    #[napi(constructor)]
-    pub fn new(sniff_channels: bool) -> Self {
-        XmltvParser {
-            inner: xmltv::Parser::new(sniff_channels),
-        }
-    }
-
-    #[napi]
-    pub fn push(&mut self, chunk: Buffer) -> Result<String> {
-        batch_json(self.inner.push(chunk.as_ref()))
-    }
-
-    /// Emit only programmes on these normalized channel ids from now on.
-    #[napi]
-    pub fn keep_channels(&mut self, ids: Vec<String>) {
-        self.inner.keep_channels(ids);
-    }
-
-    #[napi]
-    pub fn finish(&mut self) -> Result<String> {
-        batch_json(self.inner.finish())
-    }
-}
-
-fn batch_json(batch: std::result::Result<xmltv::Batch, String>) -> Result<String> {
-    let batch = batch.map_err(Error::from_reason)?;
-    serde_json::to_string(&batch).map_err(|e| Error::from_reason(format!("{}", e)))
 }

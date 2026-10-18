@@ -19,13 +19,8 @@ import { env } from './env.js'
 import { app } from './app.js'
 import { validateFfmpegOrExit } from './services/ffmpeg.js'
 import { piiBreadcrumbScrub, piiScrub } from './services/telemetryPiiScrub.js'
-import { registerIptvSchedule } from './services/iptvScheduler.js'
 import { registerDbBackupSchedule } from './services/dbBackupScheduler.js'
 import { registerTokenSweepSchedule } from './services/tokenSweepScheduler.js'
-import { drainRemuxSessions } from './services/iptvRemux.js'
-import { iptvDb, closeIptvDb } from './services/iptvDbSingleton.js'
-import { startDvrScheduler, type DvrScheduler } from './services/dvrRecorder.js'
-import { registerDvrRecorder } from './routes/dvr.js'
 import { ensureServerId, closeServerDb } from './services/serverDb.js'
 import { runTelemetryDsnSelfCheck } from './services/serverTelemetry.js'
 import { createLogger } from './services/logger.js'
@@ -103,45 +98,16 @@ cronTasks.push(registerDbBackupSchedule(env.DB_BACKUP_CRON))
 // Hygiene sweep of expired auth rows (device_tokens, LOW-9). Not IPTV-gated — server.db grows on every build.
 cronTasks.push(registerTokenSweepSchedule(env.TOKEN_SWEEP_CRON))
 
-// IPTV sync is opt-in: only register the cron when all three Xtream creds
-// are configured AND the reviewer-insurance gate is not set. Keeps the
-// dev server working without mybunny.tv creds, prevents the bootstrap
-// sync from spamming /player_api.php on boot, and ensures IPTV_DISABLED
-// builds never make outbound IPTV traffic.
-if (
-  !env.IPTV_DISABLED &&
-  env.XTREAM_HOST &&
-  env.XTREAM_USERNAME &&
-  env.XTREAM_PASSWORD
-) {
-  void registerIptvSchedule(env.IPTV_SYNC_CRON).then((tasks) => {
-    cronTasks.push(...tasks)
-  })
-}
-
-// DVR (M6) recorder scheduler — ticks the engine that starts/stops ffmpeg
-// recordings of IPTV live channels. Off unless DVR_ENABLED (and IPTV mounted).
-let dvrScheduler: DvrScheduler | null = null
-if (env.DVR_ENABLED && !env.IPTV_DISABLED) {
-  dvrScheduler = startDvrScheduler(iptvDb().raw, env.DVR_DIR)
-  // Hand the DELETE route a handle so cancelling an in-flight recording stops
-  // its ffmpeg instead of leaving it pulling a provider connection + disk.
-  registerDvrRecorder(dvrScheduler.recorder)
-}
-
 let shuttingDown = false
 
 /**
  * Graceful shutdown (finding 14-2). Order matters:
- *   1. Stop cron so no sync/sweep/backup fires mid-teardown and races a DB close.
+ *   1. Stop cron so no sweep/backup fires mid-teardown and races a DB close.
  *   2. server.close() — stop accepting new connections; the callback fires once
  *      in-flight requests drain. A bounded timer force-exits if a long stream
  *      keeps the listener open past the grace window.
- *   3. drainRemuxSessions() — SIGTERM (then bounded SIGKILL) every ffmpeg child
- *      and wait for exit so none are orphaned and none are still writing the
- *      temp dir when we close DBs.
- *   4. Sentry.close() — flush any queued events (ties to finding 14-0).
- *   5. closeIptvDb() then closeServerDb() — dependents before the root server.db.
+ *   3. Sentry.close() — flush any queued events (ties to finding 14-0).
+ *   4. closeServerDb().
  */
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (shuttingDown) return
@@ -168,19 +134,12 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       server.close(() => resolve())
     })
 
-    // Stop the DVR scheduler + SIGTERM any in-flight recordings before the
-    // remux drain and the iptv DB close (the recorder writes files + reads that DB).
-    dvrScheduler?.stop()
-
-    await drainRemuxSessions()
-
     try {
       await Sentry.close(2000)
     } catch {
       // Telemetry flush is best-effort; never block shutdown on it.
     }
 
-    closeIptvDb()
     closeServerDb()
   } catch (err) {
     shutdownLog.error('error during graceful shutdown', { error: err })

@@ -1,14 +1,14 @@
 # PR-time docker builds for the sidecar images.
 #
 # ci.yml's docker-build job builds the backend image on every run but the
-# heavy sidecars (recommender torch stack, media-core/transcoder Rust
+# heavy sidecars (recommender torch stack, media-core/transcoder/iptv Rust
 # workspaces) only on push to main — which meant a PR could break a sidecar
 # Dockerfile and the failure surfaced only AFTER merge. This workflow closes
-# that gap: it builds the three sidecar images on PRs and exercises the
+# that gap: it builds the sidecar images on PRs and exercises the
 # recommender's real embedding/persistence path, but only when the inputs that
 # feed them change (path filter below), so routine SPA/server PRs stay fast.
 #
-# The matrix fans the three images out in parallel; per-image GHA cache
+# The matrix fans the images out in parallel; per-image GHA cache
 # scopes keep layer caches from clobbering each other.
 
 name: sidecar-images
@@ -51,6 +51,8 @@ jobs:
             dockerfile: ./crates/media-core/Dockerfile
           - name: transcoder
             dockerfile: ./crates/transcoder/Dockerfile
+          - name: iptv
+            dockerfile: ./crates/iptv/Dockerfile
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

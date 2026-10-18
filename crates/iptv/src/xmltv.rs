@@ -832,7 +832,7 @@ mod tests {
 }
 
 /// Release-mode timing on a real feed, kept out of the normal run:
-/// `XMLTV_BENCH=<feed> cargo test --release -p emerald-contracts-napi --lib xmltv_bench -- --ignored --nocapture`
+/// `XMLTV_BENCH=<feed> cargo test --release -p iptv --lib xmltv_bench -- --ignored --nocapture`
 #[cfg(test)]
 mod bench {
     use super::*;

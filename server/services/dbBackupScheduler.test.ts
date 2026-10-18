@@ -17,7 +17,7 @@ const DEFAULT_DB_BACKUP_CRON = '30 3 * * *'
 /**
  * Spy on cron.schedule, recording the first arg (the expression) and capturing
  * the registered callback so tests can invoke the backup body directly. Mirrors
- * the `as typeof cron.schedule` cast idiom from iptvScheduler.test.ts so the
+ * the `as typeof cron.schedule` cast idiom so the
  * node-cron v4 `func` signature does not reject our zero-arg test callback.
  */
 function spyOnSchedule(): {

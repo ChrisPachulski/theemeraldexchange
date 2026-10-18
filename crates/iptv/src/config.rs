@@ -1,5 +1,5 @@
-//! Env config for the iptv service. Names and defaults match `server/env.ts`
-//! so the shared `.env` drives both until the cutover. Raw `??` defaults stay
+//! Env config for the iptv service. Names and defaults are the ones
+//! `server/env.ts` used, so the same `.env` keys carry over. Raw `??` defaults stay
 //! raw (an empty value is kept), `opt()` ones treat empty as unset, and a
 //! positive-int typo fails the boot instead of becoming NaN.
 
@@ -61,6 +61,10 @@ pub struct Config {
     pub iptv_disabled: bool,
     pub dvr_enabled: bool,
     pub dvr_dir: String,
+    /// Nightly iptv.db snapshots (DB_BACKUP_*, the backend's knobs for its own DBs).
+    pub db_backup_dir: String,
+    pub db_backup_keep: u64,
+    pub db_backup_cron: String,
     /// The DVR schedule/delete bucket (ARR_MUTATE_RATE_*, shared with the
     /// arr mutate routes in Hono).
     pub arr_mutate_rate_capacity: u64,
@@ -166,6 +170,9 @@ impl Config {
             iptv_disabled: flag("IPTV_DISABLED"),
             dvr_enabled: flag("DVR_ENABLED"),
             dvr_dir: raw("DVR_DIR", "./data/recordings"),
+            db_backup_dir: raw("DB_BACKUP_DIR", "./data/backups"),
+            db_backup_keep: pos("DB_BACKUP_KEEP", 7)?,
+            db_backup_cron: raw("DB_BACKUP_CRON", "30 3 * * *"),
             arr_mutate_rate_capacity: pos("ARR_MUTATE_RATE_CAPACITY", 12)?,
             arr_mutate_rate_refill: pos("ARR_MUTATE_RATE_REFILL", 12)?,
             arr_mutate_rate_interval_ms: pos("ARR_MUTATE_RATE_INTERVAL_MS", 60_000)?,

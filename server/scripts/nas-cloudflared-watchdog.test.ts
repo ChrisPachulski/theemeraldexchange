@@ -3,7 +3,7 @@
 // (the stale-netns 1033/530 outage). The repo has no bats harness, so per the
 // campaign brief this drives the script's built-in `--self-test`, `--compare`,
 // and `--dry-run` modes from vitest (which shells out elsewhere too — see
-// ffmpeg.test.ts / iptvRemux.test.ts).
+// ffmpeg.test.ts).
 //
 // Lives under server/ so vitest's `server/**/*.test.ts` include picks it up;
 // it imports no server source, so it does not move coverage.

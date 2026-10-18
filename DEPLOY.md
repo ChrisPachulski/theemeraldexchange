@@ -150,10 +150,11 @@ What the script actually does (`./scripts/deploy-nas.sh --help` prints its own s
    `/mnt/user/appdata/exchange-backend/` on the NAS.
 4. Ships `.env.production` → NAS as `.env`, chmod 600.
 5. Pre-creates + chowns the sidecar DB bind-mount dirs (`recommender-db` →
-   uid 10001, `media-core-db` → uid 10002) so a fresh volume doesn't crash-loop
-   the `cap_drop: ALL` sidecars.
+   uid 10001, `media-core-db` → uid 10002, `iptv` → uid 10004) so a fresh
+   volume doesn't crash-loop the `cap_drop: ALL` sidecars. It refuses to go on
+   while `data/iptv.db` still sits in the backend's dir (see section 8).
 6. Tags every currently-deployed image (`backend`, `recommender`, `media-core`,
-   `transcoder`) as **`:rollback-<UTC timestamp>`** — one generation per run,
+   `iptv`, `transcoder`) as **`:rollback-<UTC timestamp>`** — one generation per run,
    the last 2 kept, and any legacy bare `:rollback` tag pruned. Then pulls the
    CI-built `:sha-<commit>` image for each service from GHCR and retags it to
    the compose name — nothing compiles on the NAS. Only `--build-on-nas`
@@ -165,7 +166,7 @@ What the script actually does (`./scripts/deploy-nas.sh --help` prints its own s
    recreation rebinds it to a new backend container).
 8. Installs the cloudflared stale-netns watchdog cron.
 9. **Health-gates the whole stack** (~150s ceiling): backend + recommender +
-   media-core + transcoder must all report docker-healthy. On failure it
+   media-core + iptv + transcoder must all report docker-healthy. On failure it
    restores the newest `:rollback-<ts>` generation, re-ups, and prints
    per-container log and manual-rollback commands.
 
@@ -225,6 +226,60 @@ CPU. Verify after first boot:
 ssh root@theemeraldexchange.local 'docker logs exchange-transcoder 2>&1 | grep -i -m1 encoder'
 ```
 
+### 8. Moving iptv.db to the iptv service (one time)
+
+Live TV, the guide and DVR now run in their own container (`exchange-iptv`,
+`crates/iptv`), which is the only reader and writer of `iptv.db` and the only
+process that dials the IPTV provider. The backend keeps the auth, membership,
+live-section and rating gates and forwards `/api/iptv/*` and `/api/dvr/*` to it
+(`IPTV_SERVICE_URL`, default `http://iptv:8004`). The DB moves from the
+backend's `data/` to the iptv volume, `/mnt/user/appdata/exchange-backend/iptv`
+(mounted at `/data`; recordings go to `/data/recordings`, nightly snapshots to
+`/data/backups`). `deploy-nas.sh` refuses to run until the move is done, so an
+iptv container never starts on an empty volume (it would bootstrap-sync against
+the provider while the real DB sits stranded). The schema is unchanged.
+
+1. Merge the PR and let main CI go green: it pushes
+   `theemeraldexchange-iptv:sha-<commit>` with the other four images.
+2. Check the migration ledger. The Rust migrator stops the boot on a checksum
+   mismatch, where the Node one only warned:
+
+   ```bash
+   ssh theemeraldexchange "docker exec exchange-backend node -e \"const D=require('better-sqlite3');const d=new D('/app/data/iptv.db',{readonly:true});for(const r of d.prepare('SELECT version,checksum FROM schema_migrations ORDER BY version').all())console.log(r.version,r.checksum)\""
+   shasum -a 256 crates/iptv/migrations/*.sql
+   ```
+
+   All 10 versions should be present with the same hashes. If one differs (or
+   reads `(file-not-found)`), add `ALLOW_MIGRATION_CHECKSUM_MISMATCH=1` to
+   `.env.production` for this deploy and remove it afterwards.
+3. Stop the backend (the API stays down until the step 4 deploy; cloudflared shares its
+   netns) and move the DB with its WAL files:
+
+   ```bash
+   ssh theemeraldexchange 'docker stop exchange-backend && cd /mnt/user/appdata/exchange-backend \
+     && mkdir -p iptv && for f in iptv.db iptv.db-wal iptv.db-shm; do [ -f data/$f ] && mv data/$f iptv/; done \
+     && chown -R 10004:10004 iptv && ls -la iptv'
+   ```
+
+   DVR is off in prod, so there are no recordings to move. If `DVR_ENABLED` was
+   ever on, also move `data/recordings` to `iptv/recordings` and rewrite
+   `dvr_recordings.file_path` from `/app/data/recordings/` to
+   `/data/recordings/`.
+4. `./scripts/deploy-nas.sh`. It pulls the five images, starts `exchange-iptv`
+   and the backend, and health-gates both.
+5. Verify: `curl -s https://api.theemeraldexchange.com/api/health`, the
+   `/api/version` release sha, then tune one live channel in a client.
+   `ssh theemeraldexchange 'docker logs exchange-iptv --tail=30'` shows
+   `iptv listening` and no bootstrap sync (`last_sync` in the moved DB is
+   fresh). In-memory state (remux sessions, dead-feed memory, the concurrency
+   tracker) starts empty, which costs one re-tune.
+
+Rollback: if the health gate fails, `deploy-nas.sh` restores the previous
+images and compose file and, because that compose has no `iptv` service, moves
+`iptv.db` back to `data/` before bringing the stack up. By hand: stop
+`exchange-iptv`, move `iptv/iptv.db*` back to `data/` (`chown 10001:10001`),
+retag the `:rollback-<ts>` images and `docker compose up -d --no-build`.
+
 ---
 
 ## Ongoing deploys
@@ -237,7 +292,7 @@ reason).
 `deploy-image.sh` call `scripts/ci-gate.sh`, which refuses an unpushed HEAD
 and waits (up to 25 min, polling GitHub once a minute) for every Actions
 check on HEAD to finish; a red or cancelled check aborts the deploy naming the
-job. On main the CI `docker-build` job pushes the four images to GHCR as
+job. On main the CI `docker-build` job pushes the five images to GHCR as
 `:main` and `:sha-<commit>`, and `deploy-nas.sh` pulls the `:sha-` images for
 HEAD and retags them to the compose names — the NAS never compiles. So the
 working loop is `git push && ./scripts/deploy-nas.sh`: the script idles until
@@ -255,7 +310,7 @@ cheap failure classes never reach main. `SKIP_PREPUSH=1 git push` bypasses.
 |---|---|---|
 | SPA only (anything in `src/`) | `git push` | Netlify auto-builds and deploys. ~30s. |
 | Backend (anything in `server/`) | `git push && ./scripts/deploy-nas.sh` | Waits for green CI, pulls the CI-built backend image, restarts. |
-| Rust sidecars (anything in `crates/`, root `Cargo.toml`/`Cargo.lock`) | `git push && ./scripts/deploy-nas.sh` | Same path — `crates/` feeds the media-core + transcoder images AND the backend's napi / recommender's pyo3 contract bindings. CI compiles them, not the NAS. |
+| Rust sidecars (anything in `crates/`, root `Cargo.toml`/`Cargo.lock`) | `git push && ./scripts/deploy-nas.sh` | Same path — `crates/` feeds the media-core, iptv and transcoder images AND the backend's napi / recommender's pyo3 contract bindings. CI compiles them, not the NAS. |
 | Recommender (anything in `recommender/`) | `git push && ./scripts/deploy-nas.sh` | Same path; pulls the CI-built recommender image. |
 | Both SPA + NAS | `git push && ./scripts/deploy-nas.sh` | Deploy the **frontend before the backend** when a change spans both (the SPA is the consumer). |
 | Env var change in `.env.production` | `./scripts/deploy-nas.sh` | Same script; new `.env` ships and containers restart. |

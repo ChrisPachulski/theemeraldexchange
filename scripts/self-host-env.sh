@@ -11,8 +11,6 @@
 # Deliberately NOT generated (verdict A10):
 #   - RECOMMENDER_EVENT_SECRET: only when USE_LOCAL_RECOMMENDER=1 (flag-gated
 #     below).
-#   - IPTV_RECOMMENDER_EXPORT_SECRET: minting it silently ENABLES the export
-#     endpoint the operator meant to leave off. Stays opt-in, always.
 #
 # POSIX sh only — runs on any box with /dev/urandom + base64 (openssl not
 # required). $status is never assigned (zsh-reserved).

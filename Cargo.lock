@@ -662,13 +662,9 @@ name = "emerald-contracts-napi"
 version = "0.1.0"
 dependencies = [
  "emerald-contracts",
- "flate2",
- "memchr",
  "napi",
  "napi-build",
  "napi-derive",
- "quick-xml 0.42.0",
- "regex",
  "serde",
  "serde_json",
 ]

@@ -643,7 +643,7 @@ mod tests {
     /// The scenario in tests/fixtures/epg-sync-scenario.json (panel catalog,
     /// provider XMLTV, a plain and a gzipped external feed, two syncs) leaves
     /// epg_programs and epg_resolved_id exactly as the TS sync did
-    /// (epg-goldens.json, from gen-epg-goldens.ts).
+    /// (epg-goldens.json, written by the TS stack before S8 removed it).
     #[tokio::test]
     async fn a_full_mock_sync_matches_the_ts_goldens() {
         let golden = json_fixture("epg-goldens.json");

@@ -1203,7 +1203,7 @@ pub(crate) mod tests {
 
     /// Grid, search, now/next and channel windows on the synced S2 scenario DB
     /// (with one feed-check override) equal what the TS queries returned
-    /// (epg-goldens.json "api", written by gen-epg-goldens.ts).
+    /// (epg-goldens.json "api", written by the TS stack before S8).
     #[tokio::test]
     async fn queries_on_the_scenario_db_match_the_ts_goldens() {
         let golden = crate::testpanel::json_fixture("epg-goldens.json");

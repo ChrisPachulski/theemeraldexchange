@@ -27,16 +27,9 @@ const iptvAvailability = vi.hoisted(() => ({
   linkedTmdbIds: new Set<number>(),
 }))
 
-vi.mock('../services/iptvDbSingleton.js', () => ({
-  iptvDb: () => ({
-    raw: {
-      prepare: () => ({
-        all: (...ids: number[]) => ids
-          .filter((id) => iptvAvailability.linkedTmdbIds.has(Number(id)))
-          .map((tmdb_id) => ({ tmdb_id })),
-      }),
-    },
-  }),
+vi.mock('../services/iptvService.js', () => ({
+  iptvLinkedTmdbIds: async (_sub: string, ids: number[]) =>
+    ids.filter((id) => iptvAvailability.linkedTmdbIds.has(id)),
 }))
 
 vi.mock('@anthropic-ai/sdk', () => {

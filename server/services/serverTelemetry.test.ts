@@ -1,6 +1,6 @@
 // Integration tests for the §15-mandatory server-side Glitchtip relay
 // (server/services/serverTelemetry.ts). `reportServerEvent` is voided
-// (fire-and-forget) by suggestions/recommender/iptvScheduler/dbBackupScheduler;
+// (fire-and-forget) by suggestions/recommender/dbBackupScheduler;
 // this file is its only coverage.
 //
 // Mechanics worth knowing before editing:

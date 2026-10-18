@@ -21,7 +21,7 @@
 import { contracts } from './contractsBinding.js'
 
 import { env } from '../env.js'
-import { generateUlid } from './iptvStreamToken.js'
+import { ulid } from './ulid.js'
 import { deriveKey, INFO_INTERNAL_PRINCIPAL } from './keyDerivation.js'
 
 /** Active kid for the v1 key. Bump on rotation; verifier keymap stays
@@ -83,7 +83,7 @@ export function mintInternalPrincipal(input: InternalPrincipalInput): string {
   const key = getInternalKey()
   const now = Math.floor(Date.now() / 1000)
   const exp = now + INTERNAL_PRINCIPAL_TTL_SECS
-  const reqId = input.reqId || generateUlid()
+  const reqId = input.reqId || ulid()
 
   // napi-rs 2.16 maps Rust `Option<String>` to TS `string | undefined` —
   // passing `null` triggers "Failed to convert JavaScript value `Null`".

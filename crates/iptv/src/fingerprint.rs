@@ -322,7 +322,7 @@ mod tests {
     }
 
     /// tests/fixtures/fingerprint-goldens.json, written by the TS
-    /// compareFingerprints (gen-fingerprint-goldens.ts) on the same frames.
+    /// compareFingerprints on the same frames (before S8 removed the TS stack).
     #[test]
     fn scores_match_the_ts_goldens() {
         let goldens: serde_json::Value =

@@ -51,8 +51,7 @@ COPY crates/emerald-contracts ./crates/emerald-contracts
 COPY crates/emerald-contracts-napi ./crates/emerald-contracts-napi
 COPY crates/emerald-contracts-pyo3 ./crates/emerald-contracts-pyo3
 # media-core, transcoder and iptv are workspace members too; cargo must see them
-# to resolve the workspace. iptv also holds src/xmltv.rs, which the napi addon
-# compiles in by #[path] until the TS IPTV stack goes.
+# to resolve the workspace.
 COPY crates/media-core ./crates/media-core
 COPY crates/transcoder ./crates/transcoder
 COPY crates/iptv ./crates/iptv

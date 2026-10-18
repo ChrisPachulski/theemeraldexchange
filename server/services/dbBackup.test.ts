@@ -20,7 +20,6 @@ beforeAll(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dbbackup-test-'))
   vi.resetModules()
   process.env.SERVER_DB_PATH = path.join(tmpDir, 'server.db')
-  process.env.IPTV_DB_PATH = path.join(tmpDir, 'iptv.db')
   process.env.MEDIA_DB_PATH = path.join(tmpDir, 'media.db')
   process.env.DB_BACKUP_DIR = path.join(tmpDir, 'backups')
   process.env.DB_BACKUP_KEEP = '3'
@@ -31,11 +30,6 @@ beforeAll(() => {
   process.env.SONARR_API_KEY ||= 'sonarr-key'
   process.env.RADARR_API_KEY ||= 'radarr-key'
   process.env.SAB_API_KEY ||= 'sab-key'
-
-  // Pre-seed a minimal iptv.db so the backup has a second file to snapshot.
-  const iptv = new Database(process.env.IPTV_DB_PATH)
-  iptv.exec('CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1);')
-  iptv.close()
 
   // Pre-seed a minimal media.db carrying a media_watch_state row — the only
   // home of watch progress, which the pass must snapshot too.
@@ -50,7 +44,6 @@ beforeAll(() => {
 afterAll(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true })
   delete process.env.SERVER_DB_PATH
-  delete process.env.IPTV_DB_PATH
   delete process.env.DB_BACKUP_DIR
   delete process.env.DB_BACKUP_KEEP
   delete process.env.MEDIA_DB_PATH
@@ -73,15 +66,16 @@ describe('runScheduledBackup (finding 14-4)', () => {
     const before = Date.now()
     const result = runScheduledBackup()
 
-    // Three snapshot files exist on disk and are non-empty.
-    expect(result.files.length).toBe(3)
+    // Two snapshot files exist on disk and are non-empty.
+    expect(result.files.length).toBe(2)
     for (const f of result.files) {
       expect(fs.existsSync(f)).toBe(true)
       expect(fs.statSync(f).size).toBeGreaterThan(0)
     }
     const names = fs.readdirSync(result.dir)
     expect(names.some((n) => n.startsWith('server-') && n.endsWith('.db'))).toBe(true)
-    expect(names.some((n) => n.startsWith('iptv-') && n.endsWith('.db'))).toBe(true)
+    // iptv.db is the iptv service's to snapshot (crates/iptv/src/backup.rs).
+    expect(names.some((n) => n.startsWith('iptv-'))).toBe(false)
     expect(names.some((n) => n.startsWith('media-') && n.endsWith('.db'))).toBe(true)
 
     // The media.db snapshot is a valid SQLite DB that preserves the watch row —

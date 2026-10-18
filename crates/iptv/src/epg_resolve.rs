@@ -1083,8 +1083,8 @@ mod tests {
     }
 
     /// Every guide row the 2026-10-15 audit judged, from the production
-    /// snapshot: each index's answer matches the TS resolver's (goldens from
-    /// gen-epg-goldens.ts), and the guide id it implies matches the audit.
+    /// snapshot: each index's answer matches the TS resolver's (goldens it wrote
+    /// before S8), and the guide id it implies matches the audit.
     #[test]
     fn the_2026_10_15_audit_rows_resolve_as_the_ts_resolver_did() {
         let f = fixture("epg-resolve-2026-10-15.json");

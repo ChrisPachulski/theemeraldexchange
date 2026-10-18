@@ -261,9 +261,9 @@ assertProdSecret('RECOMMENDER_EVENT_SECRET', recommenderEventSecret)
 // rotation is scoped to the affected token class.  The D2a migration
 // fallback (verifier accepting SESSION_SECRET-signed tokens) is removed:
 // every verify site is single-key, so SESSION_SECRET can never forge a
-// stream token. Future rotations should dual-key OLD vs NEW
-// STREAM_TOKEN_SECRET values via verifyStreamTokenDualKey, never
-// SESSION_SECRET.
+// stream token. A future rotation dual-keys OLD vs NEW
+// STREAM_TOKEN_SECRET values (emerald-contracts stream_token::verify_dual_key),
+// never SESSION_SECRET.
 const rawStreamTokenSecret = required('STREAM_TOKEN_SECRET')
 validateSecretStrength('STREAM_TOKEN_SECRET', rawStreamTokenSecret, isProd)
 
@@ -650,31 +650,26 @@ export const env = {
     (process.env.NODE_ENV === 'production'
       ? 'http://transcoder:8003'
       : 'http://127.0.0.1:8003'),
+  // The iptv service (crates/iptv): sole owner of iptv.db and the only
+  // process that dials the IPTV provider. /api/iptv and /api/dvr forward here.
+  iptvServiceUrl:
+    opt('IPTV_SERVICE_URL') ??
+    (process.env.NODE_ENV === 'production'
+      ? 'http://iptv:8004'
+      : 'http://127.0.0.1:8004'),
   // Path to media-core's library DB (media.db). The server opens this
   // file READ-ONLY for availability tagging (recommender stamps
   // available_on:['local'] for titles already on disk). media-core owns
-  // ALL writes; the server never migrates or mutates it. Default matches
-  // the NAS data bind-mount used by iptv.db. In Docker the library mount
+  // ALL writes; the server never migrates or mutates it. In Docker the library mount
   // is read-only for media-core too — this is purely a read seam.
   MEDIA_DB_PATH: process.env.MEDIA_DB_PATH ?? './data/media.db',
 
-  // mybunny.tv / Xtream Codes IPTV integration. Reserved at PF-2;
-  // consumed by the IPTV modules added in later PF phases (Xtream client,
-  // EPG sync cron, stream-token proxy, recommender export). Empty
-  // defaults keep boot working without IPTV configured — downstream
-  // modules guard on XTREAM_HOST being set before attempting any
-  // upstream calls.
-  XTREAM_HOST: process.env.XTREAM_HOST ?? '',
-  XTREAM_USERNAME: process.env.XTREAM_USERNAME ?? '',
-  XTREAM_PASSWORD: process.env.XTREAM_PASSWORD ?? '',
   // Path to the server identity / cross-cutting state DB. Must be
   // bind-mounted in Docker — losing this on a container restart generates
-  // a new server_id and silently revokes all device tokens. Default
-  // matches the NAS data bind-mount used by iptv.db and other data files.
+  // a new server_id and silently revokes all device tokens.
   SERVER_DB_PATH: process.env.SERVER_DB_PATH ?? './data/server.db',
-  IPTV_DB_PATH: process.env.IPTV_DB_PATH ?? './data/iptv.db',
   // Scheduled DB-snapshot retention dir + count + cadence (finding 14-4).
-  // VACUUM INTO snapshots of server.db + iptv.db land here on a cron and on
+  // VACUUM INTO snapshots of server.db + media.db land here on a cron and on
   // each pass stamp server_state.last_backup_at. Keep this on the SAME
   // bind-mounted volume root as the DBs by default but in a sibling dir so a
   // restore is a simple copy. Default cadence: daily at 03:30 local.
@@ -683,93 +678,15 @@ export const env = {
   DB_BACKUP_CRON: process.env.DB_BACKUP_CRON ?? '30 3 * * *',
   // Nightly sweep of expired device_tokens (LOW-9).
   TOKEN_SWEEP_CRON: process.env.TOKEN_SWEEP_CRON ?? '15 3 * * *',
-  IPTV_EPG_PATH: opt('IPTV_EPG_PATH') ?? '/xmltv.php',
-  // Global cap on concurrent IPTV streams of ANY kind (live/remux/vod/series/
-  // catchup). INVARIANT for the remux (live AVPlayer) path: the effective remux
-  // cap must satisfy CONCURRENT ≤ IPTV_MAX_UPSTREAM_CONNECTIONS — a remux grant
-  // opens a live upstream connection that is hard-capped below, so granting more
-  // remux slots than upstream connections would silently ffmpeg-evict the
-  // surplus viewer mid-stream. The live grant enforces this by clamping the
-  // remux grant to min(this, IPTV_MAX_UPSTREAM_CONNECTIONS), so this default may
-  // safely exceed the upstream cap for the non-remux kinds (VOD/series open no
-  // live upstream connection). Ops pins this to the provider's real connection
-  // count in production.
-  IPTV_MAX_CONCURRENT_STREAMS: positiveInt('IPTV_MAX_CONCURRENT_STREAMS', 4),
-  // HARD ceiling on simultaneous live-remux upstream connections to the IPTV
-  // provider. The provider plan allows only a few at once and trips an abuse
-  // block on excess or rapid churn — once tripped it serves CORRUPT, undecodable
-  // video to everyone until it cools down. Enforced inside startRemuxSession
-  // (the single point where an upstream connection opens), so NO caller path —
-  // grant, a direct manifest poll, a test probe, or a future bug — can exceed
-  // it. Set this to your provider's real max simultaneous connections; default 2.
-  IPTV_MAX_UPSTREAM_CONNECTIONS: positiveInt('IPTV_MAX_UPSTREAM_CONNECTIONS', 2),
-  // Feed checks (iptvFeedVerify): compare a tuned stream's picture with other
-  // streams' to catch a stream carrying a different channel than its guide
-  // listing, correct the guide, and switch the viewer to a stream that carries
-  // what they picked. Uses a spare upstream slot for ~25s per comparison and
-  // yields it to any viewer. Set IPTV_FEED_CHECK=0 to turn it off.
-  IPTV_FEED_CHECK: process.env.IPTV_FEED_CHECK !== '0',
-  // UTC hours "start-end" (end exclusive, may wrap midnight) when the idle
-  // feed-check sweep may run. It holds two provider connections per check, so
-  // it stays in the hours nobody watches: a viewer sitting down mid-check
-  // churned the provider into its abuse block during a game (2026-10-10).
-  // Default 9-15 = 2-8 AM Pacific daylight time.
-  IPTV_FEED_SWEEP_HOURS_UTC: process.env.IPTV_FEED_SWEEP_HOURS_UTC ?? '9-15',
-  IPTV_STREAM_TOKEN_TTL_SECS: positiveInt('IPTV_STREAM_TOKEN_TTL_SECS', 300),
-  // TTL for LIVE grant tokens (the `live` .ts and `remux` index.m3u8 URLs). A
-  // live session is UNBOUNDED and the player re-fetches the SAME tokenized
-  // manifest URL forever; the handler re-checks `exp` on every poll, so the
-  // short finite-asset TTL above froze live cable after exactly 5 minutes. A
-  // live token must outlast a viewing sitting — like MEDIA_STREAM_TOKEN_TTL_SECS
-  // for local media. It is rid-bound to one channel + sub and only yields a
-  // remux stream while its reservation is alive (idle-reaped after at least
-  // 90s without fetches), so a long TTL is low-impact. Segment tokens stay on the
-  // short TTL above (re-minted each segment, consumed within the live window).
-  IPTV_LIVE_TOKEN_TTL_SECS: positiveInt('IPTV_LIVE_TOKEN_TTL_SECS', 43_200),
-  // TTL for ON-DEMAND grant tokens (VOD, series, catch-up) and the HLS segment
-  // tokens minted from their manifests. On-demand playback is NOT a single
-  // request: AVPlayer (progressive MP4) issues fresh range GETs as playback
-  // advances and on every seek, and hls.js (VOD .m3u8) fetches segment URLs
-  // across the whole runtime — each carries the grant/segment token and the
-  // handler re-checks `exp` every time. The short finite-asset TTL above
-  // (IPTV_STREAM_TOKEN_TTL_SECS=300) therefore froze on-demand playback after
-  // exactly ~5 minutes with a 401, the same failure class already fixed for
-  // live. A movie/episode token must outlast a whole sitting — like
-  // MEDIA_STREAM_TOKEN_TTL_SECS for local media (default 6h, room for pauses).
-  // It is rid-bound to one title + sub, so a long TTL is low-impact. Live
-  // remux per-segment tokens stay on the short TTL above (re-minted each
-  // segment, consumed within the live window).
-  IPTV_ONDEMAND_TOKEN_TTL_SECS: positiveInt('IPTV_ONDEMAND_TOKEN_TTL_SECS', 21_600),
   // TTL for local-media playback stream tokens (routes/media.ts). Unlike IPTV's
   // short-lived per-request tokens, a movie token must outlast a whole sitting:
   // the same token is presented on every byte-range (direct play) or HLS
   // segment fetch for the duration of playback. Default 6h covers any film with
   // room for pauses; it scopes one user to one title, so a leak is low-impact.
   MEDIA_STREAM_TOKEN_TTL_SECS: positiveInt('MEDIA_STREAM_TOKEN_TTL_SECS', 21_600),
-  IPTV_LIST_TIMEOUT_MS: positiveInt('IPTV_LIST_TIMEOUT_MS', 30_000),
-  // Whole-transfer deadline + body cap for proxied HLS MANIFEST fetches
-  // (rewriteHlsPlaylist). Manifests are small text files, so a hung or
-  // drip-feeding upstream must not pin a request open indefinitely — unlike
-  // the live/segment byte paths, which legitimately stream for hours and are
-  // bounded by client-abort propagation instead.
-  IPTV_MANIFEST_FETCH_TIMEOUT_MS: positiveInt('IPTV_MANIFEST_FETCH_TIMEOUT_MS', 10_000),
-  IPTV_MANIFEST_MAX_BYTES: positiveInt('IPTV_MANIFEST_MAX_BYTES', 2 * 1024 * 1024),
-  IPTV_SYNC_CRON: process.env.IPTV_SYNC_CRON ?? '0 */6 * * *',
-  IPTV_RECOMMENDER_EXPORT_SECRET: opt('IPTV_RECOMMENDER_EXPORT_SECRET') ?? null,
-  IPTV_REMUX_TMP_DIR: process.env.IPTV_REMUX_TMP_DIR ?? '/tmp/iptv-remux',
-  // Live re-encode safety net (iptvRemux). A channel whose upstream video isn't
-  // H.264 — e.g. an HEVC 24/7 feed, which Apple can't play from MPEG-TS HLS — is
-  // re-encoded to H.264 so it plays everywhere. Only non-H.264 channels pay this
-  // cost and at most IPTV_MAX_UPSTREAM_CONNECTIONS run at once, so the encode
-  // load on the Plex-sharing box stays bounded. PRESET trades CPU for quality;
-  // THREADS caps cores per encode; MAX_HEIGHT downscales tall sources so the
-  // encode holds realtime on a weak CPU.
-  IPTV_REENCODE_PRESET: process.env.IPTV_REENCODE_PRESET ?? 'veryfast',
-  IPTV_REENCODE_THREADS: positiveInt('IPTV_REENCODE_THREADS', 2),
-  IPTV_REENCODE_MAX_HEIGHT: positiveInt('IPTV_REENCODE_MAX_HEIGHT', 1080),
   // Reviewer-insurance gate per contract §13. Set IPTV_DISABLED=1 (or
   // 'true') to build an instance with no IPTV surface — the /api/iptv
-  // routes 404 and the IPTV sync cron never registers.
+  // routes 404 (set it on the iptv service too, so it never dials the provider).
   //
   // This is a DEPLOYMENT switch and is NOT the App Review gate. App Review
   // judges the binary's capability, not the configuration of the server it
@@ -784,10 +701,9 @@ export const env = {
   // Server-side default: enabled. Flip it per deploy if a household never
   // uses IPTV.
   IPTV_DISABLED: process.env.IPTV_DISABLED === '1' || process.env.IPTV_DISABLED === 'true',
-  // DVR (M6). Off by default; when enabled, recordings are written under DVR_DIR
-  // and the scheduler ticks the recorder engine.
+  // DVR (M6). Off by default. Mounts /api/dvr here; the iptv service reads the
+  // same flag to run the recorder.
   DVR_ENABLED: process.env.DVR_ENABLED === '1' || process.env.DVR_ENABLED === 'true',
-  DVR_DIR: process.env.DVR_DIR ?? './data/recordings',
 
   // §15 Telemetry. EEX_TELEMETRY_DSN is the Sentry-compatible DSN for the
   // self-hoster's Glitchtip project. Distributed to clients at boot via

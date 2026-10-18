@@ -1,9 +1,10 @@
 //! iptv service: sole owner of `iptv.db` and the only process that dials the
 //! Xtream provider. Hono keeps auth and policy and forwards `/api/iptv/*` and
 //! `/api/dvr/*` here (see `api`); the binary also runs the catalog + EPG sync
-//! scheduler.
+//! scheduler, the DVR recorder and the nightly iptv.db snapshot.
 
 pub mod api;
+pub mod backup;
 pub mod catalog;
 pub mod concurrency;
 pub mod config;

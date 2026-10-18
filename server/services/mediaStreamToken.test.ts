@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 // Real STREAM_TOKEN_SECRET so the canonical Rust signer/verifier round-trips;
 // the media token reuses the IPTV stream-token machinery verbatim.
@@ -21,12 +21,6 @@ import {
 import { signStreamToken } from './iptvStreamToken.js'
 
 describe('mediaStreamToken', () => {
-  beforeEach(() => {
-    // verifyMediaToken consults the replay cache; fresh jti per sign() keeps
-    // round-trips independent, but clear timers between tests for hygiene.
-    vi.clearAllMocks()
-  })
-
   it('round-trips a direct-play (vod) token bound to a title', () => {
     const rid = mediaResourceId('movie', 123)
     const token = signMediaToken({ sub: 'plex:42', rid, kind: MEDIA_DIRECT_KIND })

@@ -106,8 +106,9 @@ docker-compose.override.yml
 # ---- Runtime bind-mount sources (NAS-side) ----------------------------------
 # Runtime bind-mount sources under the build root on the NAS.
 # docker-compose.yml mounts ${APPDATA}/data → backend:/app/data and
-# ${APPDATA}/recommender-db → recommender:/data. They grow large
-# (grab logs, sqlite + sentence-transformer cache) and have no
-# business in the image build context.
+# ${APPDATA}/recommender-db → recommender:/data, ${APPDATA}/iptv → iptv:/data.
+# They grow large (grab logs, sqlite + sentence-transformer cache, DVR
+# recordings) and have no business in the image build context.
 data/
 recommender-db/
+/iptv/

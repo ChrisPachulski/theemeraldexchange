@@ -1,6 +1,6 @@
 // Scheduled, automated snapshots of the server-owned SQLite DBs (finding 14-4).
 //
-// Before this, the ONLY durability for server.db / iptv.db was the live
+// Before this, the ONLY durability for server.db was the live
 // bind-mounted data/ directory plus the DESTRUCTIVE-migration backup gate
 // (migrator.ts), which fires only when a destructive migration runs. A
 // non-migration data loss — disk failure, an accidental volume delete, a
@@ -19,11 +19,12 @@
 //   1. Stop the server container.
 //   2. Copy the chosen snapshot over the live DB:
 //        cp <BACKUP_DIR>/server-<ts>.db   <SERVER_DB_PATH>
-//        cp <BACKUP_DIR>/iptv-<ts>.db     <IPTV_DB_PATH>
 //        cp <BACKUP_DIR>/media-<ts>.db    <MEDIA_DB_PATH>
 //      and delete any stale -wal/-shm sidecars next to the live files.
 //   3. Start the server. server_id is preserved (it lives in server.db), so
 //      paired device tokens keep working.
+//
+// iptv.db is snapshotted by the iptv service that owns it (crates/iptv/src/backup.rs).
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -49,8 +50,8 @@ function vacuumIntoHandle(db: Database.Database, destPath: string): void {
 }
 
 /**
- * Snapshot a DB at `srcPath` that is NOT held open by a live singleton (e.g.
- * iptv.db here, where we don't import the iptv singleton). Opens a short-lived
+ * Snapshot a DB at `srcPath` that is NOT held open by a live singleton (media.db,
+ * written by the media-core container). Opens a short-lived
  * connection with a busy_timeout so a transient lock from another reader is
  * waited out rather than throwing immediately.
  */
@@ -114,8 +115,8 @@ export interface BackupResult {
 }
 
 /**
- * Run one backup pass: snapshot server.db (always), iptv.db, and media.db (each
- * when its file exists), prune to the retention count, and stamp
+ * Run one backup pass: snapshot server.db (always) and media.db (when its file
+ * exists), prune to the retention count, and stamp
  * server_state.last_backup_at.
  * Returns the snapshot paths and the stamp. Throws on snapshot failure so the
  * caller (cron wrapper) logs it — a silently-failing backup is worse than none.
@@ -139,25 +140,12 @@ export function runScheduledBackup(now = new Date()): BackupResult {
   files.push(serverDest)
   pruneSnapshots(dir, 'server', env.DB_BACKUP_KEEP)
 
-  // iptv.db — only snapshot if the live file exists (IPTV_DISABLED builds that
-  // never opened it have no file to copy). We do NOT import the iptv singleton
-  // here (keeps backups working on IPTV_DISABLED builds), so a short-lived
-  // connection with a busy_timeout takes the snapshot.
-  if (fs.existsSync(env.IPTV_DB_PATH)) {
-    const iptvDest = path.join(dir, `iptv-${stamp}.db`)
-    fs.rmSync(iptvDest, { force: true })
-    vacuumIntoPath(env.IPTV_DB_PATH, iptvDest)
-    verifySnapshot(iptvDest)
-    files.push(iptvDest)
-    pruneSnapshots(dir, 'iptv', env.DB_BACKUP_KEEP)
-  }
-
   // media.db — the media-core DB, bind-mounted into the backend, is the ONLY
   // home of media_watch_state (Continue Watching, watched flags, resume
   // positions). Its live writer is the media-core container (a cross-PROCESS
   // snapshot), but VACUUM INTO over the shared WAL bind mount is still safe —
   // WAL permits concurrent readers and the busy_timeout waits out any lock. Skip
-  // when the file is absent (an IPTV/media-less build never mounts it).
+  // when the file is absent (a media-less build never mounts it).
   if (fs.existsSync(env.MEDIA_DB_PATH)) {
     const mediaDest = path.join(dir, `media-${stamp}.db`)
     fs.rmSync(mediaDest, { force: true })

@@ -184,7 +184,7 @@ export async function runRecommenderSuggestionPath(
     setTimingHeader()
     return c.json({
       source: 'trending',
-      items: tagIptvAvailability(shown),
+      items: await tagIptvAvailability(shown, session),
       _diag: diag({
         path: 'recommender_fallback_trending',
         modelVersion,
@@ -225,7 +225,7 @@ export async function runRecommenderSuggestionPath(
   setTimingHeader()
   return c.json({
     source: 'recommender',
-    items: tagLocalAvailability(tagIptvAvailability(items), type),
+    items: tagLocalAvailability(await tagIptvAvailability(items, session), type),
     _diag: diag({
       modelVersion,
       recipe,

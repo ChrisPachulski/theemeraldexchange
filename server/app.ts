@@ -80,7 +80,7 @@ app.onError((err, c) => {
 // X-Request-Id response header. Must run before the logger so the id is logged.
 app.use('*', requestId())
 
-// The media/transcoder proxies buffer control-plane request bodies before
+// The media/transcoder/iptv proxies buffer control-plane request bodies before
 // forwarding them. Bound them at the edge so a large or chunked body cannot
 // exhaust the Node heap. Playback bytes travel in GET responses and are
 // unaffected by these request limits.
@@ -92,6 +92,14 @@ app.use(
 )
 app.use(
   '/api/transcode/*',
+  bodyLimit({ maxSize: SIDECAR_CONTROL_BODY_LIMIT_BYTES, onError: payloadTooLarge }),
+)
+app.use(
+  '/api/iptv/*',
+  bodyLimit({ maxSize: SIDECAR_CONTROL_BODY_LIMIT_BYTES, onError: payloadTooLarge }),
+)
+app.use(
+  '/api/dvr/*',
   bodyLimit({ maxSize: SIDECAR_CONTROL_BODY_LIMIT_BYTES, onError: payloadTooLarge }),
 )
 
@@ -291,10 +299,7 @@ app.route('/api/sab', sab)
 app.route('/api/tmdb', tmdb)
 app.route('/api/ratings', ratings)
 // Contract §13.3 reviewer-insurance flag: when IPTV_DISABLED is set the
-// /api/iptv tree is unmounted. The transitive iptv module imports still
-// load (Node ESM is eager), so the better-sqlite3 + node-cron deps are
-// not tree-shaken from the bundle — but a runtime request to any
-// /api/iptv/* path hits Hono's 404 fallback.
+// /api/iptv proxy is unmounted, so any /api/iptv/* path hits Hono's 404.
 //
 // Deployment switch only — it is NOT what makes a build submittable. App
 // Review judges the app binary, which carries its own Live surface

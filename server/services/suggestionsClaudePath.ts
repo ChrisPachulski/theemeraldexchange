@@ -107,7 +107,7 @@ export async function runClaudeSuggestionPath(
     setTimingHeader()
     return c.json({
       source: 'trending',
-      items: tagIptvAvailability(trending.slice(0, TARGET_COUNT)),
+      items: await tagIptvAvailability(trending.slice(0, TARGET_COUNT), session),
       _diag: diag({
         reason: 'library_below_threshold',
         libraryCount: library.length,
@@ -292,7 +292,7 @@ export async function runClaudeSuggestionPath(
     setTimingHeader()
     return c.json({
       source: 'trending_fallback',
-      items: tagIptvAvailability(trending.slice(0, TARGET_COUNT)),
+      items: await tagIptvAvailability(trending.slice(0, TARGET_COUNT), session),
       _diag: diag({ reason: 'claude_threw', claudeError: errorMsg, claudeStatus: errorStatus, ...(usageLogFailed ? { usageLogFailed: true } : {}) }),
     })
   }
@@ -475,13 +475,13 @@ export async function runClaudeSuggestionPath(
     if (accepted.length === 0) {
       return c.json({
         source: 'personalized_empty_trending_fallback',
-        items: tagIptvAvailability(filled),
+        items: await tagIptvAvailability(filled, session),
         _diag: diag({ accepted: 0, retryAttempted: triedRetry, fillSource, lastCounters: filledCounters, poolSize: safePool.length, poolHitRate: 0, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, recentlyShownCount, ...(claudeTruncated ? { claudeTruncated: true } : {}), ...(usageLogFailed ? { usageLogFailed: true } : {}) }),
       })
     }
     return c.json({
       source: 'personalized_filled',
-      items: tagIptvAvailability(filled),
+      items: await tagIptvAvailability(filled, session),
       _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, fillSource, lastCounters: filledCounters, poolSize: safePool.length, poolHits: filledPoolHits, poolHitRate: filledPoolHitRate, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, recentlyShownCount, ...(claudeTruncated ? { claudeTruncated: true } : {}), ...(usageLogFailed ? { usageLogFailed: true } : {}) }),
     })
   }
@@ -507,7 +507,7 @@ export async function runClaudeSuggestionPath(
   setTimingHeader()
   return c.json({
     source: 'personalized',
-    items: tagIptvAvailability(finalAccepted),
+    items: await tagIptvAvailability(finalAccepted, session),
     _diag: diag({ accepted: accepted.length, retryAttempted: triedRetry, poolSize: safePool.length, poolHits: poolHitsTotal, poolHitRate, lastCounters: finalCounters, droppedPicks: droppedTotal, costCents: refreshCostCents, cacheHitRate, callCount: claudeCallCount, recentlyShownCount: recentlyShownTrimmed.length, ...(claudeTruncated ? { claudeTruncated: true } : {}), ...(usageLogFailed ? { usageLogFailed: true } : {}) }),
   })
 }

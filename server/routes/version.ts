@@ -55,7 +55,6 @@ version.get('/', (c) => {
     /** Mirrors contract §12.3 — apps gate "you may pair" on this. */
     accepting_device_pairs: !!env.deviceTokenSecret,
     schemas: {
-      iptv: schemaState(env.IPTV_DB_PATH),
       exchange: schemaState(env.RECOMMENDER_DB_PATH),
       media: schemaState(env.MEDIA_DB_PATH),
     },

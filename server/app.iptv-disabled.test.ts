@@ -28,10 +28,9 @@ describe('IPTV_DISABLED=1 — reviewer-insurance gate', () => {
       const health = await app.request('/api/health')
       expect(health.status).toBe(200)
 
-      // The /api/iptv tree is unmounted. Health endpoint inside it is
-      // the canonical probe the contract names.
-      const iptvHealth = await app.request('/api/iptv/health')
-      expect(iptvHealth.status).toBe(404)
+      // The /api/iptv proxy is unmounted.
+      const sessions = await app.request('/api/iptv/sessions')
+      expect(sessions.status).toBe(404)
 
       // Catalog routes also gone.
       const live = await app.request('/api/iptv/live')
@@ -55,10 +54,10 @@ describe('IPTV_DISABLED=1 — reviewer-insurance gate', () => {
 
     const { app } = await import('./app.js')
 
-    // /api/iptv/health 401s without auth — but it's mounted, so a
+    // /api/iptv/sessions 401s without auth — but it's mounted, so a
     // 404 here would mean the gate fired when it shouldn't have.
-    const iptvHealth = await app.request('/api/iptv/health')
-    expect(iptvHealth.status).not.toBe(404)
+    const sessions = await app.request('/api/iptv/sessions')
+    expect(sessions.status).not.toBe(404)
 
     const limits = await app.request('/api/limits')
     const body = (await limits.json()) as { iptvEnabled: boolean }

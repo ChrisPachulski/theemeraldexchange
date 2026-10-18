@@ -1,5 +1,5 @@
 //! iptvLiveRemuxMap.test.ts carried over. The rewrite cases are matched byte
-//! for byte against goldens the TS stack wrote (tests/fixtures/gen-remux-goldens.ts);
+//! for byte against goldens the TS stack wrote (tests/fixtures/remux-goldens.json);
 //! the index cases run the real remux registry over a stub ffmpeg.
 
 use super::*;

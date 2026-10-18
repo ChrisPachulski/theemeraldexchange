@@ -207,7 +207,7 @@ export type EpgGridDto = {
 }
 
 // One `GET /epg/search` hit: a programme whose title or description matched,
-// plus the channel it airs on (server/services/iptvEpgQuery.ts epgSearch).
+// plus the channel it airs on (crates/iptv/src/catalog.rs, the search route).
 export type EpgSearchHit = {
   streamId: number
   channelName: string

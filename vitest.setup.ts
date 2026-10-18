@@ -1,7 +1,7 @@
 // Per-worker DB isolation for the test suite.
 //
 // WHY: vitest runs test files in parallel workers by default. Several backend
-// tests open the sqlite singletons (server.db / media.db / iptv.db) WITHOUT
+// tests open the sqlite singletons (server.db / media.db) WITHOUT
 // setting their own *_DB_PATH, so they all fell back to the shared ./data/*.db
 // files. Two workers running migrations against the same file at once raced on
 // the migrator's `CREATE TABLE schema_migrations` / `INSERT ... version`,
@@ -10,7 +10,7 @@
 // cascading to spurious 500s on routes that touch the DB (e.g.
 // radarr.test.ts "user can list movies" → expected 200, got 500).
 //
-// FIX: give every worker a unique temp directory for the three sqlite paths,
+// FIX: give every worker a unique temp directory for the sqlite paths,
 // BEFORE any test module imports env.ts (setupFiles run before the test files'
 // own imports). Tests that set their own *_DB_PATH (invites/members/device/…)
 // still win — they assign process.env in vi.hoisted, which runs even earlier.
@@ -29,7 +29,6 @@ const dir = mkdtempSync(join(tmpdir(), `eex-vitest-w${workerId}-`))
 
 if (!process.env.SERVER_DB_PATH) process.env.SERVER_DB_PATH = join(dir, 'server.db')
 if (!process.env.MEDIA_DB_PATH) process.env.MEDIA_DB_PATH = join(dir, 'media.db')
-if (!process.env.IPTV_DB_PATH) process.env.IPTV_DB_PATH = join(dir, 'iptv.db')
 
 // localStorage shim for the jsdom environment (*.dom.test.tsx).
 //

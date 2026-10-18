@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use iptv::{api, config::Config, db, dvr, feed_sweep, scheduler, sync::CatalogSync};
+use iptv::{api, backup, config::Config, db, dvr, feed_sweep, scheduler, sync::CatalogSync};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -31,6 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .dvr
         .clone()
         .map(|r| dvr::spawn_scheduler(pool.clone(), r, dvr::TICK_EVERY));
+    let _backup = backup::spawn(pool.clone(), config.clone());
     let sync = CatalogSync::new(pool, config.clone());
 
     let _jobs = if config.sync_enabled() {

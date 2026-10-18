@@ -1,5 +1,5 @@
-//! `iptv.db`: pool + migrations. The SQL files stay in `server/migrations/iptv`
-//! byte-for-byte, so the checksums match the ledger the Node migrator wrote.
+//! `iptv.db`: pool + migrations. The SQL files in crates/iptv/migrations are the
+//! Node migrator's files byte-for-byte, so the checksums match its ledger.
 
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
@@ -10,7 +10,7 @@ macro_rules! migration {
         (
             $v,
             $name,
-            include_str!(concat!("../../../server/migrations/iptv/", $name, ".sql")),
+            include_str!(concat!("../migrations/", $name, ".sql")),
         )
     };
 }
@@ -80,8 +80,7 @@ mod tests {
         );
 
         // Read the files themselves (not the embedded copies), LF-normalize, hash.
-        let dir =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../server/migrations/iptv");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
         for ((version, name, _), (_, stored)) in MIGRATIONS.iter().zip(&rows) {
             let text = std::fs::read_to_string(dir.join(format!("{name}.sql"))).unwrap();
             let want: String = Sha256::digest(text.replace("\r\n", "\n").as_bytes())

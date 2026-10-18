@@ -21,7 +21,6 @@ import {
   verifyStreamToken,
   type StreamKind,
 } from './iptvStreamToken.js'
-import { checkReplay } from './tokenReplayCache.js'
 
 /** Direct-play (progressive) token kind. */
 export const MEDIA_DIRECT_KIND: StreamKind = 'vod'
@@ -59,9 +58,9 @@ export type MediaTokenCheck =
  * Verify a `?t=` media stream token. Enforces, in order: valid signature +
  * time window (STREAM_TOKEN_SECRET only — the D2a SESSION_SECRET fallback is
  * gone, preserving key separation), the `media:` rid namespace, an optional
- * expected kind set, an optional exact rid match (binds a token to one
- * resource), and replay policy (all tracked kinds — vod/remux/segment — are
- * multi-use within TTL; media only ever mints vod/remux).
+ * expected kind set, and an optional exact rid match (binds a token to one
+ * resource). Tokens are multi-use until exp: a player re-presents one on
+ * every range or segment GET.
  */
 export function verifyMediaToken(
   token: string,
@@ -80,11 +79,5 @@ export function verifyMediaToken(
   if (opts?.rid && claims.rid !== opts.rid) {
     return { ok: false, error: 'token_mismatch' }
   }
-  // Media only ever mints 'vod'/'remux'; a 'playlist' kind here is malformed
-  // (and checkReplay does not track it). Reject before the replay check so the
-  // cast to checkReplay's TrackedKind (StreamKind minus 'playlist') is sound.
-  if (claims.k === 'playlist') return { ok: false, error: 'token_kind' }
-  const replay = checkReplay(claims.jti, claims.exp, claims.k)
-  if (!replay.allowed) return { ok: false, error: replay.reason }
   return { ok: true, sub: claims.sub, kind: claims.k, rid: claims.rid }
 }
