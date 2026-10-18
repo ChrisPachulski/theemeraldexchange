@@ -1,0 +1,23 @@
+#!/bin/sh
+# Test stand-in for the trailer mux (ffmpeg ... -i V -i A ... OUT): writes the
+# two inputs back to back to OUT. An OUT path containing "ffx" fails like a
+# corrupt input. Every run is logged to ffmpeg.calls beside the symlink.
+d=$(dirname "$0")
+echo "$*" >> "$d/ffmpeg.calls"
+v=""
+a=""
+prev=""
+for arg; do
+  if [ "$prev" = "-i" ]; then
+    if [ -z "$v" ]; then v=$arg; else a=$arg; fi
+  fi
+  prev=$arg
+  last=$arg
+done
+case "$last" in
+  *ffx*)
+    echo "Invalid data found when processing input" >&2
+    exit 1
+    ;;
+esac
+cat "$v" "$a" > "$last"

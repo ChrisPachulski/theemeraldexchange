@@ -1,0 +1,15 @@
+#!/bin/sh
+# Test stand-in for yt-dlp -g, run through a symlink in a temp dir: prints
+# ytdlp/<id> from beside the link (id from the trailing watch URL), else fails.
+# Every run is logged to ytdlp.calls.
+d=$(dirname "$0")
+echo "$*" >> "$d/ytdlp.calls"
+for a; do last=$a; done
+id=${last##*v=}
+f="$d/ytdlp/$id"
+if [ -f "$f" ]; then
+  cat "$f"
+  exit 0
+fi
+echo "ERROR: [youtube] $id: Video unavailable" >&2
+exit 1

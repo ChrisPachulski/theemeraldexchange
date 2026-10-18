@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use gateway::config::{Config, auth_posture};
-use gateway::{AppState, telemetry};
+use gateway::{AppState, telemetry, trailer};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -29,6 +29,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "EEX_TELEMETRY_DSN is not set: telemetry is off. Set TELEMETRY_ENABLED=1 in \
              deployments that run the telemetry stack so a lost DSN fails loudly."
         );
+    }
+
+    // The trailer mux spawns ffmpeg: a missing or pre-6 build fails the boot
+    // instead of every mux at runtime.
+    match trailer::check_ffmpeg(&config.ext.ffprobe_bin).await {
+        Ok(trailer::FfmpegOk::Version(v)) => {
+            tracing::info!("ffmpeg version={v} path={}", config.ext.ffprobe_bin);
+        }
+        Ok(trailer::FfmpegOk::Unrecognized(v)) => tracing::warn!(
+            "ffmpeg version={v} (unrecognised format, assuming current) path={}",
+            config.ext.ffprobe_bin
+        ),
+        Err((found, reason)) => {
+            tracing::error!("[boot] ffmpeg >=6.0 required; found: {found} ({reason})");
+            std::process::exit(1);
+        }
     }
 
     let pool = auth::db::open(&config.auth.server_db_path).await?;

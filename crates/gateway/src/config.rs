@@ -64,6 +64,42 @@ pub struct Config {
     pub arr_mutate_rate_capacity: u32,
     pub arr_mutate_rate_refill: u32,
     pub arr_mutate_rate_interval_ms: u64,
+    /// Third-party bases and the tools the trailer path runs.
+    pub ext: External,
+}
+
+/// Where TMDB, OMDb, Wikidata and Rotten Tomatoes live and which binaries
+/// resolve and mux trailers. The defaults are production's; only
+/// EEX_YTRESOLVE_BIN is read from env (as in TS), and tests point the rest
+/// at local fakes and stubs.
+#[derive(Clone, Debug)]
+pub struct External {
+    pub tmdb_base: String,
+    pub omdb_base: String,
+    pub wikidata_sparql: String,
+    pub rt_base: String,
+    pub ytresolve_bin: String,
+    pub ytdlp_bin: String,
+    pub ffmpeg_bin: String,
+    pub ffprobe_bin: String,
+    /// Muxed trailers and their part files.
+    pub mux_dir: std::path::PathBuf,
+}
+
+impl External {
+    fn new(ytresolve_bin: Option<String>) -> External {
+        External {
+            tmdb_base: "https://api.themoviedb.org/3".into(),
+            omdb_base: "https://www.omdbapi.com/".into(),
+            wikidata_sparql: "https://query.wikidata.org/sparql".into(),
+            rt_base: "https://www.rottentomatoes.com/".into(),
+            ytresolve_bin: ytresolve_bin.unwrap_or_else(|| "eex-ytresolve".into()),
+            ytdlp_bin: "yt-dlp".into(),
+            ffmpeg_bin: "ffmpeg".into(),
+            ffprobe_bin: "ffprobe".into(),
+            mux_dir: std::env::temp_dir().join("eex-ytmux"),
+        }
+    }
 }
 
 impl Config {
@@ -203,8 +239,14 @@ impl Config {
                 "ARR_MUTATE_RATE_REFILL",
             )?,
             arr_mutate_rate_interval_ms: positive_int("ARR_MUTATE_RATE_INTERVAL_MS", 60_000)?,
+            ext: External::new(opt("EEX_YTRESOLVE_BIN")),
             auth,
         })
+    }
+
+    /// TMDB_READ_ACCESS_TOKEN or TMDB_API_KEY is set.
+    pub fn tmdb_configured(&self) -> bool {
+        self.tmdb_read_access_token.is_some() || self.tmdb_api_key.is_some()
     }
 
     /// The SPA hides Sonarr/Radarr/SAB surfaces an unconfigured install

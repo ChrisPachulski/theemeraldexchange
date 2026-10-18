@@ -46,6 +46,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/version", get(version))
         .merge(crate::routes::router())
         .merge(crate::arr::router())
+        .merge(crate::tmdb::router())
         .with_state(state.clone())
         .merge(auth::router(state.auth.clone()));
     edge(routes, &state)

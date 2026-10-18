@@ -36,7 +36,24 @@ pub fn config(extra: &[(&str, &str)]) -> Config {
     for (k, v) in extra {
         map.insert(k.to_string(), v.to_string());
     }
-    Config::from_lookup(|k| map.get(k).cloned()).unwrap()
+    let mut config = Config::from_lookup(|k| map.get(k).cloned()).unwrap();
+    // Nothing a test forgets to point at a fake can leave the machine or run
+    // a real yt-dlp/ffmpeg: port 9 on loopback refuses, the bins do not exist.
+    let dead = "http://127.0.0.1:9";
+    config.ext.tmdb_base = format!("{dead}/tmdb/3");
+    config.ext.omdb_base = format!("{dead}/omdb/");
+    config.ext.wikidata_sparql = format!("{dead}/wikidata/sparql");
+    config.ext.rt_base = format!("{dead}/rt/");
+    for bin in [
+        &mut config.ext.ytresolve_bin,
+        &mut config.ext.ytdlp_bin,
+        &mut config.ext.ffmpeg_bin,
+        &mut config.ext.ffprobe_bin,
+    ] {
+        *bin = format!("/nonexistent/eex-test/{bin}");
+    }
+    config.ext.mux_dir = std::env::temp_dir().join("eex-test-ytmux-unused");
+    config
 }
 
 /// State over a fresh server.db in `dir` (kept alive by the caller).

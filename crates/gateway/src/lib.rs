@@ -1,18 +1,22 @@
 //! gateway: the public /api surface that replaces the Hono backend. It links
 //! crates/auth in-process (its router, extractors, CSRF layer and server.db
 //! pool) and reaches the internal services (recommender, media-core,
-//! transcoder, iptv) and the *arr/SAB/TMDB upstreams through one client.
+//! transcoder, iptv) and the *arr/SAB/TMDB/OMDb upstreams through one client.
 
 pub mod app;
 pub mod arr;
 pub mod config;
 pub mod jsonl;
+pub mod media_token;
 pub mod principal;
+pub mod ratings;
 pub mod recommender;
 pub mod routes;
 pub mod stores;
 pub mod syncplay;
 pub mod telemetry;
+pub mod tmdb;
+pub mod trailer;
 pub mod upstream;
 
 #[cfg(test)]
@@ -50,6 +54,10 @@ pub struct AppState {
     pub server_id: Arc<tokio::sync::OnceCell<String>>,
     /// Reservation ledgers, mutate limiters and the grab log.
     pub arr: Arc<arr::ArrState>,
+    /// The title_ratings fill queue.
+    pub ratings: Arc<ratings::Ratings>,
+    /// Trailer resolver caches and the mux single-flight.
+    pub trailers: Arc<trailer::Trailers>,
 }
 
 impl AppState {
@@ -63,6 +71,8 @@ impl AppState {
             syncplay: Arc::default(),
             server_id: Arc::default(),
             arr: Arc::new(arr::ArrState::new(&config, arr::shared::Timings::default())),
+            ratings: Arc::default(),
+            trailers: Arc::default(),
             config: Arc::new(config),
         }
     }
