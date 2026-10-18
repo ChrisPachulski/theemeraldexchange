@@ -146,32 +146,32 @@ const GATE_MAX_ENTRIES: usize = 1000;
 
 /// The token check. False only on a 401/403 (the token was revoked: the user
 /// signed out of plex.tv). The allowlist has already admitted the sub, so a
-/// plex.tv not_member or an outage keeps the session; both are cached.
+/// plex.tv not_member (an invited Plex user with no share on our server) or an
+/// outage keeps the session, and every verdict is cached for the TTL: plex.tv
+/// is never on the hot path. Concurrent misses share one probe.
 async fn plex_token_live(st: &AuthState, sub: &str, token: &str, server_id: &str) -> bool {
-    let now = st.now();
     let fingerprint = fingerprint(token);
+    if st.plex_gate.fresh(sub, &fingerprint, server_id, st.now()) {
+        return true;
+    }
+    // ponytail: one lock for every sub's probe; per-sub locks if the member
+    // count ever makes 5 s plex.tv waits queue up.
+    let _probing = st.plex_gate.probing.lock().await;
+    let now = st.now();
     if st.plex_gate.fresh(sub, &fingerprint, server_id, now) {
         return true;
     }
     let probe = tokio::time::timeout(GATE_TIMEOUT, st.plex.probe_resources(&st.config, token))
         .await
         .unwrap_or(Probe::NetworkError);
-    let member = match probe {
+    match probe {
         Probe::HttpError(401 | 403) => return false,
-        Probe::Ok(resources) => resources
-            .iter()
-            .any(|r| r.provides.contains("server") && r.client_identifier == server_id),
         Probe::HttpError(status) => {
             tracing::warn!(event = "plex_probe", status, "plex membership probe HTTP");
-            true
         }
-        Probe::NetworkError => true,
-    };
-    // An outage is cached as a pass, so a plex.tv hiccup is retried after the
-    // TTL, not on every request. A not_member entry never matches, so the
-    // next request probes again (as TS).
-    let verified = member.then(|| (fingerprint, server_id.to_string()));
-    st.plex_gate.set(sub, now, verified);
+        Probe::Ok(_) | Probe::NetworkError => {}
+    }
+    st.plex_gate.set(sub, &fingerprint, server_id, now);
     true
 }
 
@@ -184,35 +184,40 @@ struct GateEntry {
     checked_at: i64,
     /// Write order, for the eviction.
     seq: u64,
-    /// The token fingerprint and server id a pass was for; None = not_member.
-    verified: Option<(String, String)>,
+    /// The token fingerprint and server id the pass was for.
+    fingerprint: String,
+    server_id: String,
 }
 
-/// The sessionGate cache: sub -> the last plex.tv verdict, at most
+/// The sessionGate cache: sub -> the last plex.tv pass, at most
 /// GATE_MAX_ENTRIES, the oldest write evicted first (TS's Map order).
 #[derive(Default)]
-pub struct PlexGate(Mutex<(u64, HashMap<String, GateEntry>)>);
+pub struct PlexGate {
+    entries: Mutex<(u64, HashMap<String, GateEntry>)>,
+    /// Held across a probe, so a page load's parallel requests make one.
+    probing: tokio::sync::Mutex<()>,
+}
 
 impl PlexGate {
     /// A pass for this token and server within the TTL.
     fn fresh(&self, sub: &str, fingerprint: &str, server_id: &str, now: i64) -> bool {
-        let guard = self.0.lock().unwrap();
+        let guard = self.entries.lock().unwrap();
         guard.1.get(sub).is_some_and(|e| {
             now - e.checked_at < GATE_TTL_SECS
-                && e.verified
-                    .as_ref()
-                    .is_some_and(|(f, s)| f == fingerprint && s == server_id)
+                && e.fingerprint == fingerprint
+                && e.server_id == server_id
         })
     }
 
-    fn set(&self, sub: &str, now: i64, verified: Option<(String, String)>) {
-        let mut guard = self.0.lock().unwrap();
+    fn set(&self, sub: &str, fingerprint: &str, server_id: &str, now: i64) {
+        let mut guard = self.entries.lock().unwrap();
         let (seq, entries) = &mut *guard;
         *seq += 1;
         let entry = GateEntry {
             checked_at: now,
             seq: *seq,
-            verified,
+            fingerprint: fingerprint.to_string(),
+            server_id: server_id.to_string(),
         };
         entries.insert(sub.to_string(), entry);
         if entries.len() > GATE_MAX_ENTRIES {
@@ -230,7 +235,7 @@ impl PlexGate {
 
     /// /plex/check just proved the token: the next request skips plex.tv.
     pub(crate) fn prime(&self, sub: &str, token: &str, server_id: &str, now: i64) {
-        self.set(sub, now, Some((fingerprint(token), server_id.to_string())));
+        self.set(sub, &fingerprint(token), server_id, now);
     }
 }
 

@@ -571,16 +571,52 @@ async fn a_plex_member_passes_and_does_not_cascade() {
 }
 
 #[tokio::test]
-async fn a_plex_not_member_stays_signed_in_and_is_probed_again() {
+async fn a_plex_not_member_stays_signed_in_and_waits_out_the_ttl() {
     let g = gate().await;
     device(&g.st, PLEX_SUB, AuthMode::Plex, "TV").await;
     g.resources(200, json!([]));
     assert!(g.reconcile(Some(TOKEN)).await.is_some());
-    // Another server's share is not ours either.
-    g.resources(200, home_share("someone-else"));
     assert!(g.reconcile(Some(TOKEN)).await.is_some());
+    assert_eq!(g.probes(), 1);
+    // Another server's share is not ours either (a new token re-checks).
+    g.resources(200, home_share("someone-else"));
+    assert!(g.reconcile(Some("other-token")).await.is_some());
     assert_eq!(g.probes(), 2);
     assert!(revocations(&g.db).await.is_empty());
+}
+
+/// Review finding: an invited Plex user (no share on PLEX_SERVER_ID) once
+/// re-probed plex.tv on every request after /plex/check's prime expired.
+#[tokio::test]
+async fn an_invited_plex_user_past_the_prime_makes_one_probe_per_ttl() {
+    let mut g = gate().await;
+    let t0 = chrono::Utc::now().timestamp();
+    g.st.plex_gate.prime(PLEX_SUB, TOKEN, HOME, t0);
+    g.st.fixed_now = Some(t0 + GATE_TTL_SECS);
+    g.resources(200, json!([]));
+    for _ in 0..10 {
+        assert!(g.reconcile(Some(TOKEN)).await.is_some());
+    }
+    assert_eq!(g.probes(), 1);
+}
+
+#[tokio::test]
+async fn a_burst_of_parallel_requests_shares_one_probe() {
+    let g = gate().await;
+    g.resources(200, json!([]));
+    let mut set = tokio::task::JoinSet::new();
+    for _ in 0..10 {
+        let st = g.st.clone();
+        set.spawn(async move {
+            reconcile_cookie(&st, plex_session(Some(TOKEN), Role::User))
+                .await
+                .unwrap()
+        });
+    }
+    while let Some(r) = set.join_next().await {
+        assert!(r.unwrap().is_some());
+    }
+    assert_eq!(g.probes(), 1);
 }
 
 #[tokio::test]
@@ -687,7 +723,7 @@ fn the_gate_holds_1000_subs_and_evicts_the_oldest_write() {
     let fresh = |i: usize| gate.fresh(&sub(i), &fingerprint(TOKEN), HOME, 0);
     assert!(fresh(0) && fresh(2) && fresh(1000));
     assert!(!fresh(1));
-    assert_eq!(gate.0.lock().unwrap().1.len(), 1000);
+    assert_eq!(gate.entries.lock().unwrap().1.len(), 1000);
 }
 
 #[test]
