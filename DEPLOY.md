@@ -280,6 +280,75 @@ images and compose file and, because that compose has no `iptv` service, moves
 `exchange-iptv`, move `iptv/iptv.db*` back to `data/` (`chown 10001:10001`),
 retag the `:rollback-<ts>` images and `docker compose up -d --no-build`.
 
+### 9. Re-keying the owner off Plex (one time, at the Rust gateway cutover)
+
+Plex sign-in is dropped when the Rust gateway replaces the Node backend. The
+owner's household data (members row, invites, watch state, favorites,
+playlists, feedback, watchlist, policies, recommender history, usage and grab
+logs) is keyed on her `plex:` sub. `eex-rekey` (in the gateway image, source
+`crates/auth/src/rekey.rs`) moves it to the identity she signs in with from
+then on. Every step needs the owner's go-ahead. Never run it with the stack up.
+
+What it does: one `VACUUM INTO` backup (`<db>.pre-rekey-<stamp>`) and then one
+transaction per SQLite file. Data rows move to the target, and where the target
+already has the same item, the target's copy is kept. The target's members row
+gets the source's access (admin wins); the source row is revoked and kept for
+audit. Invites move. Device tokens and playlist tokens are revoked, because the
+sub is sealed inside them. Device-link codes the source claimed are deleted.
+The stored Anthropic key is re-encrypted under the new sub when
+`--session-secret-file` is given, and deleted otherwise. JSON files are merged
+(target entries kept) and JSONL `sub` fields are rewritten; each changed file
+is copied to `<file>.pre-rekey-<stamp>` first. It is a dry run unless you pass
+`--apply`. Running it again after an apply changes nothing.
+
+1. Choose the target sub. It must be one that can sign in: `workos:`, `apple:`
+   or `google:` (it warns on `local:`; nothing signs in as local today). While
+   the old stack is still up, issue yourself an owner invite (Admin, Invites,
+   role admin) and redeem it by signing in with the target provider. Then read
+   the target sub from Admin, Members. The source sub is the `plex:` value in
+   `ADMIN_SUBS`.
+2. Stop the stack and back up the four data dirs. Record their owners, because
+   the re-key runs as root:
+
+   ```bash
+   ssh theemeraldexchange 'cd /mnt/user/appdata/exchange-backend && docker compose stop \
+     && stat -c "%u:%g %n" data iptv media-core-db recommender-db \
+     && tar czf /mnt/user/appdata/pre-rekey-$(date +%Y%m%d).tgz data iptv media-core-db recommender-db'
+   ```
+
+3. Put `SESSION_SECRET` (from `.env.production`) in a root-only file on the
+   NAS, e.g. `/root/rekey-secret` (`chmod 600`). Dry-run, read the counts, then
+   run the same command with `--apply`:
+
+   ```bash
+   A=/mnt/user/appdata/exchange-backend
+   docker run --rm --user 0:0 --entrypoint eex-rekey \
+     -v $A/data:/rk/data -v $A/iptv:/rk/iptv -v $A/media-core-db:/rk/media \
+     -v $A/recommender-db:/rk/rec -v /root/rekey-secret:/rk/secret:ro \
+     <gateway image>:sha-<commit> \
+     --from plex:<owner id> --to <target sub> \
+     --server-db /rk/data/server.db --iptv-db /rk/iptv/iptv.db \
+     --media-db /rk/media/media.db --recommender-db /rk/rec/exchange.db \
+     --data-dir /rk/data --session-secret-file /rk/secret
+   ```
+
+   A second dry run after the apply should show only zeros. Then delete
+   `/root/rekey-secret` and give each dir back its recorded owner
+   (`chown -R <uid>:<gid> <dir>`; that covers the backups, too).
+4. In `.env.production`, set `ADMIN_SUBS` to the target sub and remove the
+   `PLEX_*` values.
+5. Deploy and start the stack. In the SPA, signed in as the target, check that
+   `/api/me` shows role admin and that Admin, Members lists the target as admin
+   and the `plex:` row as revoked.
+6. Re-pair each Apple device through the device link (the code the app shows,
+   claimed in the SPA while signed in as the target), and re-mint the M3U
+   playlist URLs. If the secret file was left out, re-enter the
+   Anthropic key.
+
+Rollback: stop the stack, restore the tarball from step 2 (or copy each
+`*.pre-rekey-*` file over its original and delete the `-wal`/`-shm` files), put
+the old `ADMIN_SUBS` back, and start the previous images.
+
 ---
 
 ## Ongoing deploys

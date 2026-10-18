@@ -12,6 +12,11 @@ publish = false
 name = "auth"
 path = "src/lib.rs"
 
+# One-shot owner re-key (plex sub -> chosen sub), run by hand at the step-3 cutover.
+[[bin]]
+name = "eex-rekey"
+path = "src/bin/eex-rekey.rs"
+
 [dependencies]
 # The schema_migrations migrator.
 media-core = { path = "../media-core" }
@@ -29,6 +34,8 @@ ulid.workspace = true
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
 tracing = "0.1"
+# The user_api_keys AES-256-GCM rows (re-encrypted by eex-rekey).
+aes-gcm.workspace = true
 # RS256 for the Apple/Google identity tokens (already in the tree via rustls).
 ring = "0.17"
 subtle = "2"

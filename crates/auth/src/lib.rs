@@ -17,6 +17,7 @@ pub mod members;
 pub mod outcome;
 pub mod ratelimit;
 pub mod reconcile;
+pub mod rekey;
 pub mod session;
 mod signin;
 pub mod workos;
