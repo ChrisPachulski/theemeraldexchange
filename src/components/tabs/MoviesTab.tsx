@@ -17,6 +17,7 @@ import { LoadingPulse } from '../feedback/LoadingPulse'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import { useAuth } from '../../lib/auth'
 import { useDebounced } from '../../lib/hooks/useDebounced'
+import { pickPoster } from '../../lib/hooks/useRecentlyAdded'
 import { useRatings } from '../../lib/hooks/useRatings'
 import { ratingPieces, type RatingPiece, type RatingsMap } from '../../lib/api/ratings'
 import { useMovieSearch } from '../../lib/hooks/useMovieSearch'
@@ -54,16 +55,7 @@ import { pickDefaultRootFolder } from '../../lib/pickDefaultRootFolder'
 import './TvTab.css'
 
 function pickSearchPoster(item: MovieSearchResult): string | undefined {
-  if (item.remotePoster) return item.remotePoster
-  const img = item.images?.find((i) => i.coverType === 'poster')
-  return img?.remoteUrl ?? img?.url
-}
-
-// ponytail: same 3-line pickers exist in TvTab with Series types —
-// duplicated on purpose; a shared generic isn't worth the coupling.
-function pickLibraryPoster(item: Movie): string | undefined {
-  const img = item.images?.find((i) => i.coverType === 'poster')
-  return img?.remoteUrl ?? img?.url
+  return item.remotePoster || pickPoster(item.images)
 }
 
 function fmtRuntime(min?: number) {
@@ -336,7 +328,7 @@ export function MoviesTab() {
       key: String(m.id),
       title: m.title,
       meta: m.year ? String(m.year) : null,
-      poster: pickLibraryPoster(m),
+      poster: pickPoster(m.images),
       progress,
       onOpen: () => setViewing(m),
     })
@@ -596,7 +588,7 @@ export function MoviesTab() {
         title={viewing?.title ?? ''}
         year={viewing?.year}
         poster={viewing ? (
-          ('id' in viewing ? pickLibraryPoster(viewing) : pickSearchPoster(viewing))
+          ('id' in viewing ? pickPoster(viewing.images) : pickSearchPoster(viewing))
         ) : undefined}
         backdrop={viewing ? pickFanart(viewing) : undefined}
         metaStrip={viewing ? [
@@ -795,7 +787,7 @@ function LibraryResults({ query, letter, genre, loading, error, items, watchOf, 
         return (
           <MediaCard
             key={m.id}
-            poster={pickLibraryPoster(m)}
+            poster={pickPoster(m.images)}
             title={m.title}
             year={m.year}
             meta={meta || undefined}

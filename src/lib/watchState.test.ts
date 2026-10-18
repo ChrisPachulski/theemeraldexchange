@@ -12,6 +12,7 @@ const row = (over: Partial<WatchEntry>): WatchEntry => ({
   title: null,
   showTitle: null,
   posterPath: null,
+  posterBlurhash: null,
   season: null,
   episode: null,
   ...over,

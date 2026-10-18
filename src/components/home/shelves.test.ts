@@ -11,7 +11,6 @@ import {
   titleAllowed,
   titleKey,
   watchlistIntent,
-  watchlistPoster,
 } from './shelves'
 
 const row = (over: Partial<WatchEntry>): WatchEntry => ({
@@ -24,6 +23,7 @@ const row = (over: Partial<WatchEntry>): WatchEntry => ({
   title: null,
   showTitle: null,
   posterPath: null,
+  posterBlurhash: null,
   season: null,
   episode: null,
   ...over,
@@ -106,12 +106,6 @@ describe('watchlist rows', () => {
   it('open movies by TMDB id and shows by TVDB id', () => {
     expect(watchlistIntent({ kind: 'movie', id: 603 })).toEqual(['movies', 'tmdb:603'])
     expect(watchlistIntent({ kind: 'tv', id: 81189 })).toEqual(['tv', 'tvdb:81189'])
-  })
-
-  it('keep a stored *arr poster URL and complete a bare TMDB path', () => {
-    expect(watchlistPoster('https://artworks.thetvdb.com/p.jpg')).toBe('https://artworks.thetvdb.com/p.jpg')
-    expect(watchlistPoster('/p.jpg')).toBe('https://image.tmdb.org/t/p/w342/p.jpg')
-    expect(watchlistPoster(undefined)).toBeNull()
   })
 })
 

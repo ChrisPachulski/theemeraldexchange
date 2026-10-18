@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { RatingPiece } from '../../lib/api/ratings'
 import { RatingChips } from '../search/RatingChips'
-import { castCharacter, TMDB_IMAGE_BASE, type CastMember, type RelatedItem, type TmdbVideo } from '../../lib/api/tmdb'
+import { castCharacter, type CastMember, type RelatedItem, type TmdbVideo } from '../../lib/api/tmdb'
+import { artSrc, posterImg } from '../../lib/api/images'
 import { useDialogDismiss } from '../../lib/useDialogDismiss'
 import { ExtrasRows, TitleActions, TrailerDialog, type DetailExtrasRef } from './DetailExtras'
 import { PersonDialog } from './PersonDialog'
@@ -192,6 +193,8 @@ export function DetailModal({
   const [trailer, setTrailer] = useState<TmdbVideo | null>(null)
   const [person, setPerson] = useState<CastMember | null>(null)
   const closeBtnRef = useRef<HTMLButtonElement>(null)
+  const posterProps = posterImg(poster)
+  const backdropSrc = artSrc(backdrop, 1280)
   // Advanced surface is collapsed by default so it never crowds the normal
   // detail view; the footer button reveals it. Reset to collapsed whenever
   // the modal closes (so a fresh title doesn't inherit the prior open state)
@@ -273,17 +276,17 @@ export function DetailModal({
             scrolls away instead of pinning a short window between it and a
             footer. */}
         <div ref={bodyRef} className="detail__scroll">
-          {backdrop && (
+          {backdropSrc && (
             <div
               className="detail__backdrop"
-              style={{ backgroundImage: `url(${backdrop})` }}
+              style={{ backgroundImage: `url(${backdropSrc})` }}
               aria-hidden="true"
             />
           )}
 
           <header className="detail__hero">
-            {poster ? (
-              <img className="detail__poster" src={poster} alt="" loading="eager" />
+            {posterProps ? (
+              <img className="detail__poster" {...posterProps} alt="" loading="eager" />
             ) : (
               <div className="detail__poster detail__poster--fallback" aria-hidden="true">
                 {title.charAt(0)}
@@ -393,13 +396,14 @@ export function DetailModal({
                   <ul className="detail__cast detail__cast--people">
                     {cast!.slice(0, 20).map((member) => {
                       const role = castCharacter(member)
+                      const photo = posterImg(member.profile_path)
                       return (
                         <li key={member.id} className="detail__cast-card">
                           <button type="button" className="detail__cast-link" onClick={() => setPerson(member)}>
-                            {member.profile_path ? (
+                            {photo ? (
                               <img
                                 className="detail__cast-photo"
-                                src={`${TMDB_IMAGE_BASE}${member.profile_path}`}
+                                {...photo}
                                 alt=""
                                 loading="lazy"
                                 decoding="async"
@@ -586,12 +590,13 @@ function SeasonBrowser({
               .sort((a, b) => a.episodeNumber - b.episodeNumber)
               .map((ep) => {
                 const future = ep.airDate ? new Date(ep.airDate).getTime() > now : false
+                const still = artSrc(ep.still, 342)
                 const className = `detail__episode${future ? ' detail__episode--future' : ''}${ep.hasFile ? ' detail__episode--ready' : ''}`
                 const row = (
                   <>
                     <span className="detail__episode-thumb">
-                      {ep.still ? (
-                        <img src={ep.still} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
+                      {still ? (
+                        <img src={still} alt="" loading="lazy" decoding="async" referrerPolicy="no-referrer" />
                       ) : (
                         <span className="detail__episode-thumb-num" aria-hidden="true">{ep.episodeNumber}</span>
                       )}

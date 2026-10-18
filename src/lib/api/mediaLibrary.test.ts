@@ -76,11 +76,11 @@ describe('mediaApi Music', () => {
     expect(calledUrl().pathname).toBe('/api/media/music/artists')
   })
 
-  it('musicAlbums(artistId) sends artist_id and absolutizes art', async () => {
+  it('musicAlbums(artistId) sends artist_id and maps art to the sized image route with its blurhash', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonRes({
         items: [
-          { id: 7, artist_id: 1, artist_name: 'Artist', title: 'LP', year: 1999, track_count: 12, art_url: '/api/media/images/album/7' },
+          { id: 7, artist_id: 1, artist_name: 'Artist', title: 'LP', year: 1999, track_count: 12, art_url: '/api/media/images/album/7', art_blurhash: 'LEHV6nWB2yk8pyo0adR*.7kCMdnj' },
           { id: 8, artist_id: 1, artist_name: 'Artist', title: 'EP', year: null, track_count: 1, art_url: null },
         ],
         total: 2,
@@ -89,8 +89,8 @@ describe('mediaApi Music', () => {
     const albums = await mediaApi.musicAlbums(1)
     expect(calledUrl().searchParams.get('artist_id')).toBe('1')
     expect(albums).toEqual([
-      { id: 7, artistName: 'Artist', title: 'LP', year: 1999, trackCount: 12, artUrl: 'http://localhost/api/media/images/album/7' },
-      { id: 8, artistName: 'Artist', title: 'EP', year: null, trackCount: 1, artUrl: null },
+      { id: 7, artistName: 'Artist', title: 'LP', year: 1999, trackCount: 12, artUrl: 'http://localhost/api/media/images/album/7?w=185', artBlurhash: 'LEHV6nWB2yk8pyo0adR*.7kCMdnj' },
+      { id: 8, artistName: 'Artist', title: 'EP', year: null, trackCount: 1, artUrl: null, artBlurhash: null },
     ])
   })
 

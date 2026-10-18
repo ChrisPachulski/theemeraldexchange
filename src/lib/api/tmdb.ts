@@ -26,8 +26,6 @@ type CreditsResponse = {
   crew?: unknown[]
 }
 
-export const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w185'
-
 // Auth failures keep their status (session expiry handling), 503 (no TMDB
 // key) is "nothing", any other failure throws.
 async function tmdbGet<T>(path: string, scope: string): Promise<T | null> {

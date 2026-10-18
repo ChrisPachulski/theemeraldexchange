@@ -1,5 +1,6 @@
 import type { RatingPiece } from '../../lib/api/ratings'
 import { RatingChips } from './RatingChips'
+import { posterImg } from '../../lib/api/images'
 import './MediaCard.css'
 
 type Props = {
@@ -25,13 +26,14 @@ export function MediaCard({ poster, title, year, meta, overview, rating, inLibra
   const chips: string[] = []
   if (year) chips.push(String(year))
   if (meta) chips.push(meta)
+  const img = posterImg(poster)
 
   return (
     <button type="button" className="media-card" onClick={onClick}>
       <div className="media-card__poster">
-        {poster ? (
+        {img ? (
           <img
-            src={poster}
+            {...img}
             alt=""
             loading="lazy"
             decoding="async"
