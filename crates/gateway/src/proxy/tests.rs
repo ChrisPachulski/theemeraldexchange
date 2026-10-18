@@ -437,3 +437,32 @@ async fn the_readiness_poll_is_bounded_by_wall_clock() {
         .count();
     assert!((2..=10).contains(&probes), "{probes} probes");
 }
+
+// --- an unreachable upstream never logs the stream token -------------------------------
+
+#[tokio::test]
+async fn an_unreachable_upstream_logs_no_url_or_token() {
+    crate::testutil::capture_logs();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let url = format!("http://127.0.0.1:{port}/api/iptv/stream/1?t=SECRET-STREAM-TOKEN");
+    let r = Proxy::default()
+        .send(
+            "iptv",
+            Method::GET,
+            &url,
+            HeaderMap::new(),
+            None,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(r.status(), StatusCode::GATEWAY_TIMEOUT);
+    let logs = crate::testutil::logs();
+    assert!(logs.contains("iptv upstream_unreachable"), "{logs}");
+    assert!(!logs.contains("SECRET-STREAM-TOKEN"), "{logs}");
+    assert!(!logs.contains(&url), "{logs}");
+}

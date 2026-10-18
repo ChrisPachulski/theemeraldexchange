@@ -90,7 +90,12 @@ impl Proxy {
         }
         match tokio::time::timeout(ttfb, req.send()).await {
             Ok(Ok(res)) => Ok(res),
-            Ok(Err(e)) => Err(upstream_down(service, "upstream_unreachable", &e)),
+            // without_url: the URL carries the client's ?t=/?u= stream token.
+            Ok(Err(e)) => Err(upstream_down(
+                service,
+                "upstream_unreachable",
+                &e.without_url(),
+            )),
             Err(_) => Err(upstream_down(
                 service,
                 "upstream_timeout",
