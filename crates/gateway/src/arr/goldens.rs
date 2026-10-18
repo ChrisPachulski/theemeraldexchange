@@ -1,16 +1,21 @@
-//! Replays tests/fixtures/arr-goldens.json through [`crate::router`]. The
-//! generator (gen-arr-goldens.ts) ran the untouched TS radarr/sab/grabs
-//! routes against a fixture-driven fake; here each scenario runs on a fresh
-//! state against the Rust copy of that fake, and every step must give the
-//! same status, Content-Type, Retry-After and body (JSON compared as values,
-//! numbers as JS numbers; anything else byte for byte), the same ordered
-//! upstream requests, and the same grabs.jsonl lines byte for byte (the "ts"
-//! normalized to <ts> on both sides).
+//! Replays the *arr goldens through [`crate::router`]: arr-goldens.json
+//! (gen-arr-goldens.ts: radarr/sab/grabs) and sonarr-goldens.json
+//! (gen-sonarr-goldens.ts: sonarr/notifications). Each generator ran the
+//! untouched TS routes against a fixture-driven fake; here each scenario runs
+//! on a fresh state against the Rust copy of that fake, and every step must
+//! give the same status, Content-Type, Retry-After and body (JSON compared as
+//! values, numbers as JS numbers; anything else byte for byte), the same
+//! ordered upstream requests, and the same grabs.jsonl lines byte for byte
+//! (the "ts" normalized to <ts> on both sides). A `settle` step awaits the
+//! background TV grab through [`super::ArrState::idle`]; a `wait_for` step
+//! waits until the fake has seen that request.
 //!
 //! Known edge deltas (implementation-notes Deviations): Hono's text 404 for an
 //! unknown path or a known path's wrong method is the gateway's JSON
-//! `{"error":"not_found"}`. The folder and profile lists are fetched together
-//! on both sides, so that adjacent pair is compared in a fixed order.
+//! `{"error":"not_found"}`. Requests both sides send concurrently (the folder
+//! and profile lists, a release search and its episode counts, the Sonarr and
+//! Radarr notification lists) are compared in a fixed order, and the
+//! fire-and-forget recommender mirror at the end of the step.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -67,23 +72,43 @@ fn golden_call(c: &Value) -> Call {
     }
 }
 
-/// The folder and profile lookups race each other on both sides.
+/// Pairs of requests sent concurrently on both sides, (first, second) in
+/// the fixed order they are compared in.
+fn concurrent(a: &Call, b: &Call) -> bool {
+    let get = |c: &Call, end: &str| c.method == "GET" && c.path.ends_with(end);
+    (get(a, "/qualityprofile") && get(b, "/rootfolder"))
+        || (get(a, "/api/v3/release") && get(b, "/api/v3/episode"))
+        || (get(a, "/radarr/api/v3/notification") && get(b, "/sonarr/api/v3/notification"))
+}
+
 fn canonical(mut calls: Vec<Call>) -> Vec<Call> {
     for c in &mut calls {
         c.body = norm(&c.body);
     }
     for i in 1..calls.len() {
-        let (a, b) = (&calls[i - 1].path, &calls[i].path);
-        if a.ends_with("/qualityprofile") && b.ends_with("/rootfolder") {
+        if concurrent(&calls[i - 1], &calls[i]) {
             calls.swap(i - 1, i);
         }
     }
-    calls
+    // The mirror races the rest of the step.
+    let (rec, mut rest): (Vec<Call>, Vec<Call>) =
+        calls.into_iter().partition(|c| c.path.starts_with("/rec/"));
+    rest.extend(rec);
+    rest
 }
 
 #[tokio::test]
 async fn replays_the_ts_arr_goldens() {
-    let g = goldens();
+    replay(&goldens()).await;
+}
+
+#[tokio::test]
+async fn replays_the_ts_sonarr_goldens() {
+    let g = include_str!("../../tests/fixtures/sonarr-goldens.json");
+    replay(&serde_json::from_str(g).unwrap()).await;
+}
+
+async fn replay(g: &Value) {
     let fake = Fake::start(vec![]).await;
     let ts = Regex::new(r#""ts":"[^"]*""#).unwrap();
     let ms = Regex::new(r#""retry_after_ms":\d+"#).unwrap();
@@ -101,6 +126,7 @@ async fn replays_the_ts_arr_goldens() {
             std::fs::write(&grab_path, seed).unwrap();
         }
         let urls = [
+            ("SONARR_URL", format!("{}/sonarr", fake.url)),
             ("RADARR_URL", format!("{}/radarr", fake.url)),
             ("SAB_URL", format!("{}/sab", fake.url)),
             ("RECOMMENDER_URL", format!("{}/rec", fake.url)),
@@ -127,6 +153,8 @@ async fn replays_the_ts_arr_goldens() {
         let mut st = state_in(&dir, &env).await;
         let timings = Timings {
             settle: Duration::ZERO,
+            tv_settle: Duration::ZERO,
+            tv_poll: Duration::ZERO,
             ..Timings::default()
         };
         st.arr = Arc::new(super::ArrState::new(&st.config, timings));
@@ -167,7 +195,14 @@ async fn replays_the_ts_arr_goldens() {
                 reply = Some(r);
             }
             let r = reply.unwrap();
-            if method == "POST" && path == "/api/radarr/api/v3/movie" {
+            if let Some(w) = s.get("wait_for") {
+                let (m, p) = (w["method"].as_str().unwrap(), w["path"].as_str().unwrap());
+                fake.until(|f| f.count(m, p) > 0).await;
+            }
+            if s["settle"] == true {
+                st.arr.idle().await;
+            }
+            if s["settle"] == true || (method == "POST" && path == "/api/radarr/api/v3/movie") {
                 fake.quiet().await;
             }
             let after = std::fs::read_to_string(&grab_path).unwrap_or_default();

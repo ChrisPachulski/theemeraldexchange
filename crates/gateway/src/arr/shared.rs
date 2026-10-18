@@ -9,12 +9,16 @@
 //! where the TS read them loosely: a missing field is skipped, a value
 //! copied through keeps its JSON form.
 
+// The early-return paths answer with a Response; boxing it buys nothing.
+#![allow(clippy::result_large_err)]
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
 use axum::Json;
-use axum::http::{Method, StatusCode};
+use axum::body::Bytes;
+use axum::http::{HeaderValue, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use serde_json::value::RawValue;
@@ -23,19 +27,27 @@ use tokio::time::Instant;
 
 use crate::AppState;
 use crate::jsonl::JsonlLog;
-use crate::routes::truthy;
+use crate::routes::{js_str_number, safe_positive, truthy};
 use crate::upstream::{self, Arr, LAN_TIMEOUT, Reply};
 
 pub const GB: f64 = 1024.0 * 1024.0 * 1024.0;
 
-/// Waits the add pipeline makes, so tests run them in milliseconds.
+/// Waits the add pipelines make, so tests run them in milliseconds.
 #[derive(Clone, Copy, Debug)]
 pub struct Timings {
-    /// After the add, before the release search: lets the *arr finish
+    /// After the movie add, before the release search: lets the *arr finish
     /// wiring the new record.
     pub settle: Duration,
     /// Interactive search and grab POSTs (live indexer queries).
     pub search: Duration,
+    /// The background TV grab's first wait, before it reads the episodes.
+    pub tv_settle: Duration,
+    /// Between episode-list polls while Sonarr fills in a new series.
+    pub tv_poll: Duration,
+    /// The background TV grab's season searches and grab POSTs. No client
+    /// waits on them, so they are not held to the SPA's 60 s abort: on a
+    /// loaded NAS a season search runs past 50 s and a grab POST past 15 s.
+    pub tv_search: Duration,
 }
 
 impl Default for Timings {
@@ -43,8 +55,240 @@ impl Default for Timings {
         Timings {
             settle: Duration::from_millis(1500),
             search: upstream::SEARCH_TIMEOUT,
+            tv_settle: Duration::from_secs(2),
+            tv_poll: Duration::from_millis(1500),
+            tv_search: Duration::from_secs(180),
         }
     }
+}
+
+// --- route plumbing ----------------------------------------------------------------
+
+/// What an *arr handler answers; the early-return paths are responses too.
+pub type Res = Result<Response, Response>;
+
+pub fn err(status: StatusCode, body: Value) -> Response {
+    (status, Json(body)).into_response()
+}
+
+/// 502 `{error: code, status}` for an upstream refusal.
+pub fn with_status(code: &str, status: StatusCode) -> Response {
+    err(
+        StatusCode::BAD_GATEWAY,
+        json!({ "error": code, "status": status.as_u16() }),
+    )
+}
+
+/// Status, Content-Type (application/json when absent) and body.
+pub fn relay(status: StatusCode, ct: Option<&HeaderValue>, body: Bytes) -> Response {
+    let mut res = (status, body).into_response();
+    res.headers_mut().insert(
+        header::CONTENT_TYPE,
+        ct.cloned()
+            .unwrap_or_else(|| HeaderValue::from_static("application/json")),
+    );
+    res
+}
+
+pub fn relay_reply(r: Reply) -> Response {
+    relay(r.status, r.headers.get(header::CONTENT_TYPE), r.body)
+}
+
+pub fn pairs_ref(pairs: &[(String, String)]) -> Vec<(&str, &str)> {
+    pairs
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect()
+}
+
+/// A `:id` path segment (already percent-decoded, so `..%2F` cannot
+/// retarget the upstream path): a positive safe integer.
+pub fn path_id(raw: &str) -> Result<u64, Response> {
+    safe_positive(js_str_number(raw))
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, json!({ "error": "bad_id" })))
+}
+
+pub fn parse_body(body: &Bytes) -> Option<Value> {
+    serde_json::from_slice(body).ok()
+}
+
+/// A positive safe integer from the query, else 400 `{error: bad}`.
+pub fn query_id(uri: &Uri, key: &str, bad: &str) -> Result<u64, Response> {
+    let pairs = query_pairs(uri);
+    query_first(&pairs, key)
+        .map(js_str_number)
+        .and_then(safe_positive)
+        .ok_or_else(|| err(StatusCode::BAD_REQUEST, json!({ "error": bad })))
+}
+
+/// One *arr request; an unconfigured app is its 503.
+pub async fn call(
+    st: &AppState,
+    svc: Arr,
+    method: Method,
+    path: &str,
+    query: &[(&str, &str)],
+    body: Option<&Value>,
+    timeout: Duration,
+) -> Result<Reply, Response> {
+    Ok(st
+        .upstream
+        .arr_fetch(&st.config, svc, method, path, query, body, timeout)
+        .await?)
+}
+
+/// An allowlisted read, forwarded with its query.
+pub async fn forward_read(st: &AppState, svc: Arr, uri: &Uri) -> Res {
+    let prefix = format!("/api/{}", svc.as_str());
+    let path = uri.path().strip_prefix(&prefix).unwrap_or_default();
+    let pairs = query_pairs(uri);
+    let r = call(
+        st,
+        svc,
+        Method::GET,
+        path,
+        &pairs_ref(&pairs),
+        None,
+        LAN_TIMEOUT,
+    )
+    .await?;
+    Ok(relay_reply(r))
+}
+
+/// Downloads jammed in the import stage (importPending/importBlocked):
+/// removed from the client and blocklisted so the *arr searches again.
+pub async fn clear_stuck(st: &AppState, svc: Arr) -> Res {
+    let q = call(
+        st,
+        svc,
+        Method::GET,
+        "/api/v3/queue",
+        &[("pageSize", "2000")],
+        None,
+        LAN_TIMEOUT,
+    )
+    .await?;
+    if !q.is_success() {
+        return Ok(err(
+            StatusCode::BAD_GATEWAY,
+            json!({ "error": "queue_unreachable" }),
+        ));
+    }
+    let page = parse_body(&q.body).ok_or_else(|| internal("queue body is not JSON"))?;
+    let ids: Vec<Value> = page
+        .get("records")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|r| {
+            matches!(
+                r.get("trackedDownloadState").and_then(Value::as_str),
+                Some("importPending" | "importBlocked")
+            )
+        })
+        .map(|r| r.get("id").cloned().unwrap_or(Value::Null))
+        .collect();
+    if ids.is_empty() {
+        return Ok(Json(json!({ "removed": 0 })).into_response());
+    }
+    let del = call(
+        st,
+        svc,
+        Method::DELETE,
+        "/api/v3/queue/bulk",
+        &[
+            ("removeFromClient", "true"),
+            ("blocklist", "true"),
+            ("skipRedownload", "false"),
+        ],
+        Some(&json!({ "ids": ids })),
+        LAN_TIMEOUT,
+    )
+    .await?;
+    if !del.is_success() {
+        return Ok(with_status("bulk_delete_failed", del.status));
+    }
+    Ok(Json(json!({ "removed": ids.len() })).into_response())
+}
+
+/// Fire an allowlisted command; the ack is cut to `{id, name, status}`.
+pub async fn command(st: &AppState, svc: Arr, raw: &Value, allow: &[CommandSpec]) -> Res {
+    let built = build_command_body(raw, allow)
+        .map_err(|e| err(StatusCode::BAD_REQUEST, json!({ "error": e })))?;
+    let r = call(
+        st,
+        svc,
+        Method::POST,
+        "/api/v3/command",
+        &[],
+        Some(&built),
+        LAN_TIMEOUT,
+    )
+    .await?;
+    if !r.is_success() {
+        return Ok(with_status("command_failed", r.status));
+    }
+    let cmd = parse_body(&r.body).unwrap_or_else(|| json!({}));
+    let mut out = Map::new();
+    for k in ["id", "name", "status"] {
+        if let Some(v) = cmd.get(k) {
+            out.insert(k.into(), v.clone());
+        }
+    }
+    Ok(Json(Value::Object(out)).into_response())
+}
+
+/// Newest-first history of one `noun` (movie/series).
+pub async fn history(st: &AppState, svc: Arr, noun: &str, key: &str, id: u64) -> Res {
+    let id = id.to_string();
+    let r = call(
+        st,
+        svc,
+        Method::GET,
+        &format!("/api/v3/history/{noun}"),
+        &[(key, &id)],
+        None,
+        LAN_TIMEOUT,
+    )
+    .await?;
+    if !r.is_success() {
+        return Ok(with_status("history_failed", r.status));
+    }
+    let raw = parse_body(&r.body).unwrap_or_else(|| json!([]));
+    Ok(Json(map_history(&raw)).into_response())
+}
+
+/// Edit monitored/qualityProfileId/rootFolderPath only: the full record is
+/// fetched, the allowlisted fields overlaid, the whole object PUT back.
+pub async fn edit(st: &AppState, svc: Arr, noun: &str, id: u64, patch: Map<String, Value>) -> Res {
+    let path = format!("/api/v3/{noun}/{id}");
+    let got = call(st, svc, Method::GET, &path, &[], None, LAN_TIMEOUT).await?;
+    if !got.is_success() {
+        return Ok(with_status(&format!("{noun}_lookup_failed"), got.status));
+    }
+    let full = parse_body(&got.body).ok_or_else(|| internal("edit target is not JSON"))?;
+    let merged = merge_edit(full, patch);
+    let r = call(st, svc, Method::PUT, &path, &[], Some(&merged), LAN_TIMEOUT).await?;
+    if !r.is_success() {
+        return Ok(with_status(&format!("{noun}_update_failed"), r.status));
+    }
+    Ok(relay_reply(r))
+}
+
+/// DELETE one record, forwarding the caller's query (deleteFiles, ...).
+pub async fn delete(st: &AppState, svc: Arr, noun: &str, id: u64, uri: &Uri) -> Res {
+    let pairs = query_pairs(uri);
+    let r = call(
+        st,
+        svc,
+        Method::DELETE,
+        &format!("/api/v3/{noun}/{id}"),
+        &pairs_ref(&pairs),
+        None,
+        LAN_TIMEOUT,
+    )
+    .await?;
+    Ok(r.status.into_response())
 }
 
 // --- JS value helpers ------------------------------------------------------------

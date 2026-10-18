@@ -10,12 +10,11 @@
 //! grab); every release over the cap, or a failed search/grab, rolls it
 //! back with a 424. The recommender hears 'added' only on the keep paths.
 
-// The early-return paths answer with a Response; boxing it buys nothing.
 #![allow(clippy::result_large_err)]
 
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
+use axum::http::{HeaderMap, Method, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
@@ -25,7 +24,7 @@ use super::gate;
 use super::shared::*;
 use crate::AppState;
 use crate::recommender::{self, Caller};
-use crate::routes::{js_str_number, safe_positive, truthy};
+use crate::routes::{safe_positive, truthy};
 use crate::stores::Section;
 use crate::upstream::{Arr, LAN_TIMEOUT, Reply};
 
@@ -34,8 +33,6 @@ const ARR: (Section, bool) = (Section::Arr, true);
 /// A Radarr lookup record with images and alternate titles is a few KB;
 /// Hono read these bodies unbounded.
 const BODY_LIMIT: usize = 1024 * 1024;
-
-type Res = Result<Response, Response>;
 
 /// R1: RefreshMovie/MoviesSearch take movie ids; RenameMovie may name files.
 const COMMANDS: &[CommandSpec] = &[
@@ -93,7 +90,7 @@ const HONORED_ALLOW: &[&str] = &[
 ];
 
 pub fn router() -> Router<AppState> {
-    let read = || get(forward_read);
+    let read = || get(read);
     Router::new()
         .route("/api/radarr/api/v3/system/status", read())
         .route("/api/radarr/api/v3/qualityprofile", read())
@@ -102,45 +99,22 @@ pub fn router() -> Router<AppState> {
         .route("/api/radarr/api/v3/movie/lookup", read())
         // The Downloads tab's movie pending states.
         .route("/api/radarr/api/v3/queue", read())
-        .route("/api/radarr/api/v3/queue/clear-stuck", post(clear_stuck))
-        .route("/api/radarr/api/v3/command", post(command))
+        .route(
+            "/api/radarr/api/v3/queue/clear-stuck",
+            post(clear_stuck_route),
+        )
+        .route("/api/radarr/api/v3/command", post(command_route))
         .route(
             "/api/radarr/api/v3/release",
             get(release_search).post(release_grab),
         )
         .route("/api/radarr/api/v3/rename", get(rename_preview))
-        .route("/api/radarr/api/v3/history/movie", get(history))
+        .route("/api/radarr/api/v3/history/movie", get(history_route))
         .route(
             "/api/radarr/api/v3/movie/{id}",
             put(edit_movie).delete(delete_movie),
         )
         .route("/api/radarr/api/v3/movie/{id}/upgrade", post(upgrade))
-}
-
-fn err(status: StatusCode, body: Value) -> Response {
-    (status, Json(body)).into_response()
-}
-
-fn with_status(code: &str, status: StatusCode) -> Response {
-    err(
-        StatusCode::BAD_GATEWAY,
-        json!({ "error": code, "status": status.as_u16() }),
-    )
-}
-
-/// Status, Content-Type (application/json when absent) and body.
-fn relay(status: StatusCode, ct: Option<&HeaderValue>, body: Bytes) -> Response {
-    let mut res = (status, body).into_response();
-    res.headers_mut().insert(
-        header::CONTENT_TYPE,
-        ct.cloned()
-            .unwrap_or_else(|| HeaderValue::from_static("application/json")),
-    );
-    res
-}
-
-fn relay_reply(r: Reply) -> Response {
-    relay(r.status, r.headers.get(header::CONTENT_TYPE), r.body)
 }
 
 fn max_movie_bytes(st: &AppState) -> f64 {
@@ -159,127 +133,43 @@ async fn fetch(
     body: Option<&Value>,
     timeout: std::time::Duration,
 ) -> Result<Reply, Response> {
-    Ok(st
-        .upstream
-        .arr_fetch(&st.config, RADARR, method, path, query, body, timeout)
-        .await?)
-}
-
-fn pairs_ref(pairs: &[(String, String)]) -> Vec<(&str, &str)> {
-    pairs
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect()
+    call(st, RADARR, method, path, query, body, timeout).await
 }
 
 /// `movieId` from the query: a positive safe integer.
 fn movie_id(uri: &Uri) -> Result<u64, Response> {
-    let pairs = query_pairs(uri);
-    query_first(&pairs, "movieId")
-        .map(js_str_number)
-        .and_then(safe_positive)
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, json!({ "error": "bad_movieId" })))
-}
-
-/// The `:id` path segment (already percent-decoded, so `..%2F` cannot
-/// retarget the upstream path): a positive safe integer.
-fn path_id(raw: &str) -> Result<u64, Response> {
-    safe_positive(js_str_number(raw))
-        .ok_or_else(|| err(StatusCode::BAD_REQUEST, json!({ "error": "bad_id" })))
-}
-
-fn parse_body(body: &Bytes) -> Option<Value> {
-    serde_json::from_slice(body).ok()
+    query_id(uri, "movieId", "bad_movieId")
 }
 
 // --- reads ---------------------------------------------------------------------------
 
-async fn forward_read(
+async fn read(
     State(st): State<AppState>,
     auth::RequireAuth(p): auth::RequireAuth,
     method: Method,
     uri: Uri,
 ) -> Res {
     gate(&st, &p, &method, ARR, false, None).await?;
-    let path = uri.path().strip_prefix("/api/radarr").unwrap_or_default();
-    let pairs = query_pairs(&uri);
-    let r = fetch(
-        &st,
-        Method::GET,
-        path,
-        &pairs_ref(&pairs),
-        None,
-        LAN_TIMEOUT,
-    )
-    .await?;
-    Ok(relay_reply(r))
+    forward_read(&st, RADARR, &uri).await
 }
 
 // --- admin: clear stuck imports -----------------------------------------------------
 
 /// Downloads jammed in the import stage (importPending/importBlocked): removed
 /// from the client and blocklisted so Radarr searches for a replacement.
-async fn clear_stuck(
+async fn clear_stuck_route(
     State(st): State<AppState>,
     auth::RequireAuth(p): auth::RequireAuth,
     method: Method,
 ) -> Res {
     gate(&st, &p, &method, ARR, true, Some(&st.arr.radarr_limit)).await?;
-    let q = fetch(
-        &st,
-        Method::GET,
-        "/api/v3/queue",
-        &[("pageSize", "2000")],
-        None,
-        LAN_TIMEOUT,
-    )
-    .await?;
-    if !q.is_success() {
-        return Ok(err(
-            StatusCode::BAD_GATEWAY,
-            json!({ "error": "queue_unreachable" }),
-        ));
-    }
-    let page = parse_body(&q.body).ok_or_else(|| internal("queue body is not JSON"))?;
-    let ids: Vec<Value> = page
-        .get("records")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|r| {
-            matches!(
-                r.get("trackedDownloadState").and_then(Value::as_str),
-                Some("importPending" | "importBlocked")
-            )
-        })
-        .map(|r| r.get("id").cloned().unwrap_or(Value::Null))
-        .collect();
-    if ids.is_empty() {
-        return Ok(Json(json!({ "removed": 0 })).into_response());
-    }
-    let del = fetch(
-        &st,
-        Method::DELETE,
-        "/api/v3/queue/bulk",
-        &[
-            ("removeFromClient", "true"),
-            ("blocklist", "true"),
-            ("skipRedownload", "false"),
-        ],
-        Some(&json!({ "ids": ids })),
-        LAN_TIMEOUT,
-    )
-    .await?;
-    if !del.is_success() {
-        return Ok(with_status("bulk_delete_failed", del.status));
-    }
-    Ok(Json(json!({ "removed": ids.len() })).into_response())
+    clear_stuck(&st, RADARR).await
 }
 
 // --- advanced options (R1-R6) -------------------------------------------------------
 
 /// R1: fire an allowlisted command.
-async fn command(
+async fn command_route(
     State(st): State<AppState>,
     auth::RequireAuth(p): auth::RequireAuth,
     method: Method,
@@ -287,28 +177,7 @@ async fn command(
 ) -> Res {
     gate(&st, &p, &method, ARR, true, Some(&st.arr.radarr_limit)).await?;
     let raw = auth::json_body(body, BODY_LIMIT).await?;
-    let built = build_command_body(&raw, COMMANDS)
-        .map_err(|e| err(StatusCode::BAD_REQUEST, json!({ "error": e })))?;
-    let r = fetch(
-        &st,
-        Method::POST,
-        "/api/v3/command",
-        &[],
-        Some(&built),
-        LAN_TIMEOUT,
-    )
-    .await?;
-    if !r.is_success() {
-        return Ok(with_status("command_failed", r.status));
-    }
-    let cmd = parse_body(&r.body).unwrap_or_else(|| json!({}));
-    let mut out = Map::new();
-    for k in ["id", "name", "status"] {
-        if let Some(v) = cmd.get(k) {
-            out.insert(k.into(), v.clone());
-        }
-    }
-    Ok(Json(Value::Object(out)).into_response())
+    command(&st, RADARR, &raw, COMMANDS).await
 }
 
 /// The flat per-release movie ceiling.
@@ -451,32 +320,17 @@ async fn rename_preview(
 }
 
 /// R5: newest-first history.
-async fn history(
+async fn history_route(
     State(st): State<AppState>,
     auth::RequireAuth(p): auth::RequireAuth,
     method: Method,
     uri: Uri,
 ) -> Res {
     gate(&st, &p, &method, ARR, true, None).await?;
-    let id = movie_id(&uri)?.to_string();
-    let r = fetch(
-        &st,
-        Method::GET,
-        "/api/v3/history/movie",
-        &[("movieId", &id)],
-        None,
-        LAN_TIMEOUT,
-    )
-    .await?;
-    if !r.is_success() {
-        return Ok(with_status("history_failed", r.status));
-    }
-    let raw = parse_body(&r.body).unwrap_or_else(|| json!([]));
-    Ok(Json(map_history(&raw)).into_response())
+    history(&st, RADARR, "movie", "movieId", movie_id(&uri)?).await
 }
 
-/// R6: edit monitored/qualityProfileId/rootFolderPath only. The full movie is
-/// fetched, the allowlisted fields overlaid, and the whole object PUT back.
+/// R6: edit monitored/qualityProfileId/rootFolderPath only.
 async fn edit_movie(
     State(st): State<AppState>,
     auth::RequireAuth(p): auth::RequireAuth,
@@ -487,18 +341,7 @@ async fn edit_movie(
     gate(&st, &p, &method, ARR, true, Some(&st.arr.radarr_limit)).await?;
     let id = path_id(&raw_id)?;
     let patch = extract_edit_patch(&auth::json_body(body, BODY_LIMIT).await?);
-    let path = format!("/api/v3/movie/{id}");
-    let got = fetch(&st, Method::GET, &path, &[], None, LAN_TIMEOUT).await?;
-    if !got.is_success() {
-        return Ok(with_status("movie_lookup_failed", got.status));
-    }
-    let full = parse_body(&got.body).ok_or_else(|| internal("movie body is not JSON"))?;
-    let merged = merge_edit(full, patch);
-    let r = fetch(&st, Method::PUT, &path, &[], Some(&merged), LAN_TIMEOUT).await?;
-    if !r.is_success() {
-        return Ok(with_status("movie_update_failed", r.status));
-    }
-    Ok(relay_reply(r))
+    edit(&st, RADARR, "movie", id, patch).await
 }
 
 async fn delete_movie(
@@ -509,18 +352,7 @@ async fn delete_movie(
     uri: Uri,
 ) -> Res {
     gate(&st, &p, &method, ARR, true, Some(&st.arr.radarr_limit)).await?;
-    let id = path_id(&raw_id)?;
-    let pairs = query_pairs(&uri);
-    let r = fetch(
-        &st,
-        Method::DELETE,
-        &format!("/api/v3/movie/{id}"),
-        &pairs_ref(&pairs),
-        None,
-        LAN_TIMEOUT,
-    )
-    .await?;
-    Ok(r.status.into_response())
+    delete(&st, RADARR, "movie", path_id(&raw_id)?, &uri).await
 }
 
 // --- the space gate ----------------------------------------------------------------

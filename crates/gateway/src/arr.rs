@@ -1,12 +1,15 @@
-//! The *arr and SAB surface: /api/radarr, /api/sab, /api/grabs, and the
-//! state they share (reservation ledgers, the per-session mutate limiters,
-//! the grab log).
+//! The *arr and SAB surface: /api/sonarr, /api/radarr, /api/sab,
+//! /api/grabs, /api/notifications, and the state they share (reservation
+//! ledgers, the per-session mutate limiters, the grab log).
 
 pub mod grabs;
+pub mod notifications;
 pub mod radarr;
 pub mod sab;
 pub mod shared;
+pub mod sonarr;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
@@ -22,13 +25,19 @@ use shared::{GB, GrabLog, Ledger, Timings};
 
 pub struct ArrState {
     pub timings: Timings,
-    /// Radarr's own reservations (Sonarr keeps a separate ledger).
+    /// Each app's own in-flight disk reservations.
+    pub sonarr_ledger: Ledger,
     pub radarr_ledger: Ledger,
     /// Per-session buckets on the release-search-bearing mutations: each one
     /// is a real indexer search or queue/disk work.
+    pub sonarr_limit: RateLimiter,
     pub radarr_limit: RateLimiter,
     pub sab_limit: RateLimiter,
     pub grabs: GrabLog,
+    /// Serializes every /api/notifications/discord mutation and test.
+    pub discord: tokio::sync::Mutex<()>,
+    /// Background TV grabs still running.
+    tv_grabs: tokio::sync::watch::Sender<usize>,
 }
 
 impl ArrState {
@@ -42,19 +51,49 @@ impl ArrState {
         };
         ArrState {
             timings,
+            sonarr_ledger: Ledger::new("sonarr", c.min_free_gb * GB),
             radarr_ledger: Ledger::new("radarr", c.min_free_gb * GB),
+            sonarr_limit: limiter(),
             radarr_limit: limiter(),
             sab_limit: limiter(),
             grabs: GrabLog(JsonlLog::new(&c.grab_log_path)),
+            discord: tokio::sync::Mutex::new(()),
+            tv_grabs: tokio::sync::watch::Sender::new(0),
         }
+    }
+
+    /// Resolves once no background TV grab is running (the completion hook
+    /// tests await).
+    pub async fn idle(&self) {
+        let mut rx = self.tv_grabs.subscribe();
+        // The sender lives in self, so the channel cannot close here.
+        let _ = rx.wait_for(|n| *n == 0).await;
+    }
+}
+
+/// Counts one background TV grab from spawn to finish.
+pub(crate) struct Busy(Arc<ArrState>);
+
+impl Busy {
+    pub(crate) fn new(arr: &Arc<ArrState>) -> Busy {
+        arr.tv_grabs.send_modify(|n| *n += 1);
+        Busy(arr.clone())
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        self.0.tv_grabs.send_modify(|n| *n -= 1);
     }
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(sonarr::router())
         .merge(radarr::router())
         .merge(sab::router())
         .merge(grabs::router())
+        .merge(notifications::router())
 }
 
 /// The gates Hono stacked on a route, in its order: the section policy

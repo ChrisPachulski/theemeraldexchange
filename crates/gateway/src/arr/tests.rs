@@ -128,6 +128,7 @@ async fn a_held_reservation_refuses_a_concurrent_add_on_the_same_folder() {
     let timings = Timings {
         settle: Duration::ZERO,
         search: Duration::from_secs(5),
+        ..Timings::default()
     };
     let (st, cookie) = radarr_state(&dir, &fake, timings).await;
     let app = crate::router(st);
@@ -205,6 +206,7 @@ async fn a_grab_past_its_budget_is_kept_monitored_never_deleted() {
     let timings = Timings {
         settle: Duration::ZERO,
         search: Duration::from_millis(200),
+        ..Timings::default()
     };
     let (st, cookie) = radarr_state(&dir, &fake, timings).await;
     let app = crate::router(st);
