@@ -21,7 +21,7 @@ use std::time::{Duration, SystemTime};
 use fast_image_resize::Resizer;
 use image::error::{LimitError, LimitErrorKind};
 use image::metadata::Orientation;
-use image::{DynamicImage, ImageDecoder, ImageError, ImageReader};
+use image::{DynamicImage, ImageDecoder, ImageError, ImageReader, Limits};
 use tokio::sync::Semaphore;
 
 /// Served widths. A request snaps up to the next rung so the cache holds at
@@ -32,14 +32,19 @@ pub const POOL_PERMITS: usize = 2;
 /// Lossy WebP quality.
 pub const WEBP_QUALITY: f32 = 80.0;
 /// Memory all in-flight decodes may hold together, in MiB. A decode costs its
-/// file plus three times its decoded size (pixels, plus a progressive JPEG's
-/// coefficient planes); one that costs more than the whole budget is refused.
+/// file, the [`HEADER_ALLOC_BYTES`] allowance, and three times its decoded
+/// size (pixels, plus a progressive JPEG's coefficient planes); one that costs
+/// more than the whole budget is refused.
 // ponytail: refuses sources past ~27 MP RGB (24 MP cameras fit). Raise the
 // budget with media-core's mem_limit if larger photos need thumbnails.
 pub const MEMORY_BUDGET_MIB: u32 = 256;
 /// Largest source file opened at all: a JPEG decoder holds its whole file,
 /// and it is read before the decode is priced.
 pub const MAX_SOURCE_BYTES: u64 = 64 << 20;
+/// What a decoder may allocate beyond the file while it reads the header,
+/// before the decode is priced: a PNG inflates its iCCP profile there and
+/// buffers its text chunks. Priced into every decode, since it stays held.
+pub const HEADER_ALLOC_BYTES: u64 = 8 << 20;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ArtworkError {
@@ -65,21 +70,30 @@ fn too_large() -> ArtworkError {
 
 /// Open `path` for decoding (any supported format, sniffed from content) and
 /// price the decode in MiB of [`MEMORY_BUDGET_MIB`]. Only the header is
-/// parsed, except that a JPEG decoder reads its whole file here.
+/// parsed, within [`HEADER_ALLOC_BYTES`], except that a JPEG decoder reads
+/// its whole file here.
 pub fn open(path: &Path) -> Result<(impl ImageDecoder, u32), ArtworkError> {
     let size = std::fs::metadata(path)?.len();
     if size > MAX_SOURCE_BYTES {
         return Err(too_large());
     }
-    let decoder = ImageReader::new(BufReader::new(std::fs::File::open(path)?))
-        .with_guessed_format()?
-        .into_decoder()?;
+    let mut reader =
+        ImageReader::new(BufReader::new(std::fs::File::open(path)?)).with_guessed_format()?;
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(HEADER_ALLOC_BYTES);
+    reader.limits(limits.clone());
+    let mut decoder = reader.into_decoder()?;
     let cost = size
+        .saturating_add(HEADER_ALLOC_BYTES)
         .saturating_add(decoder.total_bytes().saturating_mul(3))
         .div_ceil(1 << 20);
     if cost > u64::from(MEMORY_BUDGET_MIB) {
         return Err(too_large());
     }
+    // The decode may use what it was priced at (a TIFF sizes its buffers
+    // from this); a PNG keeps the header allowance for its own buffers.
+    limits.max_alloc = Some(cost << 20);
+    decoder.set_limits(limits)?;
     Ok((decoder, cost as u32))
 }
 
@@ -971,6 +985,40 @@ mod tests {
             matches!(err, ArtworkError::Decode(ImageError::Limits(_))),
             "{err}"
         );
+    }
+
+    /// A 1x1 PNG whose iCCP profile inflates to `icc_len` zero bytes.
+    fn png_with_icc(icc_len: usize) -> Vec<u8> {
+        use image::ImageEncoder;
+        let mut out = Vec::new();
+        let mut enc = image::codecs::png::PngEncoder::new(&mut out);
+        enc.set_icc_profile(vec![0; icc_len]).unwrap();
+        enc.write_image(&[1, 2, 3], 1, 1, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        out
+    }
+
+    /// The profile `open` kept, and the decode's price in MiB.
+    fn open_png_with_icc(icc_len: usize) -> (Option<usize>, u32) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("icc.png");
+        let png = png_with_icc(icc_len);
+        assert!(png.len() < 1 << 20, "a small file: {} bytes", png.len());
+        std::fs::write(&path, png).unwrap();
+        let (mut decoder, cost) = open(&path).unwrap();
+        let kept = decoder.icc_profile().unwrap().map(|p| p.len());
+        assert_eq!(decode(decoder).unwrap().0.width(), 1);
+        (kept, cost)
+    }
+
+    #[test]
+    fn a_png_profile_never_inflates_past_the_priced_header_allowance() {
+        let allowance = HEADER_ALLOC_BYTES.div_ceil(1 << 20) as u32;
+        // A 64 MiB profile in a file of a few KB: the decoder stops inflating
+        // it at the allowance and drops it, instead of holding it unpriced.
+        assert_eq!(open_png_with_icc(64 << 20), (None, allowance + 1));
+        // A real-sized profile is kept.
+        assert_eq!(open_png_with_icc(4096), (Some(4096), allowance + 1));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
