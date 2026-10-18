@@ -105,3 +105,38 @@ pub async fn state() -> (TestDb, crate::AuthState) {
     let state = crate::AuthState::new(db.pool.clone(), config(&[]));
     (db, state)
 }
+
+thread_local! {
+    static LOGS: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+struct ThreadLogs;
+
+impl std::io::Write for ThreadLogs {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        LOGS.with(|l| l.borrow_mut().extend_from_slice(b));
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// One global subscriber writing to a per-thread buffer: a thread-local
+/// `set_default` loses events to tracing's global interest cache when other
+/// tests run concurrently. A current-thread tokio test logs on its own thread.
+pub fn capture_logs() {
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(|| ThreadLogs)
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::set_global_default(subscriber).unwrap();
+    });
+    LOGS.with(|l| l.borrow_mut().clear());
+}
+
+pub fn logs() -> String {
+    LOGS.with(|l| String::from_utf8(l.borrow().clone()).unwrap())
+}

@@ -3,11 +3,15 @@
 //! every protected route needs its answer, so a network hop per request would
 //! buy nothing.
 
+mod client_address;
 pub mod config;
+pub mod csrf;
 pub mod db;
 pub mod device_tokens;
 pub mod invites;
 pub mod members;
+pub mod outcome;
+pub mod ratelimit;
 pub mod reconcile;
 pub mod session;
 
@@ -34,6 +38,8 @@ pub struct AuthState {
     pub session_key: session::SessionKey,
     /// None in dev without DEVICE_TOKEN_SECRET: every Bearer is then invalid.
     pub device_keys: Option<Arc<device_tokens::Keys>>,
+    /// The sign-in rate-limit buckets (process-wide, as in TS).
+    pub limiter: Arc<ratelimit::Limiter>,
     /// Pins the clock in tests so committed goldens never expire.
     #[cfg(test)]
     pub(crate) fixed_now: Option<i64>,
@@ -47,6 +53,7 @@ impl AuthState {
                 .device_token_secret
                 .as_deref()
                 .map(|s| Arc::new(device_tokens::Keys::from_secret(s))),
+            limiter: Arc::new(ratelimit::Limiter::new(config.trust_client_ip_headers)),
             config: Arc::new(config),
             pool,
             #[cfg(test)]

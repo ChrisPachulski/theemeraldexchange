@@ -12,7 +12,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::device_tokens::{Keys, MintInput};
-use crate::testutil::{add_member, goldens, set_revoked, state};
+use crate::testutil::{add_member, capture_logs, goldens, logs, set_revoked, state};
 
 const OWNER: &str = "workos:user_01E4ZCR3C56J083X43JQXF3JK5";
 const MEMBER: &str = "apple:000001.0123456789abcdef0123456789abcdef.0001";
@@ -344,41 +344,6 @@ async fn cookie_of_an_allowed_member_does_not_cascade() {
     let s = cookie_session(MEMBER, AuthMode::Apple, Role::User);
     assert!(reconcile_cookie(&db, subs(&st), s).await.unwrap().is_some());
     assert!(revocations(&db).await.is_empty());
-}
-
-thread_local! {
-    static LOGS: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-struct ThreadLogs;
-
-impl std::io::Write for ThreadLogs {
-    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
-        LOGS.with(|l| l.borrow_mut().extend_from_slice(b));
-        Ok(b.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-/// One global subscriber writing to a per-thread buffer: a thread-local
-/// `set_default` loses events to tracing's global interest cache when other
-/// tests run concurrently. A current-thread tokio test logs on its own thread.
-fn capture_logs() {
-    static INIT: std::sync::Once = std::sync::Once::new();
-    INIT.call_once(|| {
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(|| ThreadLogs)
-            .with_ansi(false)
-            .finish();
-        tracing::subscriber::set_global_default(subscriber).unwrap();
-    });
-    LOGS.with(|l| l.borrow_mut().clear());
-}
-
-fn logs() -> String {
-    LOGS.with(|l| String::from_utf8(l.borrow().clone()).unwrap())
 }
 
 #[tokio::test]
