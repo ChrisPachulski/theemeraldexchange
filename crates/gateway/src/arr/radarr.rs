@@ -559,14 +559,34 @@ async fn add_movie(
     )
     .await?;
 
-    // The conversion signal, only where the movie is kept.
+    // Its own task so a client hang-up cannot stop the settlement halfway
+    // (Node never cancelled): a dropped request would strand the movie
+    // unmonitored and ungrabbed, with no rollback.
     let caller = Caller::new(&p, &headers);
+    let task = settle_add(st.clone(), caller, r, body, folder, wanted_search);
+    Ok(tokio::spawn(task)
+        .await
+        .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic())))
+}
+
+/// Everything after the upstream add: the capped grab (or its rollback /
+/// monitor fallback) and the conversion signal.
+async fn settle_add(
+    st: AppState,
+    caller: Caller,
+    r: Reply,
+    body: Map<String, Value>,
+    folder: Folder,
+    wanted_search: bool,
+) -> Response {
+    let sub = caller.principal.session.sub.as_str();
+    // The conversion signal, only where the movie is kept.
     let signal_added = || {
         if !(r.is_success() && st.config.use_local_recommender) {
             return;
         }
         if let Some(tmdb) = body.get("tmdbId").filter(|v| v.is_number()) {
-            let ev = json!({ "sub": p.session.sub, "kind": "movie", "tmdb_id": tmdb, "signal": "added" });
+            let ev = json!({ "sub": sub, "kind": "movie", "tmdb_id": tmdb, "signal": "added" });
             recommender::spawn_mirror(
                 &st,
                 "/events/feedback",
@@ -587,18 +607,14 @@ async fn add_movie(
         }
         let created = match created {
             Some(c) if usable(&c) => c,
-            other => {
-                return Ok(reject_unverified(&st, other, body.get("title"), &p.session.sub).await);
-            }
+            other => return reject_unverified(&st, other, body.get("title"), sub).await,
         };
-        if let Some(res) =
-            settle_capped_grab(&st, &created, &folder, &p.session.sub, &signal_added).await
-        {
-            return Ok(res);
+        if let Some(res) = settle_capped_grab(&st, &created, &folder, sub, &signal_added).await {
+            return res;
         }
     }
     signal_added();
-    Ok(relay(r.status, keep_ct.as_ref(), keep_body))
+    relay(r.status, keep_ct.as_ref(), keep_body)
 }
 
 /// `m?.id && typeof m.title === 'string' && m.title.trim()`.
@@ -946,6 +962,11 @@ async fn grab_best_under_cap(
         .await;
         return Ok(Capped::AllRejectedByCap(all.len()));
     }
+    let held = Held {
+        ledger,
+        folder,
+        bytes: size,
+    };
     let grab = fetch(
         st,
         Method::POST,
@@ -956,7 +977,7 @@ async fn grab_best_under_cap(
     )
     .await;
     // Queued or failed, the bytes are no longer ours to hold.
-    ledger.release(folder, size);
+    drop(held);
     let grab = grab.map_err(|_| "radarr is not configured".to_string())?;
     let kind = grab_event_type(&grab);
     tracing::info!(event = "movie-cap", title = %js_str(best.get("title").unwrap_or(&serde_json::Value::Null)), size_gb = gb_2dp(size), movie_id = %id, status = grab.status.as_u16(), "grab");

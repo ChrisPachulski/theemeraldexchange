@@ -9,8 +9,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::super::fake::{Fake, Route};
-use super::super::shared::{Folder, GB, Ledger, Timings};
-use super::Held;
+use super::super::shared::{Folder, GB, Held, Ledger, Timings};
 use crate::AppState;
 use crate::testutil::*;
 

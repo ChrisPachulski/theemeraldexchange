@@ -988,22 +988,6 @@ async fn monitor_season(
 
 // --- the capped TV grab ----------------------------------------------------------------
 
-/// Releases a TV grab's planned bytes however the grab ends: every POST
-/// answered, one failed, an error, or the task dropped. The reservation only
-/// guards the planning window; once the POSTs have outcomes SAB/Sonarr own
-/// the real disk accounting.
-struct Held<'a> {
-    ledger: &'a Ledger,
-    folder: &'a Folder,
-    bytes: f64,
-}
-
-impl Drop for Held<'_> {
-    fn drop(&mut self) {
-        self.ledger.release(self.folder, self.bytes);
-    }
-}
-
 /// Run the capped grab in the background, counted by [`super::ArrState::idle`].
 /// An error is logged and recorded as grab_failed.
 fn spawn_tv_grab(

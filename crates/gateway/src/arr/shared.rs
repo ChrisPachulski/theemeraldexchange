@@ -572,6 +572,22 @@ pub fn grab_event_type(reply: &Reply) -> &'static str {
     }
 }
 
+/// Releases a grab's reserved bytes however the grab ends: every POST
+/// answered, one failed, an error, or the future dropped. The reservation
+/// only guards the planning window; once the POSTs have outcomes SAB and the
+/// *arr own the real disk accounting.
+pub struct Held<'a> {
+    pub ledger: &'a Ledger,
+    pub folder: &'a Folder,
+    pub bytes: f64,
+}
+
+impl Drop for Held<'_> {
+    fn drop(&mut self) {
+        self.ledger.release(self.folder, self.bytes);
+    }
+}
+
 /// The persistent grab-event log (grabs.jsonl), read by the admin panel.
 pub struct GrabLog(pub JsonlLog);
 

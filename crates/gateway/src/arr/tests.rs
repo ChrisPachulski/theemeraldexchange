@@ -287,3 +287,34 @@ async fn the_settle_delay_is_honoured() {
     assert_eq!(add(&app, &cookie, path, "Wait").await.status, 201);
     assert!(started.elapsed() >= Duration::from_millis(300));
 }
+
+#[tokio::test]
+async fn a_client_hang_up_does_not_stop_the_settlement() {
+    let fake = Fake::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (st, cookie) = radarr_state(&dir, &fake, fast()).await;
+    let app = crate::router(st.clone());
+    let path = "/data/movies-hangup";
+    // The grab POST hangs, then fails: the movie must still be rolled back.
+    let mut routes = add_routes(path, TIGHT_FREE, &[("Gone", 401)], 500, true);
+    routes.insert(0, created("Gone", 401));
+    fake.set_routes(routes);
+
+    let req = tokio::spawn({
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move { add(&app, &cookie, path, "Gone").await }
+    });
+    fake.until(|f| grab_posts(f) == 1).await;
+    // The client leaves mid-grab: hyper drops the request future.
+    req.abort();
+    assert!(req.await.is_err_and(|e| e.is_cancelled()));
+
+    fake.release_held(1);
+    fake.until(|f| f.count("DELETE", "/radarr/api/v3/movie/401") == 1)
+        .await;
+    let folder = super::shared::Folder {
+        path: path.into(),
+        free_space: TIGHT_FREE,
+    };
+    assert_eq!(st.arr.radarr_ledger.pending_bytes(&folder), 0.0);
+}
