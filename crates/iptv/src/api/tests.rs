@@ -1390,7 +1390,7 @@ fn js_coercions() {
 
 #[test]
 fn rate_limiter_refills_in_whole_intervals() {
-    let l = RateLimiter::new(2, Duration::from_millis(50));
+    let l = RateLimiter::new(2, 2, Duration::from_millis(50));
     assert!(l.take("a").is_ok() && l.take("a").is_ok());
     let retry = l.take("a").unwrap_err();
     assert!(retry <= 50);

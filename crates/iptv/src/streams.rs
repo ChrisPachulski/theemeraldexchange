@@ -409,7 +409,7 @@ fn member_sub(claims: &Claims, token_sub: &str) -> Result<String, Response> {
 /// checkToken: HMAC and time window, kind, and the resource when given.
 /// Returns (sub, rid). Every tracked kind is multi-use within its TTL, so the
 /// replay cache's only refusal (past exp) is the time window here.
-fn check_token(
+pub(crate) fn check_token(
     s: &AppState,
     claims: &Claims,
     token: &str,

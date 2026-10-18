@@ -61,6 +61,11 @@ pub struct Config {
     pub iptv_disabled: bool,
     pub dvr_enabled: bool,
     pub dvr_dir: String,
+    /// The DVR schedule/delete bucket (ARR_MUTATE_RATE_*, shared with the
+    /// arr mutate routes in Hono).
+    pub arr_mutate_rate_capacity: u64,
+    pub arr_mutate_rate_refill: u64,
+    pub arr_mutate_rate_interval_ms: u64,
     pub stream_token_secret: String,
     pub internal_principal_secret: Option<String>,
     /// Internal-principal posture, shared with media-core and the transcoder
@@ -161,6 +166,9 @@ impl Config {
             iptv_disabled: flag("IPTV_DISABLED"),
             dvr_enabled: flag("DVR_ENABLED"),
             dvr_dir: raw("DVR_DIR", "./data/recordings"),
+            arr_mutate_rate_capacity: pos("ARR_MUTATE_RATE_CAPACITY", 12)?,
+            arr_mutate_rate_refill: pos("ARR_MUTATE_RATE_REFILL", 12)?,
+            arr_mutate_rate_interval_ms: pos("ARR_MUTATE_RATE_INTERVAL_MS", 60_000)?,
             stream_token_secret,
             internal_principal_secret,
             principal_mode,

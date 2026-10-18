@@ -47,19 +47,38 @@ pub struct AppState {
     search_limit: Arc<RateLimiter>,
     /// Concurrency slots, raw live leases, dead-feed memory, the panel probe.
     pub streams: Arc<crate::streams::Streams>,
+    /// The DVR recorder; Some only with DVR_ENABLED (and IPTV on), which is
+    /// also what mounts /api/dvr.
+    pub dvr: Option<crate::dvr::FfmpegRecorder>,
+    pub(crate) dvr_limit: Arc<RateLimiter>,
 }
 
 impl AppState {
     pub fn new(pool: SqlitePool, config: Arc<Config>) -> Self {
+        let streams = Arc::new(crate::streams::Streams::new(&config));
+        let dvr = (config.dvr_enabled && !config.iptv_disabled).then(|| {
+            crate::dvr::FfmpegRecorder::new(
+                pool.clone(),
+                &config,
+                streams.tracker.clone(),
+                streams.live.remux.clone(),
+            )
+        });
         AppState {
-            pool,
             http: reqwest::Client::builder()
                 .timeout(MIRROR_TIMEOUT)
                 .build()
                 .expect("reqwest client builds"),
             // A read, not an indexer budget: a literal 10 req/s per caller.
-            search_limit: Arc::new(RateLimiter::new(10, Duration::from_secs(1))),
-            streams: Arc::new(crate::streams::Streams::new(&config)),
+            search_limit: Arc::new(RateLimiter::new(10, 10, Duration::from_secs(1))),
+            dvr_limit: Arc::new(RateLimiter::new(
+                config.arr_mutate_rate_capacity as u32,
+                config.arr_mutate_rate_refill as u32,
+                Duration::from_millis(config.arr_mutate_rate_interval_ms),
+            )),
+            streams,
+            dvr,
+            pool,
             config,
         }
     }
@@ -97,6 +116,11 @@ pub fn router(state: AppState) -> Router {
         .route("/internal/members/{sub}", delete(internal_erase_member))
         .route("/internal/availability", post(internal_availability))
         .merge(crate::streams::routes())
+        .merge(if state.dvr.is_some() {
+            crate::dvr::routes()
+        } else {
+            Router::new()
+        })
         .layer(middleware::from_fn_with_state(
             state.clone(),
             principal_layer,
@@ -109,11 +133,11 @@ pub fn router(state: AppState) -> Router {
 
 // ---- responses ---------------------------------------------------------------
 
-type ApiResult = Result<Response, ApiError>;
+pub(crate) type ApiResult = Result<Response, ApiError>;
 pub(crate) type Claims = Option<Extension<InternalClaims>>;
 
 /// An error status and its JSON body (`{"error": ...}` unless noted).
-struct ApiError(StatusCode, Value);
+pub(crate) struct ApiError(StatusCode, Value);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
@@ -121,20 +145,20 @@ impl IntoResponse for ApiError {
     }
 }
 
-fn error(status: StatusCode, code: &str) -> ApiError {
+pub(crate) fn error(status: StatusCode, code: &str) -> ApiError {
     ApiError(status, json!({ "error": code }))
 }
 
-fn bad(code: &str) -> ApiError {
+pub(crate) fn bad(code: &str) -> ApiError {
     error(StatusCode::BAD_REQUEST, code)
 }
 
-fn db(e: sqlx::Error) -> ApiError {
+pub(crate) fn db(e: sqlx::Error) -> ApiError {
     tracing::error!("iptv db error: {e}");
     error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
 }
 
-fn json_ok<T: Serialize>(v: &T) -> Response {
+pub(crate) fn json_ok<T: Serialize>(v: &T) -> Response {
     Json(v).into_response()
 }
 
@@ -208,7 +232,7 @@ async fn principal_layer(State(state): State<AppState>, mut req: Request, next: 
 }
 
 /// The acting member. Per-user routes need a principal in every posture.
-fn sub_of(claims: &Claims) -> Result<String, ApiError> {
+pub(crate) fn sub_of(claims: &Claims) -> Result<String, ApiError> {
     claims
         .as_ref()
         .map(|c| c.sub.clone())
@@ -217,7 +241,7 @@ fn sub_of(claims: &Claims) -> Result<String, ApiError> {
 
 /// Hono's requireAdmin, for the internal endpoints. Off (no auth boundary,
 /// local dev) allows, as in media-core.
-fn require_admin(state: &AppState, claims: &Claims) -> Result<(), ApiError> {
+pub(crate) fn require_admin(state: &AppState, claims: &Claims) -> Result<(), ApiError> {
     if state.config.principal_mode == PrincipalMode::Off
         || claims.as_ref().is_some_and(|c| c.role == "admin")
     {
@@ -252,7 +276,7 @@ fn int_or_undef(s: Option<&str>) -> Option<i64> {
 }
 
 /// JS `Number(v)` for a JSON body value.
-fn js_number(v: &Value) -> f64 {
+pub(crate) fn js_number(v: &Value) -> f64 {
     match v {
         Value::Null => 0.0,
         Value::Bool(b) => f64::from(u8::from(*b)),
@@ -493,16 +517,8 @@ async fn epg_search(
     headers: HeaderMap,
     Query(q): Params,
 ) -> ApiResult {
-    let key = claims
-        .as_ref()
-        .map_or_else(|| "anon".to_string(), |c| format!("sub:{}", c.sub));
-    if let Err(retry_ms) = s.search_limit.take(&key) {
-        return Ok((
-            StatusCode::TOO_MANY_REQUESTS,
-            [(header::RETRY_AFTER, retry_ms.div_ceil(1000).to_string())],
-            Json(json!({ "error": "rate_limited", "retry_after_ms": retry_ms })),
-        )
-            .into_response());
+    if let Err(r) = s.search_limit.check(&claims) {
+        return Ok(r);
     }
     // One char would match nearly every programme: require two.
     let term = search_term(&q)
@@ -938,22 +954,42 @@ async fn internal_availability(
 // ---- rate limit --------------------------------------------------------------------
 
 /// Token bucket per caller key, as the Hono rateLimit middleware: `capacity`
-/// tokens, refilled in whole intervals.
+/// tokens, `refill` added back per whole interval.
 // ponytail: buckets are never evicted; one household is a handful of keys. Add
 // a sweep if callers ever become unbounded.
-struct RateLimiter {
+pub(crate) struct RateLimiter {
     capacity: u32,
+    refill: u32,
     interval: Duration,
     buckets: Mutex<HashMap<String, (u32, Instant)>>,
 }
 
 impl RateLimiter {
-    fn new(capacity: u32, interval: Duration) -> Self {
+    fn new(capacity: u32, refill: u32, interval: Duration) -> Self {
         RateLimiter {
             capacity,
+            refill,
             interval,
             buckets: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Take a token for the principal's sub (`anon` without one), or the 429
+    /// the Hono middleware answers: Retry-After plus `retry_after_ms`.
+    // The 429 is the cold path; boxing it buys nothing.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn check(&self, claims: &Claims) -> Result<(), Response> {
+        let key = claims
+            .as_ref()
+            .map_or_else(|| "anon".to_string(), |c| format!("sub:{}", c.sub));
+        self.take(&key).map_err(|retry_ms| {
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, retry_ms.div_ceil(1000).to_string())],
+                Json(json!({ "error": "rate_limited", "retry_after_ms": retry_ms })),
+            )
+                .into_response()
+        })
     }
 
     /// Ok, or the milliseconds until the next refill.
@@ -968,7 +1004,7 @@ impl RateLimiter {
             let refills = (elapsed.as_millis() / self.interval.as_millis()) as u32;
             *tokens = self
                 .capacity
-                .min(tokens.saturating_add(refills.saturating_mul(self.capacity)));
+                .min(tokens.saturating_add(refills.saturating_mul(self.refill)));
             *last = now;
         }
         if *tokens == 0 {

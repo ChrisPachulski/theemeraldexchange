@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod concurrency;
 pub mod config;
 pub mod db;
+pub mod dvr;
 pub mod egress;
 pub mod epg;
 pub mod epg_resolve;

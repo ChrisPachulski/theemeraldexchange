@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use iptv::{api, config::Config, db, feed_sweep, scheduler, sync::CatalogSync};
+use iptv::{api, config::Config, db, dvr, feed_sweep, scheduler, sync::CatalogSync};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -26,6 +26,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // when nobody has watched for 30 minutes (IPTV_FEED_CHECK=0 turns it off).
     let _sweep = feed_sweep::enabled(&config)
         .then(|| feed_sweep::spawn(pool.clone(), state.streams.clone(), config.clone()));
+    // DVR: a tick now, then every 20 s (DVR_ENABLED; state.dvr is None otherwise).
+    let dvr_job = state
+        .dvr
+        .clone()
+        .map(|r| dvr::spawn_scheduler(pool.clone(), r, dvr::TICK_EVERY));
     let sync = CatalogSync::new(pool, config.clone());
 
     let _jobs = if config.sync_enabled() {
@@ -43,6 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!("iptv listening on http://{addr}");
     let streams = state.streams.clone();
+    let recorder = state.dvr.clone();
     axum::serve(listener, api::router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
@@ -52,6 +58,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .remux
         .drain(std::time::Duration::from_secs(5))
         .await;
+    // Stop scheduling, then SIGTERM every recording and wait (bounded). An open
+    // window stays 'recording' and resumes on the next boot.
+    if let Some(job) = dvr_job {
+        job.abort();
+    }
+    if let Some(r) = recorder {
+        r.stop_all(std::time::Duration::from_secs(6)).await;
+    }
     Ok(())
 }
 
