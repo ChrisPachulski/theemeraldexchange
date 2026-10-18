@@ -124,6 +124,20 @@ fn removes_dot_segments_as_the_url_parser_does() {
     assert_eq!(r("/a/b/..").as_deref(), Some("/a/"));
     assert_eq!(r("/../../x").as_deref(), Some("/x"));
     assert_eq!(r("/a/...").as_deref(), None, "three dots is a name");
+    // Backslashes are slashes to the URL parser: no gate may see them raw.
+    assert_eq!(
+        r("/api/transcode/session/x\\..\\..\\warm").as_deref(),
+        Some("/api/transcode/warm")
+    );
+    assert_eq!(
+        r("/api/media/stream/track/1\\..\\..\\movie\\7").as_deref(),
+        Some("/api/media/stream/movie/7")
+    );
+    assert_eq!(
+        r("/api/iptv/sessions\\..\\stream\\live\\1\\grant").as_deref(),
+        Some("/api/iptv/stream/live/1/grant")
+    );
+    assert_eq!(r("/a\\b").as_deref(), Some("/a/b"));
 }
 
 #[test]

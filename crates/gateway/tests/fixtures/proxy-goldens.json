@@ -3149,6 +3149,51 @@
           "calls": []
         },
         {
+          "name": "alice POST /api/transcode/session/abc\\..\\..\\warm",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/transcode/session/abc\\..\\..\\warm",
+          "body_in": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/transcode/session/abc\\..\\..\\grant",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/transcode/session/abc\\..\\..\\grant",
+          "body_in": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
+          "name": "alice POST /api/transcode/session/abc/..\\../warm",
+          "as": "alice",
+          "method": "POST",
+          "path": "/api/transcode/session/abc/..\\../warm",
+          "body_in": "{}",
+          "status": 404,
+          "headers": {
+            "content-type": "text/plain; charset=UTF-8"
+          },
+          "body": "404 Not Found",
+          "body_len": 13,
+          "body_sum": 1029,
+          "calls": []
+        },
+        {
           "name": "alice POST /api/transcode/session/abc/%2e%2e/%2E%2E/grant",
           "as": "alice",
           "method": "POST",

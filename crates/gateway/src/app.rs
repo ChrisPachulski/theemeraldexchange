@@ -115,6 +115,12 @@ async fn normalize_path(mut req: Request, next: Next) -> Response {
 
 /// The path without dot segments, or None when it has none.
 pub(crate) fn remove_dot_segments(path: &str) -> Option<String> {
+    // The WHATWG parser reads '\' as '/' in an http path (Hono's view, and
+    // reqwest's on the forward URL), so every gate must see it that way too.
+    if path.contains('\\') {
+        let slashed = path.replace('\\', "/");
+        return Some(remove_dot_segments(&slashed).unwrap_or(slashed));
+    }
     let single = |s: &str| s == "." || s.eq_ignore_ascii_case("%2e");
     let double = |s: &str| {
         matches!(
