@@ -2151,8 +2151,8 @@ async fn prune_missing_music(
 //
 // Photos never touch ffprobe or media_files: the scan stats + reads EXIF
 // (kamadak-exif, pure Rust) and indexes straight into the `photos` table.
-// ponytail: no thumbnail generation yet — the file endpoint serves originals;
-// add an ffmpeg-scaled thumb cache when the Photos tab needs a fast grid.
+// Thumbnails are the resized WebP variants from GET /images/photo/{id}?w=
+// (artwork.rs); the file endpoint serves originals.
 
 /// Image extensions the photo scanner considers.
 pub const IMAGE_EXTENSIONS: &[&str] = &[

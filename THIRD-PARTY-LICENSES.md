@@ -117,6 +117,55 @@ sha256-checked at build time (`crates/recommender/Dockerfile`). The model card a
 that revision declares the **Apache-2.0** license. They are data loaded by
 `crates/recommender/src/embed.rs`; no model code is linked.
 
+## libwebp (media-core image)
+
+The media-core binary statically links **libwebp** to encode its resized
+artwork as lossy WebP (`crates/media-core/src/artwork.rs`, through the `webp`
+and `libwebp-sys` crates). The C sources are the copy vendored by
+`libwebp-sys` 0.9.6 (libwebp 1.3.1 per its `configure.ac`, carrying the
+CVE-2023-4863 Huffman-table fix), compiled into the binary at build time. Only
+the encoder is called; WebP input is decoded by the pure-Rust `image-webp`.
+libwebp is licensed under the **BSD-3-Clause** license, whose binary
+redistribution condition is met by reproducing its notice here:
+
+```
+Copyright (c) 2010, Google Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+  * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+
+  * Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in
+    the documentation and/or other materials provided with the
+    distribution.
+
+  * Neither the name of Google nor the names of its contributors may
+    be used to endorse or promote products derived from this software
+    without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+libwebp also ships Google's additional patent grant for the WebM codecs
+(`PATENTS` in its source tree). The other Rust crates in the artwork path
+(`image`, `fast_image_resize`, `blurhash`, `lofty` and their dependencies) are
+permissively licensed (MIT, Apache-2.0, BSD-3-Clause, Zlib or Unlicense),
+within the allow list that `deny.toml` enforces on every linked dependency.
+
 ## Written Offer for Corresponding Source
 
 The complete **corresponding source** for the distributed FFmpeg, FFprobe,

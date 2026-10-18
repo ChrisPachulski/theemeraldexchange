@@ -69,6 +69,12 @@ Everything else is opt-in, one flag each:
 With everything off you still get the core product: library browsing + playback, owner-controlled
 invites, and local-first recommendations — but at least one sign-in provider must be configured.
 
+**Artwork.** media-core serves every poster, cover and photo thumbnail itself as a resized
+WebP, from a store on its data volume capped at `MEDIA_IMAGE_CACHE_MB` (default 2048; covers
+taken from your files sit outside the cap). The first scan downloads each library poster once
+from TMDB, two at a time, so on a large library it runs for minutes; later scans fetch only
+new titles.
+
 **Platforms.** Images are multi-arch (linux/amd64 + linux/arm64) and boot-verified on both
 after every publish (`verify-images`):
 
@@ -115,7 +121,8 @@ Four runtimes, one product:
   distribution and the JSON stores; links `crates/auth` (sessions, sign-in, authorization,
   server.db) in-process.
 - **Rust workspace** (`crates/`) — `gateway` and `auth` (above), `emerald-contracts`
-  (cross-language token crypto), `media-core` (library scan / metadata / serve), `iptv` (live
+  (cross-language token crypto), `media-core` (library scan / metadata / serve, and every
+  poster, cover and thumbnail as a resized WebP with a blurhash placeholder), `iptv` (live
   TV, guide, DVR), `transcoder` (ffmpeg-HLS sessions) and `recommender`.
 - **Recommender** (`crates/recommender`, binary `eex-recommender`) — sqlite-vec retrieval, a
   per-household learned ranker and MiniLM embeddings (candle), with its TMDB ingest, featurize

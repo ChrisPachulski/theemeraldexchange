@@ -125,6 +125,9 @@ services:
       MEDIA_INTERNAL_PRINCIPAL_MODE: "enforce"
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
       MEDIA_TRANSCODER_URL: "http://transcoder:8003"
+      # Disk cap for resized posters/covers and fetched TMDB originals, kept
+      # in the media-core-db volume under /data/images.
+      MEDIA_IMAGE_CACHE_MB: "${MEDIA_IMAGE_CACHE_MB:-2048}"
       RUST_LOG: "media_core=info"
 
   iptv:

@@ -3,8 +3,9 @@
 //! Scans local media roots, owns `media.db`, and serves a direct-play
 //! library + watch state to Hono over the internal-principal boundary
 //! (§4 Hybrid D). Hono proxies `/api/media/*`; media-core never speaks to
-//! the SPA directly. ffprobe/ffmpeg are runtime deps invoked via
-//! `tokio::process::Command` — no FFI bindings.
+//! the SPA directly. ffprobe (and ffmpeg, for a configured Whisper CLI) are
+//! runtime deps invoked via `tokio::process::Command` — no FFI bindings.
+//! Artwork is decoded, resized and WebP-encoded in process (`artwork`).
 
 pub mod artwork;
 pub mod auth;

@@ -198,6 +198,24 @@ each caused a real "library invisible / nothing plays" incident:
 - **Backend flag.** The backend only proxies `/api/media` + `/api/transcode`
   when `USE_MEDIA_CORE=1` is set in `.env.production`. Until then media-core
   runs idle and the SPA shows no local library.
+- **Artwork store.** Every poster, cover and photo thumbnail is served by
+  media-core (`GET /api/media/images/{tmdb|album|audiobook|photo}/{id}?w=`)
+  as a resized lossy WebP; the SPA no longer loads `image.tmdb.org`, so a
+  host without `USE_MEDIA_CORE=1` shows letter tiles instead of posters. The
+  store lives on the media-core `/data` volume: `/data/images` holds the
+  resized variants and the TMDB originals (each fetched once), kept under
+  `MEDIA_IMAGE_CACHE_MB` (default 2048) by LRU eviction and rebuilt on demand;
+  `/data/artwork` holds the album and audiobook covers taken from tags or
+  folder images, outside the cap.
+- **First scan after rollout.** The scan that follows a deploy fetches the
+  original poster of every library movie and show it has no `images` row for,
+  through 2 origin fetch slots, and computes its blurhash in a 2-permit CPU
+  pool (album, audiobook and photo blurhashes are backfilled the same way).
+  On a large library that pass runs for minutes, and it holds the scan guard:
+  `POST /api/media/scan` answers 409 until it ends.
+  Trending, suggestions, credits and watchlist posters are fetched on first
+  view. The `images` table and `/data/images` are additive, so rolling back
+  to the previous image tag needs no cleanup.
 
 Hardware transcode: the compose maps `/dev/dri/renderD128` into the
 transcoder with `group_add: "18"` (the NAS `video` group) and defaults

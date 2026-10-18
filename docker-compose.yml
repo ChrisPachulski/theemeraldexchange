@@ -344,6 +344,11 @@ services:
       # 503 "transcoder offline" semantics when this is unset. Points at the
       # transcoder service over the docker network (never the host port).
       MEDIA_TRANSCODER_URL: "${MEDIA_TRANSCODER_URL:-http://transcoder:8003}"
+      # Artwork store on the /data volume: /data/images holds the resized WebP
+      # variants and the TMDB originals fetched once (both rebuildable, kept
+      # under this cap by LRU eviction); /data/artwork holds the covers taken
+      # from tags, outside the cap.
+      MEDIA_IMAGE_CACHE_MB: "${MEDIA_IMAGE_CACHE_MB:-2048}"
       RUST_LOG: "${MEDIA_CORE_LOG:-media_core=info}"
 
   # ── iptv — Rust live TV / EPG / DVR service ───────────────────────────────
