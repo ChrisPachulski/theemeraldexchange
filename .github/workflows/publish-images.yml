@@ -13,7 +13,7 @@
 #   ghcr.io/<owner>/theemeraldexchange-media-core   (crates/media-core/Dockerfile)
 #   ghcr.io/<owner>/theemeraldexchange-transcoder   (crates/transcoder/Dockerfile)
 #   ghcr.io/<owner>/theemeraldexchange-iptv         (crates/iptv/Dockerfile)
-#   ghcr.io/<owner>/theemeraldexchange-recommender  (recommender/Dockerfile)
+#   ghcr.io/<owner>/theemeraldexchange-recommender  (crates/recommender/Dockerfile)
 #
 # Tags (Seerr model): latest + vX.Y.Z + vX.Y + vX on version tags;
 # `develop` on workflow_dispatch from a branch.
@@ -61,7 +61,7 @@ jobs:
             dockerfile: ./crates/iptv/Dockerfile
             build-args: ""
           - name: recommender
-            dockerfile: ./recommender/Dockerfile
+            dockerfile: ./crates/recommender/Dockerfile
             build-args: ""
         platform:
           - arch: amd64

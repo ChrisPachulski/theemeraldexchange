@@ -7,7 +7,7 @@ deployment to test against.
 ## Reporting a vulnerability
 
 Email **pachun95@gmail.com** with a description, the affected component
-(`server/`, `crates/media-core`, `crates/transcoder`, `recommender/`, the SPA,
+(`server/`, `crates/media-core`, `crates/transcoder`, `crates/recommender`, the SPA,
 or the Apple app), and reproduction steps. Please do not open a public issue
 for anything exploitable. You will get an acknowledgement within a week.
 

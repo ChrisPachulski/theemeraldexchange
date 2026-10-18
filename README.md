@@ -10,7 +10,7 @@ Plex-style experience for live and on-demand media, built to ship as native iOS/
 ![Web](https://img.shields.io/badge/web-React_19_+_Vite-61dafb?style=flat-square)
 &nbsp;![API](https://img.shields.io/badge/api-Rust_(axum)-dea584?style=flat-square)
 &nbsp;![Core](https://img.shields.io/badge/media--core-Rust-dea584?style=flat-square)
-&nbsp;![Recs](https://img.shields.io/badge/recommender-FastAPI-009688?style=flat-square)
+&nbsp;![Recs](https://img.shields.io/badge/recommender-Rust-dea584?style=flat-square)
 &nbsp;![License](https://img.shields.io/badge/license-Proprietary-111111?style=flat-square)
 
 </div>
@@ -30,7 +30,7 @@ the transcoder — is implementation detail, never visible from inside the exper
 - **Three ways in, one allowlist** — WorkOS AuthKit (Google/Apple/email), Sign in with
   Apple, and Sign in with Google, all converging on a single owner-controlled invite list.
 - **Hardware transcoding** — HEVC→H.264 via Intel VAAPI on the NAS iGPU, software fallback off-box.
-- **Local-first recommendations** — a FastAPI + sqlite-vec scoring sidecar; your taste never
+- **Local-first recommendations** — a Rust + sqlite-vec scoring sidecar; your taste never
   leaves the NAS.
 - **Built to ship native** — the web client is the reference surface; native iOS/tvOS is the
   distribution target.
@@ -115,10 +115,12 @@ Four runtimes, one product:
   distribution and the JSON stores; links `crates/auth` (sessions, sign-in, authorization,
   server.db) in-process.
 - **Rust workspace** (`crates/`) — `gateway` and `auth` (above), `emerald-contracts`
-  (cross-language token crypto, with a `-pyo3` binding), `media-core` (library scan / metadata
-  / serve), `iptv` (live TV, guide, DVR) and `transcoder` (ffmpeg-HLS sessions).
-- **Recommender** (`recommender/`) — Python FastAPI + sqlite-vec scoring sidecar. Local-first:
-  household signals never leave the NAS.
+  (cross-language token crypto), `media-core` (library scan / metadata / serve), `iptv` (live
+  TV, guide, DVR), `transcoder` (ffmpeg-HLS sessions) and `recommender`.
+- **Recommender** (`crates/recommender`, binary `eex-recommender`) — sqlite-vec retrieval, a
+  per-household learned ranker and MiniLM embeddings (candle), with its TMDB ingest, featurize
+  and nightly optimizer jobs scheduled in process. Local-first: household signals never leave
+  the NAS.
 
 ## Authentication
 
@@ -151,15 +153,17 @@ reads its environment, so export the file first (`set -a; . ./.env.local; set +a
 full stack locally:
 
 <details>
-<summary><strong>Recommender</strong> — FastAPI, port 8000</summary>
+<summary><strong>Recommender</strong> — Rust, port 8000</summary>
 
 ```bash
-cd recommender
-make install && make migrate            # creates ./data/exchange.db
-TMDB_API_KEY=... make ingest-bootstrap  # one-time catalog ingest
-make featurize
-RECOMMENDER_EVENT_SECRET=local-dev-secret make serve
+# DB defaults to ./data/exchange.db and migrates on first open.
+TMDB_API_KEY=... cargo run --release -p recommender -- ingest --mode bootstrap   # one-time
+RECOMMENDER_MODEL_DIR=/path/to/all-MiniLM-L6-v2 cargo run --release -p recommender -- featurize
+RECOMMENDER_EVENT_SECRET=local-dev-secret cargo run --release -p recommender     # serves :8000
 ```
+
+`RECOMMENDER_MODEL_DIR` holds `config.json`, `tokenizer.json` and `model.safetensors` of
+all-MiniLM-L6-v2 at revision `c9745ed` (the image bakes them in at `/srv/minilm`).
 
 Wire the backend via `.env.local`: `USE_LOCAL_RECOMMENDER=1`,
 `RECOMMENDER_URL=http://localhost:8000`, and the same `RECOMMENDER_EVENT_SECRET` (required
@@ -217,8 +221,7 @@ upstreams, the Glitchtip stack, and the Cloudflare tunnel. The compose file
 npm run build      # tsc -b && vite build
 npm test           # vitest run (SPA + repo contracts)
 
-cargo test --workspace --exclude emerald-contracts-pyo3
-( cd recommender && uv sync --extra dev && uv pip install --python .venv/bin/python maturin && .venv/bin/maturin develop --release -m ../crates/emerald-contracts-pyo3/Cargo.toml && uv run pytest )
+cargo test --workspace
 ```
 
 ## Node runtime policy
@@ -290,7 +293,7 @@ Two tracks (see **[DEPLOY.md](./DEPLOY.md)**):
 ## Status
 
 The **backend track is shipped and running on the NAS**: the IPTV core, the locked cross-service
-contract (Rust↔TS↔Python byte parity enforced in CI), the Rust media-core (library scan /
+contract (byte-parity test vectors enforced in CI), the Rust media-core (library scan /
 metadata / serve), and the ffmpeg transcoder (HEVC→H.264, hardware-encoded via Intel VAAPI).
 The **Apple client track** (native iOS/tvOS, `EmeraldMobile` + `EmeraldTV`) lives in a
 separate repo and ships through TestFlight; this repo carries its server half — the

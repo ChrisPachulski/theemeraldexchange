@@ -393,7 +393,7 @@ mod tests {
     async fn matches_torch_baseline() {
         let Some(dir) = test_model_dir() else { return };
         let baseline = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../recommender/tests/fixtures/torch_2_12_embedding_baseline.json");
+            .join("tests/fixtures/torch_2_12_embedding_baseline.json");
         let report = verify_baseline(&dir, &baseline).await.unwrap();
         assert_eq!(report["status"], "ok");
         assert_eq!(report["rows_featurized"], 1);

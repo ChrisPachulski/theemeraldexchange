@@ -130,7 +130,6 @@ jobs:
         run: |
           B="${{ steps.img.outputs.base }}"
           docker run -d --name recommender --network host \
-            -e RECOMMENDER_HOST=0.0.0.0 -e RECOMMENDER_PORT=8000 \
             -e RECOMMENDER_DB_PATH=/tmp/exchange.db \
             -e RECOMMENDER_EVENT_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')" \
             -e INTERNAL_PRINCIPAL_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')" \
@@ -139,4 +138,8 @@ jobs:
             curl -fsS http://127.0.0.1:8000/health && break || sleep 2
             [ "$i" = 90 ] && { docker logs recommender; exit 1; }
           done
+          docker exec recommender uname -m
+          # The MiniLM files are baked in (no first-featurize download).
+          docker exec recommender ls /srv/minilm/model.safetensors
+          ! docker exec recommender sh -c 'command -v python3 || command -v python'
           echo "recommender ✓"

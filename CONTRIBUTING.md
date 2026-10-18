@@ -19,7 +19,7 @@ welcome; opening a PR is not the path for changes.
   **pachun95@gmail.com** directly. Do not open a public issue for anything
   exploitable.
 - **Non-security bugs**: email the same address with the affected component
-  (`crates/gateway`, `crates/auth`, `crates/media-core`, `crates/iptv`, `crates/transcoder`, `recommender/`, the
+  (`crates/gateway`, `crates/auth`, `crates/media-core`, `crates/iptv`, `crates/transcoder`, `crates/recommender`, the
   SPA, or the Apple app) and reproduction steps.
 
 ## Running your own instance
@@ -46,16 +46,10 @@ npm run test:e2e:integration
 npm run test:e2e:playback
 ```
 
-Rust workspace and recommender:
+Rust workspace (the recommender included):
 
 ```bash
-cargo test -p emerald-contracts -p media-core -p transcoder
-
-cd recommender
-uv sync --extra dev
-uv pip install --python .venv/bin/python maturin
-.venv/bin/maturin develop --release -m ../crates/emerald-contracts-pyo3/Cargo.toml
-uv run pytest
+cargo test --workspace
 ```
 
 These are the same commands documented in `README.md` under

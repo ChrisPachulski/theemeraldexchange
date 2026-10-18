@@ -15,7 +15,7 @@
 #      would silently not ship).
 #   2. Validates a local .env.production exists with all required keys.
 #   3. Stages a clean payload from `git archive HEAD` into a temp dir and
-#      rsyncs Dockerfile, docker-compose.yml, recommender/, crates/ FROM THAT
+#      rsyncs Dockerfile, docker-compose.yml, crates/ FROM THAT
 #      STAGE — never the working tree — to /mnt/user/appdata/exchange-backend/
 #      on the NAS.
 #   4. Ships .env.production → NAS as .env (consumed by docker compose).
@@ -273,29 +273,15 @@ rsync -av \
   "${STAGE_DIR}/Dockerfile" "${STAGE_DIR}/docker-compose.yml" "${STAGE_DIR}/.dockerignore" \
   "${NAS_USER}@${NAS_HOST}:${APPDATA}/"
 
-echo "→ Syncing recommender/"
-rsync -av --delete \
-  --exclude '.venv' \
-  --exclude '__pycache__' \
-  --exclude '*.pyc' \
-  --exclude 'data' \
-  --exclude '.ruff_cache' \
-  --exclude '.pytest_cache' \
-  --exclude 'eval/holdout.jsonl' \
-  "${STAGE_DIR}/recommender/" "${NAS_USER}@${NAS_HOST}:${APPDATA}/recommender/"
-
 # crates/ is the Cargo workspace every Rust image builds from (the backend
-# gateway, media-core, iptv, transcoder) plus the recommender's PyO3 wheel.
+# gateway, media-core, iptv, transcoder, recommender).
 # Only the --build-on-nas fallback compiles it on the box; the workspace
 # needs every member present, so the whole tree ships.
 echo "→ Syncing crates/"
 rsync -av --delete \
   --exclude 'target' \
   --exclude '**/target' \
-  --exclude '.venv' \
   --exclude 'node_modules' \
-  --exclude '__pycache__' \
-  --exclude '*.pyc' \
   "${STAGE_DIR}/crates/" "${NAS_USER}@${NAS_HOST}:${APPDATA}/crates/"
 
 # Cargo.toml + Cargo.lock + LICENSE live at the repo root and are
@@ -345,7 +331,7 @@ ssh "${NAS_USER}@${NAS_HOST}" "test -f ${APPDATA}/.dockerignore || echo '[deploy
 scratch_dir=$(env_value TRANSCODER_SCRATCH_HOST_PATH || printf '%s' "${APPDATA}/transcoder-scratch")
 echo "→ Pre-creating + chowning sidecar DB volumes (fresh-volume crash-loop guard)"
 ssh "${NAS_USER}@${NAS_HOST}" "\
-  mkdir -p ${APPDATA}/data ${APPDATA}/recommender-db ${APPDATA}/recommender-db/hf-cache ${APPDATA}/media-core-db ${APPDATA}/iptv '${scratch_dir}' && \
+  mkdir -p ${APPDATA}/data ${APPDATA}/recommender-db ${APPDATA}/media-core-db ${APPDATA}/iptv '${scratch_dir}' && \
   chown 10001:10001 ${APPDATA}/data && \
   chown -R 10001:10001 ${APPDATA}/recommender-db && \
   chown -R 10002:10002 ${APPDATA}/media-core-db && \
@@ -489,9 +475,9 @@ ssh "${NAS_USER}@${NAS_HOST}" "chmod +x ${APPDATA}/scripts/nas-cloudflared-watch
 # Gate on the WHOLE service stack, not just the backend: recommender,
 # media-core, iptv and transcoder all carry docker healthchecks (compose +
 # image HEALTHCHECK), so a sidecar that crash-loops (bad migration,
-# missing INTERNAL_PRINCIPAL_SECRET, torch OOM) fails the deploy instead
+# missing INTERNAL_PRINCIPAL_SECRET, OOM) fails the deploy instead
 # of silently degrading suggestions/playback. The recommender's first
-# boot loads a sentence-transformer model (start_period 60s), hence the
+# boot migrates and warms the ranker (start_period 60s), hence the
 # generous ~150s ceiling. Every core service is required after a full-stack
 # deploy; missing is a release failure.
 echo "→ Waiting for backend + sidecars to report healthy (up to ~150s)"

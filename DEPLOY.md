@@ -20,7 +20,7 @@ api.theemeraldexchange.com       ──▶ Cloudflare Tunnel
                                   ──▶ 127.0.0.1:3001
                                   ──▶ exchange-backend (eex-gateway, Rust)
                                        ├─▶ Sonarr / Radarr / SAB on the LAN
-                                       ├─▶ exchange-recommender   (FastAPI, internal net; loopback :8001)
+                                       ├─▶ exchange-recommender   (Rust, internal net; loopback :8001)
                                        │    └─ SQLite at /mnt/user/appdata/exchange-backend/recommender-db/exchange.db
                                        ├─▶ exchange-media-core    (Rust, library scan/serve; loopback :8002)
                                        │    └─▶ exchange-transcoder (Rust + ffmpeg/VAAPI HLS; loopback :8003)
@@ -128,7 +128,7 @@ What the script actually does (`./scripts/deploy-nas.sh --help` prints its own s
    of as a container crash loop.
 3. Stages the payload from `git archive HEAD` into a temp dir and rsyncs — from
    that stage, never the working tree — `Dockerfile`, `docker-compose.yml`,
-   `.dockerignore`, `recommender/`, `crates/`, and the root
+   `.dockerignore`, `crates/`, and the root
    `Cargo.toml`/`Cargo.lock`/`LICENSE` to
    `/mnt/user/appdata/exchange-backend/` on the NAS.
 4. Ships `.env.production` → NAS as `.env`, chmod 600.
@@ -391,8 +391,7 @@ cheap failure classes never reach main. `SKIP_PREPUSH=1 git push` bypasses.
 |---|---|---|
 | SPA only (anything in `src/`) | `git push` | Netlify auto-builds and deploys. ~30s. |
 | Backend (`crates/gateway`, `crates/auth`) | `git push && ./scripts/deploy-nas.sh` | Waits for green CI, pulls the CI-built backend image, restarts. |
-| Rust sidecars (anything in `crates/`, root `Cargo.toml`/`Cargo.lock`) | `git push && ./scripts/deploy-nas.sh` | Same path — `crates/` feeds the backend, media-core, iptv and transcoder images AND the recommender's pyo3 contract binding. CI compiles them, not the NAS. |
-| Recommender (anything in `recommender/`) | `git push && ./scripts/deploy-nas.sh` | Same path; pulls the CI-built recommender image. |
+| Rust sidecars (anything in `crates/`, root `Cargo.toml`/`Cargo.lock`) | `git push && ./scripts/deploy-nas.sh` | Same path — `crates/` feeds the backend, media-core, iptv, transcoder and recommender images. CI compiles them, not the NAS. |
 | Both SPA + NAS | `git push && ./scripts/deploy-nas.sh` | Deploy the **frontend before the backend** when a change spans both (the SPA is the consumer). |
 | Env var change in `.env.production` | `./scripts/deploy-nas.sh` | Same script; new `.env` ships and containers restart. |
 | `VITE_API_BASE_URL` change | Netlify UI → trigger redeploy | Vite bakes env vars at build time, so a redeploy is required. |
@@ -418,33 +417,33 @@ running stale code.
 
 ## Local recommender (replaces per-request Claude)
 
-`recommender/` is a Python + FastAPI sibling container in
+`crates/recommender` (binary `eex-recommender`) is a Rust sibling container in
 `docker-compose.yml`. It owns a SQLite DB (sqlite-vec) at
 `/mnt/user/appdata/exchange-backend/recommender-db/exchange.db` and serves
-ranked picks to the gateway on the internal Docker network. The
-`recommender/` *source* dir on the NAS (synced by `deploy-nas.sh`) supplies the
-image's `dockerfile:`; the `build:` context is the appdata root, so the
-Dockerfile can reach `crates/emerald-contracts{,-pyo3}` for the PyO3 binding.
-The DB lives in `recommender-db/` so the two never collide.
+ranked picks to the gateway on the internal Docker network. CI builds the
+image (`crates/recommender/Dockerfile`) with the all-MiniLM-L6-v2 files baked
+in at the pinned revision; `deploy-nas.sh` pulls it like the other images.
 
 ### Roles
 
 * **Per-request scoring** — `POST /score` on every `/api/suggestions/:type`
   refresh. No Claude call, no per-request cost.
-* **Optimizer (offline)** — `make optimize` runs nightly via `crontab` on
-  the NAS. One Claude call per run reviews the day's outcomes and proposes
-  config patches. Auto-promotes only if the patch beats the held-out eval
-  set; weight changes clamped to ±20% per night.
+* **Scheduled jobs (in process)** — the container runs its own jobs, in the
+  container's local time (UTC unless `TZ` is set on the service): the
+  optimizer at 03:30 (one Claude call reviews the day's outcomes and proposes
+  config patches; auto-promotes only if the patch beats the held-out eval set;
+  weight changes clamped to ±20% per night), TMDB changes then featurize at
+  04:00, and the rec_log retention sweep plus ranker warm every hour and once
+  at boot. There is no host cron.
 
 ### Bootstrap (one-time, multi-hour)
 
+Migrations run at boot. Then:
+
 ```bash
 ssh root@theemeraldexchange.local '
-  cd /mnt/user/appdata/exchange-backend
-  docker compose up -d recommender
-  docker compose exec recommender python -m app.db --migrate
-  docker compose exec recommender python -m workers.tmdb_ingest --mode bootstrap
-  docker compose exec recommender python -m workers.featurize
+  docker exec exchange-recommender eex-recommender ingest --mode bootstrap
+  docker exec exchange-recommender eex-recommender featurize
 '
 ```
 
@@ -465,38 +464,30 @@ ANTHROPIC_OPTIMIZER_KEY=sk-ant-...
 then redeploy with `scripts/deploy-nas.sh`. The backend will now skip
 Claude on every refresh and call the recommender instead.
 
-### Nightly optimizer cron
+### Removing the old host cron (one-time, at the Rust image's first deploy)
 
-On the NAS, drop into `/etc/cron.d/exchange-recommender`:
-
-```cron
-SHELL=/bin/bash
-PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/bin
-# Phase A: pull TMDB changes for the day and update the titles rows.
-0 4 * * *  root docker exec exchange-recommender python -m workers.tmdb_ingest --mode changes >> /var/log/exchange-ingest.log 2>&1
-# Phase B: rebuild embeddings for new + UPDATED rows. featurize picks
-# up both never-featurized rows and rows whose titles.fetched_at is
-# newer than title_features.computed_at — so changes-mode updates to
-# overview/genres/keywords actually flow into retrieval. Without this
-# step the changes cron updates the titles table but the embeddings
-# stay frozen against pre-revision content.
-15 4 * * * root docker exec exchange-recommender python -m workers.featurize >> /var/log/exchange-featurize.log 2>&1
-30 3 * * * root docker exec exchange-recommender python -m workers.optimizer >> /var/log/exchange-optimizer.log 2>&1
-```
-
-Unraid wipes `/etc/cron.d/` on every reboot, so also drop a copy on the
-USB persistence (`/boot/config/`) and have `/boot/config/go` reinstall
-it at boot:
+The Python image was driven by a host cron (`docker exec exchange-recommender
+python -m workers.*`). The Rust image has no python and runs those jobs
+itself, so the old lines would fail nightly. On the NAS, after the Rust image
+is up:
 
 ```bash
-cp /etc/cron.d/exchange-recommender /boot/config/exchange-recommender.cron
-cat >> /boot/config/go <<'EOF'
-if [ -f /boot/config/exchange-recommender.cron ]; then
-  cp /boot/config/exchange-recommender.cron /etc/cron.d/exchange-recommender
-  chmod 644 /etc/cron.d/exchange-recommender
-fi
-EOF
+rm -f /etc/cron.d/exchange-recommender /boot/config/exchange-recommender.cron
+# and delete the matching `if [ -f /boot/config/exchange-recommender.cron ]` block
+# from /boot/config/go
 ```
+
+`/data/hf-cache` (the Python image's model download) and the old
+`recommender/` build-context dir under the appdata root are no longer read.
+Move any operator `recommender/eval/holdout.jsonl` to
+`recommender-db/holdout.jsonl` (see below) before deleting that dir.
+
+Then confirm the first boot: `docker logs exchange-recommender` shows the
+migrations (none on the existing DB) and the ranker warm, and
+`curl -fsS http://127.0.0.1:8001/health` answers. Rollback is redeploying the
+previous recommender image (retag its `:rollback-<ts>` image to `:latest`
+and `docker compose up -d --no-build recommender`);
+exchange.db's schema is unchanged by the port, so both images read it.
 
 ### Recovering ingest rows stuck at `status='error'`
 
@@ -509,52 +500,28 @@ rows). To recover:
 ```bash
 # Reset every error row to pending, then drain. Capped to attempts<5
 # so permanently-broken titles (removed from TMDB, etc.) don't churn.
-docker exec exchange-recommender python -m workers.tmdb_ingest \
+docker exec exchange-recommender eex-recommender ingest \
   --mode retry-errors --max-attempts 5
 ```
 
 `--retry-errors` is also available on `--mode bootstrap` and
-`--mode changes` if you want the recovery sweep to happen as part of
-the regular nightly cron.
+`--mode changes` for a one-off run that sweeps errors as well.
 
 ### Wiring up the optimizer's eval gate
 
-The optimizer's auto-promotion path is gated by an evaluation set —
-without it, every nightly run records the candidate model as an
-inactive proposal and the active model stays put. Note the gate is not
-merely "a file exists": the optimizer stays record-only until the set
-has **at least 30 usable rows** (`MIN_HOLDOUT_SIZE`,
-`recommender/workers/optimizer.py:5`). The set is one
-JSON object per line (see `recommender/eval/README.md` for the
-schema) and lives at `RECOMMENDER_HOLDOUT_PATH` inside the container,
-defaulting to `/data/holdout.jsonl`.
+The optimizer's auto-promotion path is gated by an evaluation set. It reads
+`RECOMMENDER_HOLDOUT_PATH` inside the container (default
+`/data/holdout.jsonl`, i.e. `recommender-db/holdout.jsonl` on the NAS); when
+that file is absent it uses the vetted seed compiled into the binary
+(`crates/recommender/holdout.seed.jsonl`). The optimizer stays record-only
+until the set has **at least 30 usable rows** (`MIN_HOLDOUT_SIZE`,
+`crates/recommender/src/holdout.rs`). The set is one JSON object per line,
+in the seed's shape (`sub`, `kind`, `library`, `positives`, `negatives`).
+`/health` with the event secret reports its mode and row count.
 
-```bash
-# Quick start: ship the syntactically-valid example to prove the
-# wiring (file shape, env var, mount path), THEN replace it with a
-# real generated holdout before relying on auto-promotion. The
-# example is 3 synthetic rows — enough to satisfy load_holdout() but
-# well under the 30-row floor, so auto-promotion stays OFF until you
-# ship a real generated set.
-scp recommender/eval/holdout.example.jsonl \
-  root@theemeraldexchange.local:/mnt/user/appdata/exchange-backend/recommender-db/holdout.jsonl
-
-# Real holdout: generate from the running recommender DB. The
-# generator filters to (sub, kind) pairs with at least one positive
-# outcome AND a library of at least 10 titles (MIN_LIBRARY, from
-# RECOMMENDER_COLD_START_THRESHOLD) in the last 30 days.
-ssh root@theemeraldexchange.local \
-  'docker exec exchange-recommender python -m eval.build_holdout' \
-  > /tmp/holdout.jsonl
-scp /tmp/holdout.jsonl \
-  root@theemeraldexchange.local:/mnt/user/appdata/exchange-backend/recommender-db/holdout.jsonl
-```
-
-The Dockerfile intentionally does NOT bake the holdout into the image
-and `scripts/deploy-nas.sh` excludes it from rsync — it's operator-
-curated history, not source code. Re-run the generator periodically
-as `rec_log` + `rec_outcomes` accumulate; the optimizer's evaluation
-only gets sharper as the set grows.
+The image does NOT bake an operator holdout in — it's household history,
+not source code. Grow it as `rec_log` + `rec_outcomes` accumulate; the
+optimizer's evaluation only gets sharper as the set grows.
 
 ### Rolling back
 

@@ -21,7 +21,7 @@ const MIGRATION_DIRS: &[(&str, Store)] = &[
     ("crates/auth/migrations", Store::Server),
     ("crates/iptv/migrations", Store::Iptv),
     ("crates/media-core/migrations", Store::Media),
-    ("recommender/migrations", Store::Recommender),
+    ("crates/recommender/migrations", Store::Recommender),
 ];
 
 fn repo_root() -> PathBuf {
@@ -349,7 +349,7 @@ async fn build(store: Store, path: &Path) -> SqlitePool {
         .collect();
     let db = pool(path).await;
     if store == Store::Recommender {
-        // recommender/app/db.py creates the vec0 table before the .sql files
+        // recommender::db creates the vec0 table before the .sql files
         // (0007 deletes from it); a plain stand-in serves the same purpose.
         sqlx::query("CREATE TABLE title_vec (kind TEXT)")
             .execute(&db)

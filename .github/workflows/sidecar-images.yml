@@ -1,13 +1,13 @@
 # PR-time docker builds for the sidecar images.
 #
 # ci.yml's docker-build job builds and boots the backend image (the Rust
-# gateway) on every run but the heavy sidecars (recommender torch stack,
-# media-core/transcoder/iptv Rust workspaces) only on push to main — which
-# meant a PR could break a sidecar Dockerfile and the failure surfaced only
-# AFTER merge. This workflow closes that gap: it builds the sidecar images on
-# PRs and exercises the recommender's real embedding/persistence path, but
-# only when the inputs that feed them change (path filter below), so routine
-# SPA PRs stay fast. The backend Dockerfile shares the crates/ workspace, so a
+# gateway) on every run but the sidecars (recommender, media-core, transcoder,
+# iptv) only on push to main — which meant a PR could break a sidecar
+# Dockerfile and the failure surfaced only AFTER merge. This workflow closes
+# that gap: it builds the sidecar images on PRs, runs the recommender's
+# `eex-recommender verify-embedding` against the baked MiniLM files and boots
+# it on a cold volume to /health, but only when the inputs that feed them
+# change (path filter below), so routine SPA PRs stay fast. The backend Dockerfile shares the crates/ workspace, so a
 # crates/ change rebuilds the sidecars here and the backend in ci.yml.
 #
 # The matrix fans the images out in parallel; per-image GHA cache
@@ -19,7 +19,7 @@ on:
   pull_request:
     paths:
       - "crates/**"
-      - "recommender/**"
+      - "scripts/ci-recommender-image-check.sh"
       - "Cargo.toml"
       - "Cargo.lock"
       - "Dockerfile"
@@ -40,15 +40,15 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # The recommender image installs the +cpu torch stack and the Rust images
-    # compile the whole workspace from scratch on a cache miss — generous cap.
+    # The Rust images compile the workspace from scratch on a cache miss —
+    # generous cap.
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
           - name: recommender
-            dockerfile: ./recommender/Dockerfile
+            dockerfile: ./crates/recommender/Dockerfile
           - name: media-core
             dockerfile: ./crates/media-core/Dockerfile
           - name: transcoder
@@ -72,14 +72,6 @@ jobs:
           cache-from: type=gha,scope=sidecar-${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=sidecar-${{ matrix.name }}
 
-      - name: Verify recommender embedding compatibility
+      - name: Verify recommender image (embedding + cold-volume boot)
         if: matrix.name == 'recommender'
-        run: |
-          docker run --rm \
-            --user 10001:10001 \
-            -e HF_HUB_DISABLE_XET=1 \
-            -v "$PWD/recommender/scripts/verify_embedding_runtime.py:/ci/verify_embedding_runtime.py:ro" \
-            -v "$PWD/recommender/tests/fixtures/torch_2_12_embedding_baseline.json:/ci/baseline.json:ro" \
-            --entrypoint python \
-            theemeraldexchange-recommender:ci \
-            /ci/verify_embedding_runtime.py /ci/baseline.json
+        run: scripts/ci-recommender-image-check.sh theemeraldexchange-recommender:ci

@@ -108,6 +108,15 @@ yt-dlp`), so the exact version conveyed in any given image is whatever PyPI
 served at build time and is not recorded in this repository. It is upgraded
 deliberately (`-U`) because extractor breakage tracks upstream site changes.
 
+## all-MiniLM-L6-v2 (recommender image)
+
+The recommender image bakes in the **sentence-transformers/all-MiniLM-L6-v2**
+model files (`config.json`, `tokenizer.json`, `model.safetensors`) at the pinned
+Hugging Face revision `c9745ed1d9f207416be6d2e6f8de32d1f16199bf`, each
+sha256-checked at build time (`crates/recommender/Dockerfile`). The model card at
+that revision declares the **Apache-2.0** license. They are data loaded by
+`crates/recommender/src/embed.rs`; no model code is linked.
+
 ## Written Offer for Corresponding Source
 
 The complete **corresponding source** for the distributed FFmpeg, FFprobe,

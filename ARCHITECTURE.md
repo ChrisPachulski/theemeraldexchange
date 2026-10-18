@@ -5,8 +5,7 @@ requests and trust flow between them, where data lives, and how a build gets fro
 the NAS. It is a companion to `README.md` (product/dev-setup framing) and `DEPLOY.md` (the full
 deploy runbook), this file stays close to the code that implements the topology.
 
-Two deploy tracks exist, both built from the same images and the same `server/`, `crates/`, and
-`recommender/` source:
+Two deploy tracks exist, both built from the same images and the same `crates/` source:
 
 - **Self-host** (`selfhost/docker-compose.yml`), pulls prebuilt multi-arch GHCR images, runs the
   4 core services (`backend`, `media-core`, `transcoder`, `recommender`) on a LAN, no build step.
@@ -60,11 +59,13 @@ Two deploy tracks exist, both built from the same images and the same `server/`,
   same read-only `/media` mount as media-core and writes HLS segments to a durable `/scratch`
   volume, never a RAM tmpfs (`docker-compose.yml:434-448`).
 
-- **recommender** (`recommender/`, Python/FastAPI), local-first scoring/recommendation sidecar.
-  `recommender/app/main.py:1-4` states its own trust model directly: "the Hono backend hits these
-  endpoints; the public-facing tunnel is not configured for this service. All requests are inside
-  the Docker network." It exposes `/health`, `/metrics/funnel`, `/score`, and a family of
-  `/events/*` write endpoints (`recommender/app/main.py:143-491`) backed by a sqlite-vec store.
+- **recommender** (`crates/recommender`, Rust/Axum, binary `eex-recommender`), local-first
+  scoring/recommendation sidecar. Only the backend calls it, over the Docker network; the tunnel
+  never routes to it. It exposes `/health`, `/metrics/funnel`, `/score`, and a family of
+  `/events/*` write endpoints (`crates/recommender/src/http.rs:41-51`) backed by a sqlite-vec
+  store, and runs its own jobs in process (`crates/recommender/src/schedule.rs`: 03:30 optimizer,
+  04:00 TMDB changes then featurize, hourly retention + ranker warm). Embeddings are
+  all-MiniLM-L6-v2 on candle, the model files baked into the image at a pinned revision.
 
 - **cloudflared**, the only public-internet-facing container in the owner deployment, gated
   behind the `remote-cloudflare` profile (`docker-compose.yml:498-502`). It joins the backend's
@@ -148,23 +149,22 @@ Four independent credential mechanisms, plus one narrow export secret:
   `eex/internal-principal/v1` (`crates/emerald-contracts/README.md:20,26`). It is presented as an
   `Authorization: Bearer <jwe>` header (`server/routes/media.ts:118-123`) and carries `sub`,
   `role`, `auth_mode`, `server_id`, `device_id`, `iat`/`exp`, `req_id`, `iss`
-  (`recommender/app/internal_principal.py:53-63`). Each receiving service verifies it independently
-  through the shared Rust crate, media-core and transcoder via native Rust, recommender via the
-  PyO3 binding (`recommender/app/internal_principal.py:1-20`), with a `mode` knob (`off` / `log` /
+  (`crates/emerald-contracts/src/internal_principal.rs`). Each receiving service verifies it
+  independently through the shared Rust crate (media-core, transcoder, iptv and the recommender via
+  `media_core::verify_principal`, `crates/recommender/src/http.rs:153`), with a `mode` knob (`off` / `log` /
   `enforce`) that defaults to `enforce` in the compose files
   (`docker-compose.yml:276-283,356-357,472-477`, `selfhost/docker-compose.yml:132,167,190`). In
   `enforce` mode the receiver 401s on a missing/invalid header and refuses to boot at all if
-  `INTERNAL_PRINCIPAL_SECRET` is unset (`recommender/app/internal_principal.py:38-49`).
+  `INTERNAL_PRINCIPAL_SECRET` is unset (`crates/recommender/src/config.rs:94-107`).
   `SESSION_SECRET`, `STREAM_TOKEN_SECRET`, `DEVICE_TOKEN_SECRET`, and `INTERNAL_PRINCIPAL_SECRET`
   are asserted pairwise-distinct at backend boot in every environment
   (`server/env.ts:293-302`, `assertSecretsDistinct`).
 
 - **Recommender event secret**, `RECOMMENDER_EVENT_SECRET`, a flat shared secret (not HKDF'd,
-  not a JWE) checked via `hmac.compare_digest` against the `X-Recommender-Secret` header on the
-  recommender's write endpoints (`recommender/app/main.py:110-116`,
-  `require_event_secret`/`x_recommender_secret`). Required whenever `USE_LOCAL_RECOMMENDER=1`
+  not a JWE) checked in constant time (`subtle`) against the `X-Recommender-Secret` header on the
+  recommender's endpoints (`crates/recommender/src/http.rs:109-133`, `require_event_secret`). Required whenever `USE_LOCAL_RECOMMENDER=1`
   (`server/env.ts:449-453`), production-gated against the same placeholder deny-list as
-  `SESSION_SECRET` (`server/env.ts:253`, `recommender/app/config.py:8-21`). It sits alongside, not
+  `SESSION_SECRET` (`server/env.ts:253`, `crates/recommender/src/config.rs:9-24`). It sits alongside, not
   instead of, the internal-principal check, the recommender's `/events/*` routes can require both.
 
 ## 4. Data stores
@@ -174,31 +174,19 @@ Four independent credential mechanisms, plus one narrow export secret:
 | `server.db` | `SERVER_DB_PATH`, default `./data/server.db` (`server/env.ts:664`); mounted at `/app/data` in both compose files | backend | sessions/invites/members/settings/watchlist; `server/services/serverDb.ts` singleton; probed by `/api/health` (`server/app.ts:162-170`) |
 | `media.db` | `MEDIA_DB_PATH`, default `./data/media.db` (`server/env.ts:649`, `crates/media-core/src/config.rs:151`) | media-core (writer), backend (read-only via a shared bind mount) | owner deployment mounts media-core's live DB directory straight into the backend container at `/media-core-db` specifically so the backend's availability tagger and `/api/version` schema probe never see a stale copy (`docker-compose.yml:69-74`); self-host shares it via the `media-core-db` named volume (`selfhost/docker-compose.yml:46-47,123-124`) |
 | `iptv.db` | `IPTV_DB_PATH`, `/data/iptv.db` in the iptv image (`crates/iptv/Dockerfile`) | iptv service (sole reader and writer) | Xtream catalog + EPG, favorites, watch history, playlist tokens, feed checks, DVR schedule (`crates/iptv/migrations`); snapshotted nightly to `/data/backups` (`crates/iptv/src/backup.rs`) |
-| recommender sqlite-vec DB | `RECOMMENDER_DB_PATH`, default `./data/exchange.db` (`recommender/app/config.py:161`); `/data/exchange.db` in both composes | recommender | SQLite with the `sqlite-vec` extension loaded at connect time (`recommender/app/db.py:1-10,315-317`); the `title_vec` `vec0` virtual table holds title embeddings (`recommender/app/db.py:62`) |
+| recommender sqlite-vec DB | `RECOMMENDER_DB_PATH`, default `./data/exchange.db` (`crates/recommender/src/config.rs:119`); `/data/exchange.db` in both composes | recommender | SQLite with `sqlite-vec` statically linked and registered on every connection (`crates/recommender/src/db.rs:63`); the `title_vec` `vec0` virtual table holds title embeddings (`crates/recommender/src/db.rs:48`); migrations in `crates/recommender/migrations` |
 | transcoder scratch | `TRANSCODER_TMP_DIR` = `/scratch`, backed by a durable disk bind mount (owner) or a named volume `transcoder-scratch` (self-host), **not** a RAM tmpfs, VOD sessions retain every HLS segment for full-title seek (`docker-compose.yml:434-448`) | transcoder | idle sessions are reaped 30s after the last heartbeat; also swept on boot |
 | Glitchtip Postgres/Valkey | `glitchtip-pgdata` / in-memory Valkey | glitchtip stack | owner-deployment-only, `telemetry` profile |
 
-## 5. emerald-contracts: one crypto contract, three runtimes
+## 5. emerald-contracts: one crypto contract
 
 `crates/emerald-contracts` is the single Rust source of truth for token formats, HKDF key
 derivation, `sub` (identity) parsing, and the PII-scrub denylist used by telemetry
-(`crates/emerald-contracts/README.md:1-7`). Two bindings expose it to the other two languages
-without re-implementing any of that logic:
+(`crates/emerald-contracts/README.md:1-5`). Every server crate (gateway, auth, media-core, iptv,
+transcoder, recommender) links it directly; the Apple app carries a Swift port that must match it
+byte for byte.
 
-- **`@emerald/contracts-napi`** (N-API, `crates/emerald-contracts-napi/`), the backend imports
-  this instead of hand-rolling HKDF/HMAC with `jose`/`node:crypto`
-  (`crates/emerald-contracts-napi/src/lib.rs:1-6`). It exposes `hkdf_session`,
-  `hkdf_device_token`, `hkdf_internal_principal`, plus generic HKDF, stream-token, device-token,
-  sub-parsing, and PII-scrub functions (`crates/emerald-contracts-napi/src/lib.rs:18-56`). Because
-  Hono is the party that *mints* internal-principal tokens (never verifies them), the N-API surface
-  intentionally omits the verify side.
-- **`emerald_contracts`** (PyO3, `crates/emerald-contracts-pyo3/`), the recommender imports this
-  as a native Python extension module. Its surface is narrower than N-API's: HKDF, sub parsing, PII
-  scrub, and the internal-principal *verify* side (`internal_principal_decrypt` /
-  `_enforce_time_window`), because the recommender only ever receives principals, never mints them
-  (`crates/emerald-contracts-pyo3/src/lib.rs:1-16`).
-
-Frozen wire values that both bindings and the Rust core agree on (from
+Frozen wire values every port agrees on (from
 `crates/emerald-contracts/README.md:14-27`): HKDF info strings `eex/session/v1`,
 `eex/device-token/v1`, `eex/internal-principal/v1`; `sub` regexes per provider (Plex, local,
 Apple, Google); device-token TTL 180 days / `kid` `device-v1`; internal-principal TTL 60s / `kid`
@@ -209,12 +197,9 @@ caught by any test.
 `tests/vectors/` holds the interop oracle: `stream-token-canonical.json`, `sub-namespace.json`,
 `telemetry-pii-scrub.json`, `device-token-kid-rotation.json`, `internal-principal.json`,
 `hkdf-parity.json`, plus `show-title-normalization.json`. The Rust crate's own test suite loads
-six of these seven vectors (`crates/emerald-contracts/README.md:9-12`, citing
-`tests/vectors.rs:43,81,116,133,205,288`), and CI gates both the Rust side and the N-API↔PyO3
-cross-binding on the same fixtures (`.github/workflows/ci.yml:314`, `:250-257`), meaning a single
-JSON file of expected inputs/outputs is the thing that proves Rust, the Node addon, and the Python
-extension module all derive byte-identical keys and produce byte-identical token/sub/scrub
-behavior, rather than three implementations that merely agree by convention.
+six of these seven vectors (`crates/emerald-contracts/README.md:7-10`, citing
+`tests/vectors.rs:43,81,116,133,205,288`), and CI's `rust` job gates on them, so a single JSON
+file of expected inputs/outputs is what any port (the Swift one included) is checked against.
 
 ## 6. Deploy path
 

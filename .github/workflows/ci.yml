@@ -86,84 +86,11 @@ jobs:
           path: dist/
           retention-days: 7
 
-  recommender:
-    # Python sidecar — syntax check + cross-language parity tests against
-    # the emerald-contracts PyO3 binding. The parity tests are the same
-    # tests/vectors/*.json the Rust crate runs; if the recommender produces
-    # different bytes than the gateway's emerald-contracts, this job fails.
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
-
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
-        with:
-          toolchain: '1.96'
-
-      - name: Cache cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-pyo3-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-pyo3-
-            ${{ runner.os }}-cargo-
-
-      - name: Syntax check (recommender)
-        run: python3 -m compileall -q recommender/app recommender/workers
-
-      # Install the EXACT dependency set the production image ships
-      # (recommender/requirements.lock) minus torch: the +cpu torch wheel is
-      # heavyweight and only workers/featurize.py imports it (lazily, inside
-      # the embed function) — no test under tests/ or eval/ reaches it. The
-      # lock is the full transitive closure, so --no-deps keeps pip from
-      # re-resolving (and from pulling CUDA torch via sentence-transformers).
-      # Tooling pins: maturin within the Dockerfile's >=1.7,<2.0 range; ruff
-      # pinned so lint results are reproducible; pytest satisfies pyproject's
-      # dev floor (>=8.3).
-      - name: Install recommender deps (requirements.lock minus torch) + pinned tooling
-        working-directory: recommender
-        run: |
-          grep -v '^torch==' requirements.lock > /tmp/ci-requirements.txt
-          pip install --no-deps -r /tmp/ci-requirements.txt
-          pip install maturin==1.8.1 pytest==8.3.5 ruff==0.15.15
-
-      # ruff is the lint gate used locally (pyproject [tool.ruff]); without
-      # this step it was never enforced in CI.
-      - name: Lint (ruff)
-        working-directory: recommender
-        run: ruff check .
-
-      - name: Build emerald-contracts wheel
-        working-directory: crates/emerald-contracts-pyo3
-        run: maturin build --release --out wheels
-
-      - name: Install wheel into job's Python env
-        run: pip install crates/emerald-contracts-pyo3/wheels/*.whl
-
-      - name: Recommender test suite (tests/ + eval/, full lock minus torch)
-        working-directory: recommender
-        # The full suite — scoring path, retrieval, optimizer, migrator,
-        # telemetry, schemas, parity — runs against the lock-pinned
-        # environment installed above. Only torch is absent; its sole import
-        # is lazy (workers/featurize.py inside the embed function) and no
-        # collected test reaches it, so collection is clean. eval/ carries
-        # test_build_holdout.py for the operator holdout tooling.
-        run: pytest tests/ eval/test_build_holdout.py -v
-
   rust:
     # The Rust workspace: the gateway (the backend), auth, media-core, iptv,
-    # transcoder and emerald-contracts, the canonical cross-language source
-    # of truth for token formats, HKDF derivations, sub-namespace, PII
-    # scrub. The PyO3 binding and the Apple Swift port MUST agree with it
+    # transcoder, the recommender and emerald-contracts, the canonical
+    # cross-language source of truth for token formats, HKDF derivations,
+    # sub-namespace, PII scrub. The Apple Swift port MUST agree with it
     # byte-for-byte; tests/vectors/*.json are the interop oracle.
     runs-on: ubuntu-latest
     timeout-minutes: 8
@@ -206,19 +133,14 @@ jobs:
           set -o pipefail
           cargo clippy --all-targets --workspace -- -D warnings 2>&1 | tee clippy.log
 
-      # emerald-contracts-pyo3 uses pyo3's extension-module feature,
-      # which can't be linked by plain `cargo build` — it requires the
-      # Python interpreter that maturin sets up. The recommender CI
-      # job builds + tests it via maturin; exclude it here so this job
-      # stays focused on the pure-Rust crates.
-      - name: cargo build (workspace minus pyo3)
-        run: cargo build --workspace --exclude emerald-contracts-pyo3 --all-targets
+      - name: cargo build
+        run: cargo build --workspace --all-targets
 
       # Vector parity test gate — the Rust crates produce the bytes
       # tests/vectors/*.json pin (stream-token-canonical.json,
       # hkdf-parity.json, ...). If this fails, a wire-level format drifted
-      # and the Apple / recommender ports will silently break.
-      - name: cargo test (workspace minus pyo3)
+      # and the Apple port will silently break.
+      - name: cargo test
         # The scanner's 100-file wall-clock guard asserts only when
         # EEX_PERF_ASSERT names a budget in seconds; the runner is a shared
         # 2-4 vCPU box, so it gets 3x the 5s reference bar (see scanner.rs).
@@ -229,7 +151,7 @@ jobs:
           EEX_PERF_ASSERT: '15'
         run: |
           set -o pipefail
-          cargo test --workspace --exclude emerald-contracts-pyo3 --all-targets 2>&1 | tee cargo-test.log
+          cargo test --workspace --all-targets 2>&1 | tee cargo-test.log
 
       - name: Surface fmt / clippy / test failures as annotations
         if: failure()
@@ -244,12 +166,10 @@ jobs:
 
   audit:
     # Dependency vulnerability gate (production-readiness MEDIUM #7/#23).
-    # Runs npm audit, cargo audit, and pip-audit in parallel sub-steps so a
-    # known CVE in any layer blocks the merge before it reaches main.
-    # pip-audit scans recommender/pyproject.toml via --requirement to avoid
-    # needing a full venv install. This job also hosts the LICENSE gate
-    # (deny.toml + license-checker) — it already has all three toolchains, so
-    # no duplicate setup. The license gate keeps GPL/AGPL out of the *linked*
+    # Runs npm audit and cargo audit so a known CVE in either layer blocks
+    # the merge before it reaches main. This job also hosts the LICENSE gate
+    # (deny.toml + license-checker) — it already has both toolchains, so no
+    # duplicate setup. The license gate keeps GPL/AGPL out of the *linked*
     # dependency trees; the only deliberate copyleft (process-isolated ffmpeg)
     # is tracked separately in THIRD-PARTY-LICENSES.md.
     runs-on: ubuntu-latest
@@ -266,10 +186,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
         with:
           toolchain: '1.96'
-
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
 
       - name: Cache cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -316,31 +232,6 @@ jobs:
         # loads model.safetensors only. Drop these once candle moves to zip >= 9.
         run: cargo audit --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369
 
-      - name: Install pip-audit
-        run: pip install pip-audit
-
-      - name: pip-audit (recommender)
-        # Audit the EXACT shipped dependency set — the committed lock the Docker
-        # image installs from (recommender/requirements.lock) — instead of a
-        # freshly re-resolved pyproject (which drifts from what actually ships).
-        # The lock is sha256 hash-pinned, but pip-audit only needs name==version
-        # to query the advisory DB, so reduce it to a versions-only file: keep the
-        # `name==version` pin lines, drop the `--hash=` continuations (otherwise
-        # pip enters hash-checking mode and the +cpu torch wheel's hashes can't be
-        # satisfied once the local tag is stripped), and strip the +cpu suffix
-        # (the advisory DB keys on the plain upstream 2.x.x release, not the wheel).
-        working-directory: recommender
-        # --ignore-vuln CVE-2025-3000 (GHSA-rrmf-rvhw-rf47): a torch.jit.script
-        # memory-corruption with a local-only attack vector and NO fixed torch
-        # release available (pip-audit reports an empty Fix Versions column). The
-        # recommender never calls torch.jit.script and only uses torch for offline
-        # embedding featurization of its own catalog, so the vulnerable path is
-        # unreachable. Re-evaluate and drop this ignore once a patched torch ships.
-        run: |
-          grep -E '^[a-zA-Z0-9._-]+==' requirements.lock \
-            | sed 's/[[:space:]]*\\$//; s/+cpu//' > /tmp/recommender-audit.txt
-          pip-audit -r /tmp/recommender-audit.txt --ignore-vuln CVE-2025-3000
-
       # ── License gate (deny.toml) ──────────────────────────────────────────
       # Keep GPL/AGPL out of the LINKED dependency trees. The only deliberate
       # copyleft in the product is the process-isolated ffmpeg binary, recorded
@@ -357,7 +248,7 @@ jobs:
         run: npx --yes license-checker --production --failOn 'GPL-2.0;GPL-2.0-only;GPL-2.0-or-later;GPL-3.0;GPL-3.0-only;GPL-3.0-or-later;AGPL-1.0;AGPL-3.0;AGPL-3.0-only;AGPL-3.0-or-later'
 
   docker-build:
-    # Every other job runs on the host runner via npm/cargo/pytest — nothing
+    # Every other job runs on the host runner via npm/cargo — nothing
     # else builds the multi-stage Dockerfiles that actually ship. Validate
     # compose interpolation on every run and build the backend image so
     # image-build regressions are caught pre-deploy; the backend image is
@@ -509,12 +400,12 @@ jobs:
           cache-from: type=gha,scope=ci-transcoder
           cache-to: type=gha,mode=max,scope=ci-transcoder
 
-      - name: Build recommender image (main only; loaded for the embedding check)
+      - name: Build recommender image (main only; loaded for the checks below)
         if: env.PUSH == 'true'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          file: ./recommender/Dockerfile
+          file: ./crates/recommender/Dockerfile
           load: true
           tags: |
             theemeraldexchange-recommender:ci
@@ -523,19 +414,11 @@ jobs:
           cache-from: type=gha,scope=ci-recommender
           cache-to: type=gha,mode=max,scope=ci-recommender
 
-      - name: Verify recommender image embedding compatibility
+      - name: Verify recommender image (embedding + cold-volume boot)
         if: env.PUSH == 'true'
-        run: |
-          docker run --rm \
-            --user 10001:10001 \
-            -e HF_HUB_DISABLE_XET=1 \
-            -v "$PWD/recommender/scripts/verify_embedding_runtime.py:/ci/verify_embedding_runtime.py:ro" \
-            -v "$PWD/recommender/tests/fixtures/torch_2_12_embedding_baseline.json:/ci/baseline.json:ro" \
-            --entrypoint python \
-            theemeraldexchange-recommender:ci \
-            /ci/verify_embedding_runtime.py /ci/baseline.json
+        run: scripts/ci-recommender-image-check.sh theemeraldexchange-recommender:ci
 
-      - name: Push recommender image (main only, after the embedding check)
+      - name: Push recommender image (main only, after the image checks)
         if: env.PUSH == 'true'
         run: |
           docker push "${{ steps.rel.outputs.base }}-recommender:main"

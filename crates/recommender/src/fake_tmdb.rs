@@ -2,8 +2,7 @@
 //! scenario's canned responses and logs every request: the path, the decoded
 //! query (api_key shown as `<redacted>` when it is the fixture credential,
 //! `<wrong>` otherwise) and whether an Authorization header came. Fixtures
-//! only: nothing here talks to TMDB. `examples/fake_tmdb.rs` serves the same
-//! code to the Python generator.
+//! only: nothing here talks to TMDB.
 //!
 //! A scenario is `{"routes": [{"path", "query": {k: v}, "responses":
 //! [{"status", "body"}]}]}`. The first route whose path matches and whose
@@ -16,7 +15,6 @@ use axum::Router;
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
 use serde_json::{Value, json};
 
 /// The api_key / bearer token every fixture uses.
@@ -35,7 +33,6 @@ pub struct Fake {
 }
 
 impl Fake {
-    #[allow(dead_code)] // the example reads the log over HTTP
     pub fn log(&self) -> Vec<Value> {
         self.shared.lock().unwrap().log.clone()
     }
@@ -48,18 +45,11 @@ pub async fn start(scenario: &Value) -> Fake {
         routes,
         log: Vec::new(),
     }));
-    let app = Router::new()
-        .route("/__log", get(log))
-        .fallback(serve)
-        .with_state(shared.clone());
+    let app = Router::new().fallback(serve).with_state(shared.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Fake { base, shared }
-}
-
-async fn log(State(s): State<Arc<Mutex<Shared>>>) -> Response {
-    axum::Json(Value::from(s.lock().unwrap().log.clone())).into_response()
 }
 
 async fn serve(State(s): State<Arc<Mutex<Shared>>>, uri: Uri, headers: HeaderMap) -> Response {

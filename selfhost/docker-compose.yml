@@ -214,12 +214,11 @@ services:
       - recommender-db:/data
     environment:
       RECOMMENDER_DB_PATH: "/data/exchange.db"
-      RECOMMENDER_HOST: "0.0.0.0"
-      RECOMMENDER_PORT: "8000"
+      # Caps rayon (candle's matmuls) near the CPU quota above.
+      RAYON_NUM_THREADS: "2"
       RECOMMENDER_EVENT_SECRET: "${RECOMMENDER_EVENT_SECRET}"
       INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET}"
       RECOMMENDER_INTERNAL_PRINCIPAL_MODE: "enforce"
-      HONO_HOST: "http://backend:3001"
       TMDB_READ_ACCESS_TOKEN: "${TMDB_READ_ACCESS_TOKEN:-}"
 
   # ── PRIVATE remote access (COMPOSE_PROFILES=remote) ──────────────────────

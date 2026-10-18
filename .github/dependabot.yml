@@ -1,7 +1,7 @@
 # Dependency bump policy (audit DEP-003; merge governance refreshed 2026-06-13).
 #
 # Dependabot opens monthly PRs across every ecosystem so the digest pins added in
-# 9-11 / 11-8 (Dockerfile FROM + compose images) and the npm / cargo / pip
+# 9-11 / 11-8 (Dockerfile FROM + compose images) and the npm / cargo
 # dependency sets get INTENTIONAL bump PRs instead of drifting. Bumps are GROUPED
 # (see the `groups:` blocks below) to keep a batch to a small handful of PRs
 # rather than one branch per package.
@@ -87,13 +87,6 @@ updates:
         update-types:
           - "patch"
 
-  # Python recommender sidecar.
-  - package-ecosystem: "pip"
-    directory: "/recommender"
-    schedule:
-      interval: "monthly"
-    open-pull-requests-limit: 5
-
   # Container base images — keeps the 9-11 / 11-8 digest pins moving via PRs.
   - package-ecosystem: "docker"
     directory: "/"
@@ -103,7 +96,7 @@ updates:
 
   # Container base images for the sidecar service Dockerfiles.
   - package-ecosystem: "docker"
-    directory: "/recommender"
+    directory: "/crates/recommender"
     schedule:
       interval: "monthly"
     open-pull-requests-limit: 3

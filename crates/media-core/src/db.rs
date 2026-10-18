@@ -181,7 +181,7 @@ pub async fn migrate(
             .await?;
 
     // Verify already-applied versions against the embedded SQL before
-    // touching anything (mirrors recommender/app/db.py): a recorded
+    // touching anything (the recommender migrates through this too): a recorded
     // checksum that no longer matches means the DB schema was produced by
     // a DIFFERENT migration text than this binary carries — running new
     // migrations on top of an unknown schema corrupts silently. Fail the

@@ -83,12 +83,6 @@ target
 **/target
 crates/*/.venv
 
-# NOTE: recommender/ is intentionally NOT excluded here. The recommender
-# build uses repo root as context (see docker-compose.yml
-# recommender.build.context) so its Dockerfile can reach crates/. The
-# backend Dockerfile never COPYs it, so leaving it in context costs nothing
-# for the backend image and is required for the recommender image.
-
 # ---- Deploy scripts (not run inside the image) ------------------------------
 scripts
 
@@ -101,7 +95,7 @@ docker-compose.override.yml
 # Runtime bind-mount sources under the build root on the NAS.
 # docker-compose.yml mounts ${APPDATA}/data → backend:/app/data and
 # ${APPDATA}/recommender-db → recommender:/data, ${APPDATA}/iptv → iptv:/data.
-# They grow large (grab logs, sqlite + sentence-transformer cache, DVR
+# They grow large (grab logs, sqlite, DVR
 # recordings) and have no business in the image build context.
 data/
 recommender-db/

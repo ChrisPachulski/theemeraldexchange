@@ -15,7 +15,7 @@ macro_rules! migration {
         (
             $v,
             $name,
-            include_str!(concat!("../../../recommender/migrations/", $name, ".sql")),
+            include_str!(concat!("../migrations/", $name, ".sql")),
         )
     };
 }

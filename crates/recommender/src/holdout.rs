@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 /// Fewer valid rows than this and the optimizer only records candidates.
 pub const MIN_HOLDOUT_SIZE: usize = 30;
 
-const SEED: &str = include_str!("../../../recommender/eval/holdout.seed.jsonl");
+const SEED: &str = include_str!("../holdout.seed.jsonl");
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HoldoutEntry {

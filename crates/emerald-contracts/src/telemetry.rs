@@ -1,10 +1,8 @@
 //! Telemetry PII scrubber per §15.3.
 //!
-//! Canonical implementation: Hono consumes it via the N-API binding
-//! (`piiScrubKeys` / `piiScrubValue` → `server/services/telemetryPiiScrub.ts`),
-//! the recommender via PyO3. `tests/vectors/telemetry-pii-scrub.json` is the
-//! behavioral oracle for every binding — divergence means crash data with
-//! PII reaches Glitchtip.
+//! Canonical implementation, linked by the Rust services.
+//! `tests/vectors/telemetry-pii-scrub.json` is the behavioral oracle for every
+//! port — divergence means crash data with PII reaches Glitchtip.
 
 use regex::Regex;
 use serde_json::Value;
