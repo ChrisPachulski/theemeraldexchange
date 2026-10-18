@@ -63,6 +63,8 @@ pub struct AuthState {
     pub workos: Arc<workos::Workos>,
     /// The plex.tv client (tests point it at a fake).
     pub plex: Arc<plex::Plex>,
+    /// The sessionGate's per-sub plex.tv verdicts.
+    pub(crate) plex_gate: Arc<reconcile::PlexGate>,
     /// Pins the clock in tests so committed goldens never expire.
     #[cfg(test)]
     pub(crate) fixed_now: Option<i64>,
@@ -82,6 +84,7 @@ impl AuthState {
             apple_nonces: Arc::default(),
             workos: Arc::default(),
             plex: Arc::default(),
+            plex_gate: Arc::default(),
             config: Arc::new(config),
             pool,
             #[cfg(test)]

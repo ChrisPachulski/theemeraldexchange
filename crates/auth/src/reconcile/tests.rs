@@ -1,7 +1,11 @@
 //! Carried over from middleware/auth.test.ts, middleware/deviceTokenAuth.test.ts,
-//! services/sessionGate.test.ts (non-Plex cases) and the reconcile cases of
+//! services/sessionGate.test.ts and the reconcile cases of
 //! services/reconcileDeviceToken.test.ts. The golden replay runs the requests
-//! gen-auth-goldens.ts sent through the untouched TS middleware.
+//! gen-auth-goldens.ts sent through the untouched TS middleware. The
+//! sessionGate Plex cases run against the local plex.tv fake; not carried
+//! over: the ADMINS username and ownership-seal cases (neither is ported).
+
+use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
@@ -12,6 +16,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::device_tokens::{Keys, MintInput};
+use crate::plex::tests::{Fake, fake};
 use crate::testutil::{add_member, capture_logs, goldens, insert_rows, logs, set_revoked, state};
 
 const OWNER: &str = "workos:user_01E4ZCR3C56J083X43JQXF3JK5";
@@ -265,13 +270,9 @@ fn cookie_session(sub: &str, auth_mode: AuthMode, role: Role) -> Session {
 async fn cookie_role_is_recomputed_from_the_members_row() {
     let (db, st) = state().await;
     add_member(&db, LOCAL, "admin", "local").await;
-    let s = reconcile_cookie(
-        &db,
-        subs(&st),
-        cookie_session(LOCAL, AuthMode::Local, Role::User),
-    )
-    .await
-    .unwrap();
+    let s = reconcile_cookie(&st, cookie_session(LOCAL, AuthMode::Local, Role::User))
+        .await
+        .unwrap();
     assert_eq!(s.map(|s| s.role), Some(Role::Admin));
 
     // A user row never escalates, whatever the cookie claims.
@@ -280,13 +281,9 @@ async fn cookie_role_is_recomputed_from_the_members_row() {
         .execute(&*db)
         .await
         .unwrap();
-    let s = reconcile_cookie(
-        &db,
-        subs(&st),
-        cookie_session(LOCAL, AuthMode::Local, Role::Admin),
-    )
-    .await
-    .unwrap();
+    let s = reconcile_cookie(&st, cookie_session(LOCAL, AuthMode::Local, Role::Admin))
+        .await
+        .unwrap();
     assert_eq!(s.map(|s| s.role), Some(Role::User));
 }
 
@@ -296,7 +293,7 @@ async fn cookie_of_a_denied_sub_signs_out_and_cascades() {
     // Not a member: denied, its devices revoked as not_member.
     let (_, stranger) = device(&st, LOCAL, AuthMode::Local, "TV").await;
     let s = cookie_session(LOCAL, AuthMode::Local, Role::User);
-    assert_eq!(reconcile_cookie(&db, subs(&st), s).await.unwrap(), None);
+    assert_eq!(reconcile_cookie(&st, s).await.unwrap(), None);
     assert_eq!(
         revocations(&db).await,
         [(stranger.jti.clone(), "not_member".into())]
@@ -307,7 +304,7 @@ async fn cookie_of_a_denied_sub_signs_out_and_cascades() {
     let (_, d) = device(&st, MEMBER, AuthMode::Apple, "TV").await;
     set_revoked(&db, MEMBER).await;
     let s = cookie_session(MEMBER, AuthMode::Apple, Role::User);
-    assert_eq!(reconcile_cookie(&db, subs(&st), s).await.unwrap(), None);
+    assert_eq!(reconcile_cookie(&st, s).await.unwrap(), None);
     assert!(
         revocations(&db)
             .await
@@ -321,7 +318,7 @@ async fn cookie_of_an_allowed_member_does_not_cascade() {
     add_member(&db, MEMBER, "user", "apple").await;
     device(&st, MEMBER, AuthMode::Apple, "TV").await;
     let s = cookie_session(MEMBER, AuthMode::Apple, Role::User);
-    assert!(reconcile_cookie(&db, subs(&st), s).await.unwrap().is_some());
+    assert!(reconcile_cookie(&st, s).await.unwrap().is_some());
     assert!(revocations(&db).await.is_empty());
 }
 
@@ -333,7 +330,7 @@ async fn cascade_logs_never_carry_the_sub() {
     // Success: a warn with the count, no sub.
     let (_, d) = device(&st, LOCAL, AuthMode::Local, "TV").await;
     let s = cookie_session(LOCAL, AuthMode::Local, Role::User);
-    assert_eq!(reconcile_cookie(&db, subs(&st), s).await.unwrap(), None);
+    assert_eq!(reconcile_cookie(&st, s).await.unwrap(), None);
     assert!(logs().contains("revoked_count=1"), "{}", logs());
 
     // Failure: the denial still stands, the error is logged without the sub.
@@ -435,9 +432,7 @@ async fn a_plex_cookie_keeps_its_token_through_reconcile_but_api_me_never_shows_
         plex_auth_token: Some("plex-token-secret".into()),
         ..cookie_session(PLEX, AuthMode::Plex, Role::User)
     };
-    let s = reconcile_cookie(&db, subs(&st), session.clone())
-        .await
-        .unwrap();
+    let s = reconcile_cookie(&st, session.clone()).await.unwrap();
     assert_eq!(
         s.unwrap().plex_auth_token.as_deref(),
         Some("plex-token-secret")
@@ -454,4 +449,252 @@ async fn a_plex_cookie_keeps_its_token_through_reconcile_but_api_me_never_shows_
         json!({ "user": { "sub": PLEX, "username": "Owner", "role": "user", "auth_mode": "plex" } })
     );
     assert!(!body.to_string().contains("plex-token-secret"));
+}
+
+// ── sessionGate: the plex.tv token check ──
+
+const PLEX_SUB: &str = "plex:42";
+const HOME: &str = "home-machine-id";
+const TOKEN: &str = "token-xyz";
+
+struct Gate {
+    db: crate::testutil::TestDb,
+    st: AuthState,
+    f: Fake,
+}
+
+/// A plex.tv fake, a user member PLEX_SUB, and `env` (PLEX_SERVER_ID unless
+/// the caller passes its own).
+async fn gate_with(env: &[(&str, &str)]) -> Gate {
+    let f = fake().await;
+    let db = crate::testutil::pool().await;
+    let mut st = AuthState::new((*db).clone(), f.config(env));
+    st.plex = Arc::new(f.plex());
+    add_member(&db, PLEX_SUB, "user", "plex").await;
+    Gate { db, st, f }
+}
+
+async fn gate() -> Gate {
+    gate_with(&[("PLEX_SERVER_ID", HOME)]).await
+}
+
+fn home_share(server: &str) -> Value {
+    json!([{ "name": "Home", "clientIdentifier": server, "owned": true, "home": false, "provides": "server" }])
+}
+
+fn plex_session(token: Option<&str>, role: Role) -> Session {
+    Session {
+        plex_auth_token: token.map(String::from),
+        ..cookie_session(PLEX_SUB, AuthMode::Plex, role)
+    }
+}
+
+impl Gate {
+    fn resources(&self, status: u16, body: Value) {
+        self.f.stub(
+            "/api/v2/resources",
+            status,
+            &body.to_string(),
+            &[("content-type", "application/json")],
+        );
+    }
+
+    fn probes(&self) -> usize {
+        self.f
+            .calls()
+            .iter()
+            .filter(|c| c.contains("/resources"))
+            .count()
+    }
+
+    async fn reconcile(&self, token: Option<&str>) -> Option<Session> {
+        reconcile_cookie(&self.st, plex_session(token, Role::User))
+            .await
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn a_revoked_plex_token_signs_out_and_cascades_plex_auth_revoked() {
+    for status in [401, 403] {
+        // A configured admin is signed out too: the token itself is dead.
+        let g = gate_with(&[("PLEX_SERVER_ID", HOME), ("ADMIN_SUBS", PLEX_SUB)]).await;
+        let (_, d) = device(&g.st, PLEX_SUB, AuthMode::Plex, "TV").await;
+        g.resources(status, json!({}));
+        assert_eq!(g.reconcile(Some(TOKEN)).await, None, "{status}");
+        assert_eq!(
+            revocations(&g.db).await,
+            [(d.jti.clone(), "plex_auth_revoked".into())]
+        );
+        // Over HTTP: access_revoked, which clears the cookie.
+        let cookie = format!(
+            "eex.session={}",
+            session::mint(
+                &g.st.session_key,
+                &plex_session(Some(TOKEN), Role::User),
+                g.st.now()
+            )
+        );
+        let mut h = HeaderMap::new();
+        h.insert(header::COOKIE, cookie.parse().unwrap());
+        assert_eq!(
+            authenticate(&g.st, &h).await.err(),
+            Some(Rejection::AccessRevoked)
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_allowlist_denies_before_plex_is_asked() {
+    let g = gate().await;
+    g.resources(200, home_share(HOME));
+    set_revoked(&g.db, PLEX_SUB).await;
+    assert_eq!(g.reconcile(Some(TOKEN)).await, None);
+    let stranger = Session {
+        sub: "plex:77".into(),
+        ..plex_session(Some(TOKEN), Role::User)
+    };
+    assert_eq!(reconcile_cookie(&g.st, stranger).await.unwrap(), None);
+    assert_eq!(g.probes(), 0);
+}
+
+#[tokio::test]
+async fn a_plex_member_passes_and_does_not_cascade() {
+    let g = gate().await;
+    device(&g.st, PLEX_SUB, AuthMode::Plex, "TV").await;
+    g.resources(200, home_share(HOME));
+    let s = g.reconcile(Some(TOKEN)).await.unwrap();
+    assert_eq!((s.sub.as_str(), s.role), (PLEX_SUB, Role::User));
+    assert_eq!(g.probes(), 1);
+    assert_eq!(g.f.call(0).headers["x-plex-token"].to_str().unwrap(), TOKEN);
+    assert!(revocations(&g.db).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_plex_not_member_stays_signed_in_and_is_probed_again() {
+    let g = gate().await;
+    device(&g.st, PLEX_SUB, AuthMode::Plex, "TV").await;
+    g.resources(200, json!([]));
+    assert!(g.reconcile(Some(TOKEN)).await.is_some());
+    // Another server's share is not ours either.
+    g.resources(200, home_share("someone-else"));
+    assert!(g.reconcile(Some(TOKEN)).await.is_some());
+    assert_eq!(g.probes(), 2);
+    assert!(revocations(&g.db).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_plex_outage_fails_open_and_waits_out_the_ttl() {
+    capture_logs();
+    let mut g = gate().await;
+    device(&g.st, PLEX_SUB, AuthMode::Plex, "TV").await;
+    g.resources(503, json!({}));
+    assert!(g.reconcile(Some(TOKEN)).await.is_some());
+    assert!(g.reconcile(Some(TOKEN)).await.is_some());
+    assert_eq!(g.probes(), 1);
+    assert!(logs().contains("status=503"), "{}", logs());
+
+    // Connection refused, with a new token so the cache does not answer.
+    g.st.plex = Arc::new(crate::plex::Plex::at(&crate::testutil::dead_url().await));
+    assert!(g.reconcile(Some("other-token")).await.is_some());
+    assert!(revocations(&g.db).await.is_empty());
+    assert!(!logs().contains(TOKEN) && !logs().contains(PLEX_SUB));
+}
+
+#[tokio::test]
+async fn plex_is_never_asked_without_a_token_a_server_id_or_a_plex_cookie() {
+    let g = gate().await;
+    g.resources(401, json!({}));
+    // No token: an owner-added member who never signed in with Plex.
+    assert!(g.reconcile(None).await.is_some());
+    // An apple member, even one carrying a stray token.
+    add_member(&g.db, MEMBER, "user", "apple").await;
+    let apple = Session {
+        plex_auth_token: Some(TOKEN.into()),
+        ..cookie_session(MEMBER, AuthMode::Apple, Role::User)
+    };
+    assert!(reconcile_cookie(&g.st, apple).await.unwrap().is_some());
+    // A Plex device's Bearer.
+    let (token, _) = device(&g.st, PLEX_SUB, AuthMode::Plex, "TV").await;
+    assert!(authenticate(&g.st, &with_bearer(&token)).await.is_ok());
+    assert_eq!(g.probes(), 0);
+
+    // No PLEX_SERVER_ID: no gate.
+    let g = gate_with(&[]).await;
+    g.resources(401, json!({}));
+    assert!(g.reconcile(Some(TOKEN)).await.is_some());
+    assert_eq!(g.probes(), 0);
+}
+
+#[tokio::test]
+async fn one_probe_per_sub_per_15_minutes() {
+    let mut g = gate().await;
+    let t0 = chrono::Utc::now().timestamp();
+    g.st.fixed_now = Some(t0);
+    g.resources(200, home_share(HOME));
+    for _ in 0..3 {
+        assert!(g.reconcile(Some(TOKEN)).await.is_some());
+    }
+    assert_eq!(g.probes(), 1);
+    g.st.fixed_now = Some(t0 + 899);
+    assert!(g.reconcile(Some(TOKEN)).await.is_some());
+    assert_eq!(g.probes(), 1);
+    g.st.fixed_now = Some(t0 + 900);
+    assert!(g.reconcile(Some(TOKEN)).await.is_some());
+    assert_eq!(g.probes(), 2);
+}
+
+#[tokio::test]
+async fn a_new_token_or_server_id_re_checks() {
+    let mut g = gate().await;
+    g.resources(200, home_share(HOME));
+    g.reconcile(Some(TOKEN)).await.unwrap();
+    // A second sign-in's token for the same sub is not vouched for by the first.
+    g.reconcile(Some("token-two")).await.unwrap();
+    assert_eq!(g.probes(), 2);
+    g.reconcile(Some("token-two")).await.unwrap();
+    assert_eq!(g.probes(), 2);
+    // PLEX_SERVER_ID moved to another server.
+    g.st.config = Arc::new(g.f.config(&[("PLEX_SERVER_ID", "new-home")]));
+    g.resources(200, home_share("new-home"));
+    g.reconcile(Some("token-two")).await.unwrap();
+    assert_eq!(g.probes(), 3);
+}
+
+#[tokio::test]
+async fn a_primed_sub_skips_plex_but_its_role_is_still_recomputed() {
+    let g = gate().await;
+    g.resources(401, json!({}));
+    g.st.plex_gate.prime(PLEX_SUB, TOKEN, HOME, g.st.now());
+    // The cookie claims admin; the members row says user.
+    let s = reconcile_cookie(&g.st, plex_session(Some(TOKEN), Role::Admin))
+        .await
+        .unwrap();
+    assert_eq!(s.map(|s| s.role), Some(Role::User));
+    assert_eq!(g.probes(), 0);
+}
+
+#[test]
+fn the_gate_holds_1000_subs_and_evicts_the_oldest_write() {
+    let gate = PlexGate::default();
+    let sub = |i: usize| format!("plex:{i}");
+    for i in 0..1000 {
+        gate.prime(&sub(i), TOKEN, HOME, 0);
+    }
+    // Rewriting sub 0 makes sub 1 the oldest.
+    gate.prime(&sub(0), TOKEN, HOME, 0);
+    gate.prime(&sub(1000), TOKEN, HOME, 0);
+    let fresh = |i: usize| gate.fresh(&sub(i), &fingerprint(TOKEN), HOME, 0);
+    assert!(fresh(0) && fresh(2) && fresh(1000));
+    assert!(!fresh(1));
+    assert_eq!(gate.0.lock().unwrap().1.len(), 1000);
+}
+
+#[test]
+fn the_fingerprint_is_node_sha256_base64url() {
+    // node -e "...createHash('sha256').update('token-xyz').digest('base64url')"
+    assert_eq!(
+        fingerprint(TOKEN),
+        "D1UzO6-r95d0MAsZZWIq-yPNQJUmqAsbfOJT99GyQMc"
+    );
 }

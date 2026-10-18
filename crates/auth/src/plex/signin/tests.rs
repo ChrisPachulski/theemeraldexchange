@@ -751,6 +751,26 @@ async fn me_returns_the_user_after_a_pin_check() {
     assert!(!r2.text.contains("real-token"));
 }
 
+#[tokio::test]
+async fn a_pin_check_primes_the_session_gate() {
+    let h = scoped().await;
+    h.shared("shared-friend", SERVER);
+    let r1 = h.pin(12345).await;
+    let cookie = r1.headers["set-cookie"].to_str().unwrap();
+    let cookie = cookie.split(';').next().unwrap();
+    let probes = || {
+        h.f.calls()
+            .iter()
+            .filter(|c| c.contains("/resources"))
+            .count()
+    };
+    // The share admission probed once; /api/me rides on it.
+    assert_eq!(probes(), 1);
+    let r2 = call(&h.app(), "GET", "/api/me", &[("cookie", cookie)], None).await;
+    assert_eq!(r2.status, 200);
+    assert_eq!(probes(), 1);
+}
+
 fn plex_cookie(st: &AuthState, token: Option<&str>) -> String {
     let s = Session {
         sub: SUB.into(),

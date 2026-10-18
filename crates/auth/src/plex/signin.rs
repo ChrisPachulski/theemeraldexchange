@@ -173,6 +173,10 @@ async fn check_inner(
         },
     };
 
+    // The probe that just ran is the freshest evidence the gate can get.
+    if let Some(server_id) = st.config.plex_server_id.as_deref() {
+        st.plex_gate.prime(&sub, &token, server_id, st.now());
+    }
     let cookie = session::mint(
         &st.session_key,
         &Session {
