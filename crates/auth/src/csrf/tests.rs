@@ -396,8 +396,10 @@ const ALLOWED: &str = "https://app.example.test";
 const HOSTILE: &str = "https://attacker.example.test";
 const COOKIE: &str = "eex.session=x";
 
-/// auth::router plus stand-ins for the routes the gateway will mount, under
-/// the global gate, with the suggestions read behind the trusted gate.
+/// auth::router (its real /api/auth/google reads the body, so a 403 proves the
+/// gate answers before any parsing) plus stand-ins for the routes the gateway
+/// will mount, under the global gate, with the suggestions read behind the
+/// trusted gate.
 async fn composed() -> (crate::testutil::TestDb, Router) {
     let db = crate::testutil::pool().await;
     let mut cfg = crate::testutil::config(&[]);
@@ -405,10 +407,6 @@ async fn composed() -> (crate::testutil::TestDb, Router) {
     cfg.is_prod = true;
     let state = crate::AuthState::new(db.clone(), cfg);
     let config = state.config.clone();
-    // A body extractor: proves the gate answers before any parsing.
-    async fn google(Json(_): Json<Value>) -> Json<Value> {
-        Json(json!({ "ok": true }))
-    }
     let app = crate::router(state)
         .route("/api/health", get(ok))
         .route(
@@ -416,7 +414,6 @@ async fn composed() -> (crate::testutil::TestDb, Router) {
             get(ok).route_layer(from_fn_with_state(config.clone(), require_trusted_origin)),
         )
         .route("/api/auth/logout", post(ok))
-        .route("/api/auth/google", post(google))
         .route("/api/sab/api/queue/{id}/pause", post(ok))
         .route("/api/sab/api/queue/{id}/resume", post(ok))
         .route("/api/sab/api/queue/{id}", axum::routing::delete(ok))

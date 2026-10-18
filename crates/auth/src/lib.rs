@@ -9,11 +9,13 @@ pub mod csrf;
 pub mod db;
 pub mod device_tokens;
 pub mod invites;
+pub mod jwks;
 pub mod members;
 pub mod outcome;
 pub mod ratelimit;
 pub mod reconcile;
 pub mod session;
+mod signin;
 
 #[cfg(test)]
 mod testutil;
@@ -40,6 +42,10 @@ pub struct AuthState {
     pub device_keys: Option<Arc<device_tokens::Keys>>,
     /// The sign-in rate-limit buckets (process-wide, as in TS).
     pub limiter: Arc<ratelimit::Limiter>,
+    /// The Apple and Google key sets (tests point them at a local server).
+    pub apple_jwks: Arc<jwks::Jwks>,
+    pub google_jwks: Arc<jwks::Jwks>,
+    apple_nonces: Arc<signin::Nonces>,
     /// Pins the clock in tests so committed goldens never expire.
     #[cfg(test)]
     pub(crate) fixed_now: Option<i64>,
@@ -54,6 +60,9 @@ impl AuthState {
                 .as_deref()
                 .map(|s| Arc::new(device_tokens::Keys::from_secret(s))),
             limiter: Arc::new(ratelimit::Limiter::new(config.trust_client_ip_headers)),
+            apple_jwks: Arc::new(jwks::Jwks::apple()),
+            google_jwks: Arc::new(jwks::Jwks::google()),
+            apple_nonces: Arc::default(),
             config: Arc::new(config),
             pool,
             #[cfg(test)]
@@ -72,7 +81,10 @@ impl AuthState {
 
 /// The auth routes, at their full /api paths.
 pub fn router(state: AuthState) -> Router {
-    Router::new().route("/api/me", get(me)).with_state(state)
+    Router::new()
+        .route("/api/me", get(me))
+        .merge(signin::routes())
+        .with_state(state)
 }
 
 /// GET /api/me: the reconciled caller. Over a Bearer the username is the
@@ -89,6 +101,10 @@ pub enum Error {
     /// valid one (an invite issuer, a device-token subject).
     #[error("sub_invalid_format")]
     InvalidSub,
+    /// A device-token mint without DEVICE_TOKEN_SECRET (dev only; prod
+    /// refuses to boot without it).
+    #[error("DEVICE_TOKEN_SECRET is not set")]
+    NoDeviceSecret,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

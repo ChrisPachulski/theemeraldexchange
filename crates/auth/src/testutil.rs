@@ -140,3 +140,145 @@ pub fn capture_logs() {
 pub fn logs() -> String {
     LOGS.with(|l| String::from_utf8(l.borrow().clone()).unwrap())
 }
+
+// ── Identity tokens: committed test-only RSA keys and a local JWKS server ──
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, AtomicU64, AtomicUsize, Ordering};
+
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ring::signature::{RSA_PKCS1_SHA256, RsaKeyPair, RsaPublicKeyComponents};
+use serde_json::{Value, json};
+
+pub const TEST_KID: &str = "test-kid";
+
+/// tests/fixtures/jwks-test-key.pk8: the key the local JWKS serves.
+pub fn test_key() -> RsaKeyPair {
+    RsaKeyPair::from_pkcs8(include_bytes!("../tests/fixtures/jwks-test-key.pk8")).unwrap()
+}
+
+/// tests/fixtures/jwks-other-key.pk8: never served (a forged signature).
+pub fn other_key() -> RsaKeyPair {
+    RsaKeyPair::from_pkcs8(include_bytes!("../tests/fixtures/jwks-other-key.pk8")).unwrap()
+}
+
+fn b64(bytes: &[u8]) -> String {
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
+/// The public JWK of `key` under `kid`.
+pub fn jwk(key: &RsaKeyPair, kid: &str) -> Value {
+    let c: RsaPublicKeyComponents<Vec<u8>> = key.public().into();
+    json!({ "kty": "RSA", "alg": "RS256", "use": "sig", "kid": kid, "n": b64(&c.n), "e": b64(&c.e) })
+}
+
+fn signing_input(header: &Value, claims: &Value) -> String {
+    format!(
+        "{}.{}",
+        b64(header.to_string().as_bytes()),
+        b64(claims.to_string().as_bytes())
+    )
+}
+
+/// An RS256 compact JWS of `claims` under `header`.
+pub fn sign(key: &RsaKeyPair, header: &Value, claims: &Value) -> String {
+    let input = signing_input(header, claims);
+    let mut sig = vec![0; key.public().modulus_len()];
+    key.sign(
+        &RSA_PKCS1_SHA256,
+        &ring::rand::SystemRandom::new(),
+        input.as_bytes(),
+        &mut sig,
+    )
+    .unwrap();
+    format!("{input}.{}", b64(&sig))
+}
+
+/// An HS256 compact JWS keyed by `secret` (the RS/HS confusion attack).
+pub fn sign_hs256(secret: &[u8], header: &Value, claims: &Value) -> String {
+    let input = signing_input(header, claims);
+    let tag = ring::hmac::sign(
+        &ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret),
+        input.as_bytes(),
+    );
+    format!("{input}.{}", b64(tag.as_ref()))
+}
+
+/// An unsigned (alg none) token.
+pub fn unsigned(claims: &Value) -> String {
+    format!(
+        "{}.",
+        signing_input(&json!({ "alg": "none", "kid": TEST_KID }), claims)
+    )
+}
+
+/// A local JWKS endpoint. Tests change what it serves through the handles.
+pub struct JwksServer {
+    pub url: String,
+    pub hits: Arc<AtomicUsize>,
+    pub keys: Arc<std::sync::Mutex<Vec<Value>>>,
+    pub status: Arc<AtomicU16>,
+    pub delay_ms: Arc<AtomicU64>,
+}
+
+impl JwksServer {
+    pub fn hits(&self) -> usize {
+        self.hits.load(Ordering::SeqCst)
+    }
+}
+
+#[derive(Clone)]
+struct Served {
+    hits: Arc<AtomicUsize>,
+    keys: Arc<std::sync::Mutex<Vec<Value>>>,
+    status: Arc<AtomicU16>,
+    delay_ms: Arc<AtomicU64>,
+}
+
+async fn serve_keys(
+    axum::extract::State(s): axum::extract::State<Served>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    s.hits.fetch_add(1, Ordering::SeqCst);
+    let delay = s.delay_ms.load(Ordering::SeqCst);
+    if delay > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+    }
+    let status = axum::http::StatusCode::from_u16(s.status.load(Ordering::SeqCst)).unwrap();
+    let keys = s.keys.lock().unwrap().clone();
+    (status, axum::Json(json!({ "keys": keys }))).into_response()
+}
+
+/// Serve `keys` at http://127.0.0.1:<port>/keys.
+pub async fn jwks_server(keys: Vec<Value>) -> JwksServer {
+    let served = Served {
+        hits: Arc::default(),
+        keys: Arc::new(std::sync::Mutex::new(keys)),
+        status: Arc::new(AtomicU16::new(200)),
+        delay_ms: Arc::default(),
+    };
+    let app = axum::Router::new()
+        .route("/keys", axum::routing::get(serve_keys))
+        .with_state(served.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/keys", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    JwksServer {
+        url,
+        hits: served.hits,
+        keys: served.keys,
+        status: served.status,
+        delay_ms: served.delay_ms,
+    }
+}
+
+/// A URL nothing listens on (connection refused).
+pub async fn dead_url() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    format!("http://{}/keys", listener.local_addr().unwrap())
+}
+
+pub fn unix_now() -> i64 {
+    chrono::Utc::now().timestamp()
+}

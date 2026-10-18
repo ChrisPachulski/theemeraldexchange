@@ -29,9 +29,14 @@ ulid.workspace = true
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
 tracing = "0.1"
+# RS256 for the Apple/Google identity tokens (already in the tree via rustls).
+ring = "0.17"
+subtle = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+tokio = { version = "1", features = ["sync"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
