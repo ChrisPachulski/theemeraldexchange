@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -581,15 +581,37 @@ impl Drop for Watch {
     }
 }
 
-fn watched_body(res: reqwest::Response, watch: Watch) -> Body {
+/// The provider response lives in its own pump task, not in the body: a stop
+/// (a retune or a sessions-widget kick) or a dropped body must close the
+/// provider socket even when the client has stopped reading, and hyper only
+/// polls a body when the client pulls bytes.
+fn watched_body(mut res: reqwest::Response, watch: Watch) -> Body {
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    let stop = watch.stop.clone().unwrap_or_default();
+    tokio::spawn(async move {
+        loop {
+            let next = tokio::select! {
+                biased;
+                () = stop.cancelled() => return,
+                () = tx.closed() => return,
+                c = res.chunk() => c,
+            };
+            let last = !matches!(next, Ok(Some(_)));
+            tokio::select! {
+                biased;
+                () = stop.cancelled() => return,
+                r = tx.send(next) => if r.is_err() || last { return },
+            }
+        }
+    });
     struct St {
-        res: reqwest::Response,
+        rx: tokio::sync::mpsc::Receiver<reqwest::Result<Option<Bytes>>>,
         w: Watch,
         last_beat: Option<Instant>,
         done: bool,
     }
     let st = St {
-        res,
+        rx,
         w: watch,
         last_beat: None,
         done: false,
@@ -598,15 +620,8 @@ fn watched_body(res: reqwest::Response, watch: Watch) -> Body {
         if st.done {
             return None;
         }
-        let next = match st.w.stop.clone() {
-            Some(t) => tokio::select! {
-                biased;
-                _ = t.cancelled() => return None,
-                c = st.res.chunk() => c,
-            },
-            None => st.res.chunk().await,
-        };
-        match next {
+        // A closed channel without an EOF is a stop: the abort path.
+        match st.rx.recv().await? {
             Ok(Some(bytes)) => {
                 if let Some(beat) = st.w.beat.as_mut()
                     && st

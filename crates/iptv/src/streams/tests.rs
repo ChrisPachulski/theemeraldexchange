@@ -1011,6 +1011,69 @@ async fn a_retune_drops_the_superseded_dial_before_its_headers_arrive() {
     reqs[0].abort();
 }
 
+#[tokio::test]
+async fn a_stop_closes_the_provider_socket_while_the_client_has_stopped_reading() {
+    // A panel that answers each live dial with one chunk and keeps the socket
+    // open; `open` counts provider sockets the service has not closed.
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let host = format!("http://{}", l.local_addr().unwrap());
+    test_public(&host);
+    let open = Arc::new(AtomicUsize::new(0));
+    let o = open.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _) = l.accept().await.unwrap();
+            o.fetch_add(1, Ordering::SeqCst);
+            let o = o.clone();
+            tokio::spawn(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut buf = [0u8; 4096];
+                let _ = sock.read(&mut buf).await;
+                let _ = sock
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: video/mp2t\r\n\
+                          transfer-encoding: chunked\r\n\r\n2\r\nG@\r\n",
+                    )
+                    .await;
+                while matches!(sock.read(&mut buf).await, Ok(n) if n > 0) {}
+                o.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
+    });
+    let t = setup_with(Router::new(), &[("XTREAM_HOST", host.as_str())]).await;
+    let uri = format!(
+        "/api/iptv/stream/live/10.ts?t={}",
+        token(StreamKind::Live, "10", "plex:42")
+    );
+    // Neither body is ever polled: a stalled player.
+    let old = t.raw("GET", &uri, ("plex:42", "admin"), &[]).await;
+    assert_eq!(old.status(), StatusCode::OK);
+    let new = t.raw("GET", &uri, ("plex:42", "admin"), &[]).await;
+    assert_eq!(new.status(), StatusCode::OK);
+    until("the retune to close the old socket", || {
+        open.load(Ordering::SeqCst) == 1
+    })
+    .await;
+    assert_eq!(t.tracker().size(), 1, "the retune keeps its one slot");
+
+    // A sessions-widget release closes the remaining socket the same way.
+    let id = t.ids().remove(0);
+    let r = t
+        .call(
+            "DELETE",
+            &format!("/api/iptv/sessions/{id}"),
+            ("plex:42", "admin"),
+            &[],
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    until("the kick to close the socket", || {
+        open.load(Ordering::SeqCst) == 0
+    })
+    .await;
+    drop((old, new));
+}
+
 /// One chunk, a beat, then a transport error.
 fn async_stream_error() -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> {
     futures_util::stream::unfold(0, |n| async move {
