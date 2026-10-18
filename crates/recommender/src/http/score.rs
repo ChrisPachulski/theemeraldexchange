@@ -27,7 +27,8 @@ pub async fn score(
     let (model_version, recipe, params) =
         select_model_config_for_context(&st.pool, &st.config, &ctx, None).await?;
     let n = req.n as usize;
-    let Some(mut result) = recipes::score(&recipe, &st.pool, &ctx, n, &params).await? else {
+    let Some(mut result) = recipes::score(&recipe, &st.pool, &st.caches, &ctx, n, &params).await?
+    else {
         // Python str(KeyError(...)) keeps the quotes.
         return Err(ApiError::Detail(
             StatusCode::INTERNAL_SERVER_ERROR,

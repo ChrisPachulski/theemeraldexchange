@@ -194,7 +194,7 @@ fn ids_json(ids: &HashSet<i64>) -> String {
     serde_json::to_string(&v).expect("ints serialize")
 }
 
-async fn load_title_rows(
+pub(crate) async fn load_title_rows(
     pool: &SqlitePool,
     kind: &'static str,
     ids: &HashSet<i64>,

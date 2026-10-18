@@ -354,18 +354,24 @@ pub async fn sweep_retention_once(
     tx.commit().await
 }
 
-/// The sweep at boot, then hourly.
+/// The sweep at boot, then hourly; each pass then warms the ranker's
+/// catalogs (when the ranker is the active recipe) so the first strip after
+/// a nightly ingest does not pay for the rebuild.
 pub fn spawn_retention_sweeper(
     pool: SqlitePool,
-    rec_log_retention_days: i64,
+    config: std::sync::Arc<crate::config::Config>,
+    caches: std::sync::Arc<crate::recipes::Caches>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut every = tokio::time::interval(std::time::Duration::from_secs(3600));
         every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             every.tick().await;
-            if let Err(e) = sweep_retention_once(&pool, rec_log_retention_days).await {
+            if let Err(e) = sweep_retention_once(&pool, config.rec_log_retention_days).await {
                 tracing::error!("retention sweep failed: {e}");
+            }
+            if let Err(e) = crate::recipes::ranker::warm_if_active(&pool, &config, &caches).await {
+                tracing::error!("ranker cache warm failed: {e}");
             }
         }
     })

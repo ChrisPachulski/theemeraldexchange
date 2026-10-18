@@ -2,12 +2,19 @@
 //! in model_config. Only ported recipes are registered; item_knn is not
 //! (OFFLINE_ONLY research, never served).
 
+pub mod fused;
+pub mod ranker;
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 use sqlx::SqlitePool;
 
 use crate::Result;
 use crate::context::{Candidate, Param, Params, UserContext, normalize};
+use crate::db::TableGeneration;
 use crate::reasons::{discover_reason, neighbors_for, personalized_reason, trending_reason};
 use crate::retrieval::{cold_start_pool, retrieve_candidates};
 
@@ -60,7 +67,32 @@ pub const REGISTRY: &[Recipe] = &[
         name: "cold_start_trending",
         defaults: COLD_START_TRENDING,
     },
+    // Promoted from the research loop: content + cast/crew fused item re-rank.
+    Recipe {
+        name: "fused",
+        defaults: fused::DEFAULTS,
+    },
+    // Two-stage ranker learned from the household's own judgments.
+    Recipe {
+        name: "ranker",
+        defaults: ranker::DEFAULTS,
+    },
 ];
+
+type CatalogCache = HashMap<&'static str, (Vec<TableGeneration>, Arc<ranker::Catalog>)>;
+
+/// The process-wide recipe caches (the Python module globals): the ranker's
+/// catalogs and per-household models, and fused's IDF maps.
+#[derive(Default)]
+pub struct Caches {
+    catalogs: Mutex<CatalogCache>,
+    catalog_build: tokio::sync::Mutex<()>,
+    models: Mutex<HashMap<(String, &'static str), Arc<ranker::Model>>>,
+    model_fit: Mutex<()>,
+    idf: Mutex<fused::IdfCache>,
+    /// Pins the catalog's "this year" (goldens); None is the UTC year.
+    pub this_year: Option<i32>,
+}
 
 pub fn get(name: &str) -> Option<&'static Recipe> {
     REGISTRY.iter().find(|r| r.name == name)
@@ -126,6 +158,7 @@ fn extend(mut base: Map<String, Value>, more: &Value) -> Map<String, Value> {
 pub async fn score(
     name: &str,
     pool: &SqlitePool,
+    caches: &Arc<Caches>,
     ctx: &UserContext,
     n: usize,
     params: &Params,
@@ -142,6 +175,8 @@ pub async fn score(
             let mmr_k = n.max(p.int("mmr_input_k").max(0) as usize);
             cosine(pool, ctx, n, &p, Some((lam, mmr_k))).await?
         }
+        "fused" => fused::score(pool, caches, ctx, n, &p).await?,
+        "ranker" => ranker::score(pool, caches, ctx, n, &p).await?,
         _ => {
             cold_start_result(pool, ctx, n, p.int("min_vote_count"), "cold_start_trending").await?
         }

@@ -34,7 +34,9 @@ sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio",
 libsqlite3-sys = "0.37"
 # Pinned to the Python lock's sqlite-vec so the vec0 shadow tables match.
 sqlite-vec = "=0.1.9"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+# numpy PCG64 (same LCG + XSL-RR output) for the ranker's seeded draws.
+rand_pcg = "0.10"
 chrono = "0.4"
 thiserror = "2"
 tracing = "0.1"

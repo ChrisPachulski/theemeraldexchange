@@ -2107,6 +2107,7 @@ dependencies = [
  "form_urlencoded",
  "libsqlite3-sys",
  "media-core",
+ "rand_pcg",
  "sentry",
  "sentry-tracing",
  "serde",

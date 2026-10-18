@@ -26,14 +26,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     tracing::info!("recommender starting; db={}", config.db_path.display());
     let pool = db::open(&config.db_path).await?;
+    let caches = Arc::new(recommender::recipes::Caches::default());
     let _sweeper =
-        http::events::spawn_retention_sweeper(pool.clone(), config.rec_log_retention_days);
+        http::events::spawn_retention_sweeper(pool.clone(), config.clone(), caches.clone());
 
     let listener = tokio::net::TcpListener::bind(std::net::SocketAddr::from(LISTEN)).await?;
     tracing::info!("recommender listening on http://{}", listener.local_addr()?);
-    axum::serve(listener, http::router(http::AppState { pool, config }))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        http::router(http::AppState {
+            pool,
+            config,
+            caches,
+        }),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 

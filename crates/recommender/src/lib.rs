@@ -10,6 +10,7 @@ pub mod metrics;
 pub mod reasons;
 pub mod recipes;
 pub mod retrieval;
+pub mod rng;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

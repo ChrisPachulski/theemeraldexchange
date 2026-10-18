@@ -212,6 +212,7 @@ async fn app(pairs: &[(&str, &str)]) -> App {
     let router = router(AppState {
         pool: pool.clone(),
         config: Arc::new(config),
+        caches: Default::default(),
     });
     App {
         _dir: dir,
@@ -640,7 +641,7 @@ fn golden_embedding(kind: &str, tmdb_id: u64, cluster: u64) -> Vec<f32> {
         .collect()
 }
 
-async fn seed_score_golden(pool: &SqlitePool, g: &Value) {
+pub(crate) async fn seed_score_golden(pool: &SqlitePool, g: &Value) {
     for r in g["catalog"].as_array().unwrap() {
         let (kind, id) = (r["kind"].as_str().unwrap(), r["tmdb_id"].as_i64().unwrap());
         sqlx::query(
@@ -781,6 +782,7 @@ async fn score_goldens() {
         let r = router(AppState {
             pool: a.pool.clone(),
             config: Arc::new(cfg),
+            caches: Default::default(),
         });
         let mut req =
             Request::post("/score").header("x-recommender-secret", sc["secret"].as_str().unwrap());

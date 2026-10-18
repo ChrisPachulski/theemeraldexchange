@@ -35,6 +35,7 @@ const BODY_LIMIT: usize = 8 * 1024 * 1024;
 pub struct AppState {
     pub pool: SqlitePool,
     pub config: Arc<Config>,
+    pub caches: Arc<crate::recipes::Caches>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -349,4 +350,4 @@ async fn funnel(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

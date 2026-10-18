@@ -12,7 +12,7 @@ use crate::Result;
 use crate::context::{Candidate, TitleRow, UserContext, title_key_variants, title_row_from};
 use crate::db::{GENRE_AGG_SQL, decode_vec_rowid, deserialize_f32, serialize_f32};
 
-const AVAILABLE_TITLE_PREDICATE: &str = "(t.release_date IS NULL OR t.release_date = '' OR date(t.release_date) <= date('now'))
+pub(crate) const AVAILABLE_TITLE_PREDICATE: &str = "(t.release_date IS NULL OR t.release_date = '' OR date(t.release_date) <= date('now'))
                      AND (t.status IS NULL OR lower(t.status) IN ('released', 'returning series', 'ended', 'canceled'))";
 
 /// sqlite-vec refuses a KNN `k` above 4096 ("k value in knn query too large").

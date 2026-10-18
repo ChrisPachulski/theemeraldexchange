@@ -1,7 +1,8 @@
 //! recommender/tests/test_scoring_path.py, the cases for the code ported so
 //! far (retrieval, user context, baseline_cosine, mmr_diverse,
-//! cold_start_trending). The fused/ranker cases come with S4; item_knn is not
-//! ported; the optimizer and featurize cases come with S7/S5.
+//! cold_start_trending, fused, ranker; the pure ranker/fused helper cases sit
+//! beside their modules). item_knn is not ported; the optimizer and
+//! featurize cases come with S7/S5.
 
 use std::collections::HashSet;
 
@@ -32,6 +33,8 @@ const LOW_VOTE: i64 = 405;
 const UNRELEASED: i64 = 406;
 const CAST_RARE: i64 = 601;
 const CAST_COMMON: i64 = 602;
+const RARE_PERSON: i64 = 9001;
+const COMMON_PERSON: i64 = 9002;
 
 fn axis_vec(weights: &[(usize, f32)]) -> Vec<f32> {
     let mut v = vec![0f32; EMBED_DIM];
@@ -41,12 +44,15 @@ fn axis_vec(weights: &[(usize, f32)]) -> Vec<f32> {
     crate::context::normalize(v)
 }
 
+#[derive(Clone, Copy)]
 struct T {
     popularity: f64,
     vote_count: i64,
     genres: &'static [i64],
     release_date: &'static str,
     status: &'static str,
+    cast: &'static [i64],
+    crew: &'static [(i64, &'static str)],
 }
 
 const DEF: T = T {
@@ -55,6 +61,12 @@ const DEF: T = T {
     genres: &[28],
     release_date: "2020-01-01",
     status: "Released",
+    cast: &[],
+    crew: &[],
+};
+const COMMON: T = T {
+    cast: &[COMMON_PERSON],
+    ..DEF
 };
 
 async fn add_title(pool: &SqlitePool, tmdb_id: i64, title: &str, vec: &[f32], t: T) {
@@ -76,6 +88,26 @@ async fn add_title(pool: &SqlitePool, tmdb_id: i64, title: &str, vec: &[f32], t:
         sqlx::query("INSERT INTO title_genres VALUES (?, 'movie', ?)")
             .bind(tmdb_id)
             .bind(g)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    for (order_idx, person) in t.cast.iter().enumerate() {
+        sqlx::query("INSERT INTO title_cast VALUES (?, 'movie', ?, ?, ?)")
+            .bind(tmdb_id)
+            .bind(person)
+            .bind(format!("person-{person}"))
+            .bind(order_idx as i64)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    for (person, job) in t.crew {
+        sqlx::query("INSERT INTO title_crew VALUES (?, 'movie', ?, ?, ?)")
+            .bind(tmdb_id)
+            .bind(person)
+            .bind(format!("person-{person}"))
+            .bind(job)
             .execute(pool)
             .await
             .unwrap();
@@ -108,7 +140,12 @@ async fn fixture() -> Fx {
         .unwrap();
     let p = &pool;
     let action = axis_vec(&[(0, 1.0)]);
-    add_title(p, LIB_A1, "Emerald Heist", &action, DEF).await;
+    let lib_a1 = T {
+        cast: &[RARE_PERSON, COMMON_PERSON],
+        crew: &[(7001, "Director")],
+        ..DEF
+    };
+    add_title(p, LIB_A1, "Emerald Heist", &action, lib_a1).await;
     add_title(
         p,
         LIB_A2,
@@ -122,7 +159,7 @@ async fn fixture() -> Fx {
         CAND_NEAR,
         "Crimson Strike",
         &axis_vec(&[(0, 0.95), (3, 0.05)]),
-        DEF,
+        COMMON,
     )
     .await;
     add_title(
@@ -130,12 +167,12 @@ async fn fixture() -> Fx {
         CAND_NEAR2,
         "Night Convoy",
         &axis_vec(&[(0, 0.85), (3, 0.15)]),
-        DEF,
+        COMMON,
     )
     .await;
     let comedy = T {
         genres: &[35],
-        ..DEF
+        ..COMMON
     };
     add_title(
         p,
@@ -147,22 +184,26 @@ async fn fixture() -> Fx {
     .await;
     add_title(p, VETOED, "Forbidden Sequel", &action, DEF).await;
     add_title(p, DISLIKED, "Hated One", &action, DEF).await;
-    add_title(p, SHOWN, "Seen It", &action, DEF).await;
+    add_title(p, SHOWN, "Seen It", &action, COMMON).await;
     add_title(p, FRANCHISE, "Emerald Heist: Part Two", &action, DEF).await;
     let low = T {
         vote_count: 5,
-        ..DEF
+        ..COMMON
     };
     add_title(p, LOW_VOTE, "Obscure Gem", &action, low).await;
     let future = T {
         release_date: "2030-01-01",
         status: "In Production",
-        ..DEF
+        ..COMMON
     };
     add_title(p, UNRELEASED, "Coming Soon", &action, future).await;
     let pair = axis_vec(&[(0, 0.6), (4, 0.4)]);
-    add_title(p, CAST_RARE, "Quiet Partner", &pair, DEF).await;
-    add_title(p, CAST_COMMON, "Familiar Face", &pair, DEF).await;
+    let rare = T {
+        cast: &[RARE_PERSON],
+        ..DEF
+    };
+    add_title(p, CAST_RARE, "Quiet Partner", &pair, rare).await;
+    add_title(p, CAST_COMMON, "Familiar Face", &pair, COMMON).await;
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "INSERT INTO library_items(kind, tmdb_id, source, added_at) VALUES
            ('movie', {LIB_A1}, 'radarr', datetime('now')), ('movie', {LIB_A2}, 'radarr', datetime('now'));
@@ -258,7 +299,10 @@ async fn run(
         .iter()
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
-    score(recipe, pool, c, n, &params).await.unwrap().unwrap()
+    score(recipe, pool, &Default::default(), c, n, &params)
+        .await
+        .unwrap()
+        .unwrap()
 }
 
 // ---- retrieval -------------------------------------------------------------
@@ -790,10 +834,11 @@ async fn cold_start_trending_recipe() {
 
 #[tokio::test]
 async fn recipe_without_positive_embedding_falls_back_to_cold_start() {
-    // test_fused_cold_start_fallback's shape, on the ported recipes.
+    // test_fused_cold_start_fallback and test_ranker_cold_start_fallback,
+    // on every recipe with a positive-embedding gate.
     let f = fixture().await;
     let c = ctx_with(&f.pool, cold(req())).await;
-    for recipe in ["baseline_cosine", "mmr_diverse"] {
+    for recipe in ["baseline_cosine", "mmr_diverse", "fused", "ranker"] {
         let r = run(&f.pool, recipe, &c, 5, &[]).await;
         assert_eq!(r.diag["path"], Value::from("cold_start"), "{recipe}");
         assert!(!r.items.is_empty() && r.items.iter().all(|i| i.provenance == "trending"));
@@ -807,7 +852,234 @@ fn registry_holds_only_ported_recipes() {
     let names: Vec<&str> = REGISTRY.iter().map(|r| r.name).collect();
     assert_eq!(
         names,
-        ["baseline_cosine", "mmr_diverse", "cold_start_trending"]
+        [
+            "baseline_cosine",
+            "mmr_diverse",
+            "cold_start_trending",
+            "fused",
+            "ranker"
+        ]
     );
     assert!(get("item_knn").is_none());
+}
+
+// ---- fused ------------------------------------------------------------------
+
+fn score_map(r: &RecipeResult) -> std::collections::HashMap<i64, f64> {
+    r.items.iter().map(|i| (i.tmdb_id, i.score)).collect()
+}
+
+#[tokio::test]
+async fn fused_veto_never_surfaces_even_as_best_match() {
+    // VETOED is the single closest title to the library centroid.
+    let f = fixture().await;
+    let c = ctx(&f.pool).await;
+    let ids = ids_of(&run(&f.pool, "fused", &c, 10, &[]).await);
+    assert!(!ids.is_empty(), "fused returns items for a warm library");
+    for banned in [VETOED, DISLIKED, SHOWN, LIB_A1] {
+        assert!(!ids.contains(&banned), "{banned}");
+    }
+}
+
+#[tokio::test]
+async fn fused_prefers_similar_cluster() {
+    let f = fixture().await;
+    let c = ctx(&f.pool).await;
+    let ids = ids_of(&run(&f.pool, "fused", &c, 10, &[]).await);
+    assert!(pos(&ids, CAND_NEAR) < pos(&ids, CAND_FAR));
+}
+
+#[tokio::test]
+async fn fused_idf_direction_rare_person_outranks_common() {
+    // Identical content and popularity; only the shared LIB_A1 cast member
+    // differs, and IDF must weigh the rare co-star above the ubiquitous one.
+    let f = fixture().await;
+    let c = ctx(&f.pool).await;
+    let r = run(&f.pool, "fused", &c, 13, &[]).await;
+    let ids = ids_of(&r);
+    assert!(pos(&ids, CAST_RARE) < pos(&ids, CAST_COMMON));
+    let s = score_map(&r);
+    assert!(s[&CAST_RARE] > s[&CAST_COMMON]);
+}
+
+#[tokio::test]
+async fn fused_cast_weight_direction() {
+    let f = fixture().await;
+    let c = ctx(&f.pool).await;
+    let off = [("crew_weight", Param::Float(0.0))];
+    let no_cast = score_map(
+        &run(
+            &f.pool,
+            "fused",
+            &c,
+            13,
+            &[("cast_weight", Param::Float(0.0)), off[0].clone()],
+        )
+        .await,
+    );
+    let with_cast = score_map(
+        &run(
+            &f.pool,
+            "fused",
+            &c,
+            13,
+            &[("cast_weight", Param::Float(0.7)), off[0].clone()],
+        )
+        .await,
+    );
+    assert!(
+        (no_cast[&CAST_RARE] - no_cast[&CAST_COMMON]).abs() < 1e-6,
+        "content-only scores tie for identical embeddings"
+    );
+    assert!(
+        with_cast[&CAST_RARE] > no_cast[&CAST_RARE],
+        "cast weight adds signal"
+    );
+}
+
+#[tokio::test]
+async fn fused_cast_topn_param_is_wired() {
+    // LIB_A1 has COMMON_PERSON at order_idx 1: with cast_topn 1 the library
+    // side of that overlap disappears while the rare pair keeps its boost.
+    let f = fixture().await;
+    let c = ctx(&f.pool).await;
+    let caches = std::sync::Arc::new(Caches::default());
+    let go = |params: Params| {
+        let (pool, caches, c) = (&f.pool, &caches, &c);
+        async move {
+            score("fused", pool, caches, c, 13, &params)
+                .await
+                .unwrap()
+                .unwrap()
+        }
+    };
+    let default = score_map(&go(Params::new()).await);
+    let topn1 = score_map(&go([("cast_topn".to_string(), Param::Int(1))].into()).await);
+    assert!(topn1[&CAST_COMMON] < default[&CAST_COMMON]);
+    assert!(topn1[&CAST_RARE] >= default[&CAST_RARE]);
+    assert!(topn1[&CAST_RARE] - topn1[&CAST_COMMON] > default[&CAST_RARE] - default[&CAST_COMMON]);
+    // The IDF cache keys on cast_topn.
+    let idf = caches.idf.lock().unwrap();
+    assert!(idf.contains_key(&("movie", "cast", 1)) && idf.contains_key(&("movie", "cast", 10)));
+}
+
+#[tokio::test]
+async fn fused_scores_from_likes_alone() {
+    let f = fixture().await;
+    let c = ctx_with(
+        &f.pool,
+        Score {
+            library: Some(vec![]),
+            feedback: Some(vec![(LIB_A1, "like")]),
+            household_rejections: Some(vec![]),
+            ..req()
+        },
+    )
+    .await;
+    let r = run(&f.pool, "fused", &c, 10, &[]).await;
+    assert_ne!(r.diag["path"], Value::from("no_library_embeddings"));
+    assert!(!r.items.is_empty());
+    assert!(!ids_of(&r).contains(&LIB_A1));
+}
+
+// ---- ranker -----------------------------------------------------------------
+
+#[tokio::test]
+async fn ranker_never_surfaces_excluded_titles() {
+    let f = fixture().await;
+    let c = ctx(&f.pool).await;
+    let r = run(&f.pool, "ranker", &c, 20, &[]).await;
+    let ids = ids_of(&r);
+    assert_eq!(r.diag["path"], Value::from("ranker"));
+    assert!(!ids.is_empty());
+    for banned in [
+        VETOED, DISLIKED, SHOWN, LIB_A1, LIB_A2, LOW_VOTE, UNRELEASED,
+    ] {
+        assert!(!ids.contains(&banned), "{banned}");
+    }
+    // Only an exact owned title blocks; owning a film must not block its sequel.
+    assert!(ids.contains(&FRANCHISE));
+}
+
+#[tokio::test]
+async fn ranker_drops_owned_title_under_another_tmdb_id() {
+    let f = fixture().await;
+    add_title(&f.pool, 901, "Steel Vengeance", &axis_vec(&[(1, 1.0)]), DEF).await;
+    let c = ctx(&f.pool).await;
+    let ids = ids_of(&run(&f.pool, "ranker", &c, 20, &[]).await);
+    assert!(!ids.is_empty() && !ids.contains(&901));
+}
+
+#[tokio::test]
+async fn ranker_learns_from_household_judgments() {
+    // Red-dotting a run of comedies must push a comedy candidate down.
+    let f = fixture().await;
+    let caches = std::sync::Arc::new(Caches::default());
+    let c = ctx(&f.pool).await;
+    let probe = [CAND_FAR, CAND_NEAR];
+    let neutral = ranker::score_ids(&f.pool, &caches, &c, &probe, &Params::new())
+        .await
+        .unwrap();
+    let comedy = T {
+        genres: &[35],
+        ..DEF
+    };
+    for i in 0..8 {
+        let v = axis_vec(&[(1, 1.0), (5 + i, 0.1)]);
+        add_title(
+            &f.pool,
+            950 + i as i64,
+            &format!("Laugh Track {i}"),
+            &v,
+            comedy,
+        )
+        .await;
+    }
+    // The request path never reloads the catalog; the background warm does.
+    ranker::warm(&f.pool, &caches).await.unwrap();
+    let soured = ctx_with(
+        &f.pool,
+        Score {
+            feedback: Some((0..8).map(|i| (950 + i, "dislike")).collect()),
+            ..req()
+        },
+    )
+    .await;
+    let after = ranker::score_ids(&f.pool, &caches, &soured, &probe, &Params::new())
+        .await
+        .unwrap();
+    assert!(after[&CAND_FAR] < neutral[&CAND_FAR]);
+    assert!(after[&CAND_NEAR] - after[&CAND_FAR] > neutral[&CAND_NEAR] - neutral[&CAND_FAR]);
+}
+
+#[tokio::test]
+async fn ranker_scores_stay_finite_without_dislikes() {
+    // An empty negative class once made the log-odds infinite and every
+    // score null.
+    let f = fixture().await;
+    let comedy = T {
+        genres: &[35],
+        ..DEF
+    };
+    let mut library = Vec::new();
+    for i in 0..10 {
+        let v = axis_vec(&[(1, 1.0), (5 + i, 0.1)]);
+        let name = format!("Owned Comedy {i}");
+        add_title(&f.pool, 970 + i as i64, &name, &v, comedy).await;
+        library.push(LibraryItem {
+            tmdb_id: Some(970 + i as i64),
+            title: Some(name),
+        });
+    }
+    let c = ctx_with(
+        &f.pool,
+        Score {
+            library: Some(library),
+            ..cold(req())
+        },
+    )
+    .await;
+    let r = run(&f.pool, "ranker", &c, 20, &[]).await;
+    assert_eq!(r.diag["path"], Value::from("ranker"));
+    assert!(!r.items.is_empty() && r.items.iter().all(|i| i.score.is_finite()));
 }
