@@ -40,6 +40,15 @@ pub struct Config {
     pub rec_log_retention_days: i64,
     /// RECOMMENDER_HOLDOUT_PATH; when unset or missing the embedded seed is used.
     pub holdout_path: Option<PathBuf>,
+    /// RECOMMENDER_MODEL_DIR: the pinned MiniLM files the image bakes in.
+    pub model_dir: PathBuf,
+}
+
+/// RECOMMENDER_MODEL_DIR, else the image's baked-in copy.
+pub fn model_dir(get: impl Fn(&str) -> Option<String>) -> PathBuf {
+    get("RECOMMENDER_MODEL_DIR")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| PathBuf::from("/srv/minilm"), PathBuf::from)
 }
 
 impl Config {
@@ -124,6 +133,7 @@ impl Config {
             optimizer_max_tokens: int("RECOMMENDER_OPTIMIZER_MAX_TOKENS", 8000)?,
             rec_log_retention_days: int("RECOMMENDER_REC_LOG_RETENTION_DAYS", 90)?,
             holdout_path: opt("RECOMMENDER_HOLDOUT_PATH").map(PathBuf::from),
+            model_dir: model_dir(&get),
         })
     }
 }
@@ -249,6 +259,7 @@ mod tests {
         assert_eq!(c.optimizer_max_drift_pct, 0.20);
         assert_eq!(c.optimizer_max_tokens, 8000);
         assert_eq!(c.rec_log_retention_days, 90);
+        assert_eq!(c.model_dir, PathBuf::from("/srv/minilm"));
         assert!(c.tmdb_api_key.is_none() && c.anthropic_api_key.is_none());
         let c = load(&[
             ("RECOMMENDER_DB_PATH", "/data/exchange.db"),
@@ -257,8 +268,10 @@ mod tests {
             ("RECOMMENDER_OPTIMIZER_MAX_DRIFT_PCT", "0.5"),
             ("TMDB_API_KEY", "k"),
             ("ANTHROPIC_API_KEY", ""),
+            ("RECOMMENDER_MODEL_DIR", "/m"),
         ])
         .unwrap();
+        assert_eq!(c.model_dir, PathBuf::from("/m"));
         assert_eq!(c.db_path, PathBuf::from("/data/exchange.db"));
         assert_eq!(c.cold_start_threshold, 3);
         assert_eq!(c.default_recipe, "ranker");

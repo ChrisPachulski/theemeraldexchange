@@ -309,7 +309,12 @@ jobs:
         run: echo "$HOME/.cargo-tools/bin" >> "$GITHUB_PATH"
 
       - name: cargo audit
-        run: cargo audit
+        # RUSTSEC-2026-0367/0368/0369: zip 8.6's ZipArchive::extract /
+        # ZipStreamReader::extract (SUID bits, symlink targets, permissions
+        # through symlinks). zip arrives only through candle-core (^8.6, for
+        # .npz/.pth reading), which never calls extract, and the recommender
+        # loads model.safetensors only. Drop these once candle moves to zip >= 9.
+        run: cargo audit --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369
 
       - name: Install pip-audit
         run: pip install pip-audit

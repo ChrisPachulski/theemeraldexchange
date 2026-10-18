@@ -38,10 +38,23 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 # numpy PCG64 (same LCG + XSL-RR output) for the ranker's seeded draws.
 rand_pcg = "0.10"
 chrono = "0.4"
+# MiniLM on CPU: BertModel over the pinned model.safetensors + tokenizer.json.
+candle-core = "0.11"
+candle-nn = "0.11"
+candle-transformers = "0.11"
+# fancy-regex instead of the default onig/esaxx C++ builds.
+tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
+# The encoder's capped thread pool.
+rayon = "1"
+# featurize's perturbation seeds (blake2s, 4-byte digest).
+blake2 = "0.10"
+# verify-embedding: baseline digest and payload, and its scratch DB.
+sha2.workspace = true
+base64.workspace = true
+tempfile = "3"
 thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
-tempfile = "3"
 tower = { version = "0.5", features = ["util"] }

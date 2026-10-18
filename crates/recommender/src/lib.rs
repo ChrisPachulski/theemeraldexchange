@@ -4,6 +4,8 @@
 pub mod config;
 pub mod context;
 pub mod db;
+pub mod embed;
+pub mod featurize;
 pub mod holdout;
 pub mod http;
 pub mod metrics;
@@ -19,6 +21,9 @@ pub enum Error {
     /// A bad argument (the Python raised ValueError).
     #[error("{0}")]
     Invalid(String),
+    /// Loading or running the MiniLM encoder.
+    #[error("embedding: {0}")]
+    Embed(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -17,9 +17,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "recommender=info,eex_recommender=info,media_core=info".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
         .with(sentry_tracing::layer())
         .init();
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(cmd) = args.first() {
+        return cli(cmd, &args[1..]).await;
+    }
 
     let config = Arc::new(
         Config::from_env().inspect_err(|e| tracing::error!("recommender config error: {e}"))?,
@@ -43,6 +48,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_graceful_shutdown(shutdown_signal())
     .await?;
     Ok(())
+}
+
+/// The job subcommands; the server runs when none is given.
+async fn cli(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    match (cmd, args) {
+        ("featurize", rest) => {
+            let limit = match rest {
+                [] => None,
+                [flag, n] if flag == "--limit" => Some(n.parse::<i64>()?),
+                _ => return Err("usage: eex-recommender featurize [--limit N]".into()),
+            };
+            let config = Config::from_env()?;
+            let pool = db::open(&config.db_path).await?;
+            let embedder = Arc::new(recommender::embed::Embedder::load(&config.model_dir)?);
+            recommender::featurize::run(&pool, embedder, limit).await?;
+            pool.close().await;
+            Ok(())
+        }
+        ("verify-embedding", [baseline]) => {
+            // Reads only RECOMMENDER_MODEL_DIR: the image check runs without secrets.
+            let model_dir = recommender::config::model_dir(|k| std::env::var(k).ok());
+            let report =
+                recommender::embed::verify_baseline(&model_dir, std::path::Path::new(baseline))
+                    .await?;
+            println!("{report}");
+            Ok(())
+        }
+        _ => Err(format!(
+            "unknown command {cmd:?}; usage: eex-recommender [featurize [--limit N] | \
+             verify-embedding <baseline.json>]"
+        )
+        .into()),
+    }
 }
 
 /// Glitchtip from `GLITCHTIP_DSN`; unset or empty is a no-op. No PII is sent.
