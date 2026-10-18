@@ -203,6 +203,11 @@ services:
       IPTV_RECOMMENDER_EXPORT_SECRET: "${IPTV_RECOMMENDER_EXPORT_SECRET:-}"
       IPTV_REMUX_TMP_DIR: "${IPTV_REMUX_TMP_DIR:-/tmp/iptv-remux}"
       IPTV_EPG_PATH: "${IPTV_EPG_PATH:-/xmltv.php}"
+      # SQLite temp tables (the EPG sync stages ~300 MB in one) spill to an
+      # unlinked file in TMPDIR, and /tmp here is RAM tmpfs charged to
+      # mem_limit that never shrinks; 2026-10-17 it OOM-killed the backend
+      # mid-sync twice. Keep SQLite's temp files on the data disk instead.
+      SQLITE_TMPDIR: /app/data
       # Feed checks (server/env.ts): IPTV_FEED_CHECK=0 in .env turns them off.
       IPTV_FEED_CHECK: "${IPTV_FEED_CHECK:-1}"
       IPTV_FEED_SWEEP_HOURS_UTC: "${IPTV_FEED_SWEEP_HOURS_UTC:-9-15}"
