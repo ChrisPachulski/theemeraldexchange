@@ -27,6 +27,8 @@ const SECRET_PLACEHOLDERS: &[&str] = &[
 pub struct Config {
     pub db_path: PathBuf,
     pub tmdb_api_key: Option<String>,
+    /// TMDB_READ_ACCESS_TOKEN: bearer auth, preferred over the api_key.
+    pub tmdb_read_access_token: Option<String>,
     pub anthropic_api_key: Option<String>,
     pub event_secret: Option<String>,
     pub internal_principal_secret: Option<String>,
@@ -117,6 +119,7 @@ impl Config {
             db_path: std::path::absolute(&db_path)
                 .map_err(|e| format!("RECOMMENDER_DB_PATH {db_path:?}: {e}"))?,
             tmdb_api_key: opt("TMDB_API_KEY"),
+            tmdb_read_access_token: opt("TMDB_READ_ACCESS_TOKEN"),
             anthropic_api_key: opt("ANTHROPIC_API_KEY"),
             event_secret,
             internal_principal_secret,
@@ -261,12 +264,14 @@ mod tests {
         assert_eq!(c.rec_log_retention_days, 90);
         assert_eq!(c.model_dir, PathBuf::from("/srv/minilm"));
         assert!(c.tmdb_api_key.is_none() && c.anthropic_api_key.is_none());
+        assert!(c.tmdb_read_access_token.is_none());
         let c = load(&[
             ("RECOMMENDER_DB_PATH", "/data/exchange.db"),
             ("RECOMMENDER_COLD_START_THRESHOLD", "3"),
             ("RECOMMENDER_DEFAULT_RECIPE", "ranker"),
             ("RECOMMENDER_OPTIMIZER_MAX_DRIFT_PCT", "0.5"),
             ("TMDB_API_KEY", "k"),
+            ("TMDB_READ_ACCESS_TOKEN", ""),
             ("ANTHROPIC_API_KEY", ""),
             ("RECOMMENDER_MODEL_DIR", "/m"),
         ])
@@ -277,6 +282,7 @@ mod tests {
         assert_eq!(c.default_recipe, "ranker");
         assert_eq!(c.optimizer_max_drift_pct, 0.5);
         assert_eq!(c.tmdb_api_key.as_deref(), Some("k"));
+        assert!(c.tmdb_read_access_token.is_none(), "empty is unset");
         assert!(c.anthropic_api_key.is_none());
         assert!(load(&[("RECOMMENDER_COLD_START_THRESHOLD", "ten")]).is_err());
     }

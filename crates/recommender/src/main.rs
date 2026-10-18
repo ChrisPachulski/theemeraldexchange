@@ -66,6 +66,22 @@ async fn cli(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error
             pool.close().await;
             Ok(())
         }
+        ("ingest", rest) => {
+            let opts = recommender::ingest::Opts::parse(rest).map_err(|e| {
+                format!(
+                    "{e}; usage: eex-recommender ingest --mode bootstrap|changes|retry-errors \
+                     [--concurrency N] [--limit N] [--skip-enumerate] [--retry-errors] \
+                     [--max-attempts N]"
+                )
+            })?;
+            let config = Config::from_env()?;
+            let client = Arc::new(recommender::tmdb::TmdbClient::from_config(&config)?);
+            let pool = db::open(&config.db_path).await?;
+            let today = chrono::Local::now().date_naive();
+            let res = recommender::ingest::run(&pool, client, &opts, today).await;
+            pool.close().await;
+            Ok(res?)
+        }
         ("verify-embedding", [baseline]) => {
             // Reads only RECOMMENDER_MODEL_DIR: the image check runs without secrets.
             let model_dir = recommender::config::model_dir(|k| std::env::var(k).ok());
@@ -77,7 +93,7 @@ async fn cli(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error
         }
         _ => Err(format!(
             "unknown command {cmd:?}; usage: eex-recommender [featurize [--limit N] | \
-             verify-embedding <baseline.json>]"
+             ingest --mode M ... | verify-embedding <baseline.json>]"
         )
         .into()),
     }

@@ -2767,6 +2767,7 @@ dependencies = [
  "media-core",
  "rand_pcg",
  "rayon",
+ "reqwest 0.12.28",
  "sentry",
  "sentry-tracing",
  "serde",
