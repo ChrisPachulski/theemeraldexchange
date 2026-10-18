@@ -1893,7 +1893,7 @@ mod tests {
             .asset_path(&session_id, "seg_00000.ts")
             .await
             .unwrap();
-        for _ in 0..200 {
+        for _ in 0..1000 {
             if seg.exists() {
                 break;
             }

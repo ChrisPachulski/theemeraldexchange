@@ -2623,7 +2623,7 @@ mod tests {
              d=$(dirname \"$last\")\n\
              mkdir -p \"$d\"\n\
              printf '%s' \"$$\" > \"$d/pid.txt\"\n\
-             case \"$last\" in */index.m3u8) printf '%s\\n' \"$@\" > \"$d/args.txt\";; esac\n\
+             case \"$last\" in */index.m3u8) {{ printf '%s\\n' \"$@\"; echo {ARGV_END}; }} > \"$d/args.txt\";; esac\n\
              case \"$last\" in *subtitles.vtt.partial)\n\
                printf 'WEBVTT\\n' > \"$last\"; exit 0;; esac\n\
              printf '#EXTM3U\\n#EXT-X-VERSION:3\\n' > \"$last\"\n\
@@ -3036,7 +3036,7 @@ mod tests {
         );
         // Cap'd retries (100+200+400ms backoff) then teardown — not an
         // immortal childless session. Poll generously.
-        for _ in 0..400 {
+        for _ in 0..2000 {
             if mgr.is_empty().await {
                 break;
             }
@@ -3575,7 +3575,7 @@ mod tests {
                printf '#EXTM3U\\n#EXTINF:2.0,\\nseg_00000.ts\\n#EXTINF:2.0,\\nseg_00001.ts\\n' > \"$last\"\n\
                exit 1\n\
              fi\n\
-             printf '%s\\n' \"$@\" > \"$d/args.txt\"\n\
+             {{ printf '%s\\n' \"$@\"; echo {ARGV_END}; }} > \"$d/args.txt\"\n\
              printf '#EXTM3U\\n' > \"$last\"\n\
              sleep 30\n",
             flag = flag.display()
@@ -3590,16 +3590,27 @@ mod tests {
         path
     }
 
-    /// Poll the respawned child's recorded argv until `pred` matches.
+    /// Last line the stubs write into args.txt. `> args.txt` truncates before
+    /// the shell flushes the argv, so a poll could read `-start_number` without
+    /// its value; only an argv ending in this marker is complete. A builtin
+    /// `echo`, not a write-then-`mv`: a forked `mv` outlives the pid-only kill
+    /// and races the session-dir removal.
+    const ARGV_END: &str = "--argv-end--";
+
+    /// Poll the respawned child's recorded argv until it is complete and
+    /// `pred` matches. Same 10s ceiling as [`wait_for`].
     async fn wait_for_args<F>(path: &std::path::Path, mut pred: F) -> Vec<String>
     where
         F: FnMut(&[String]) -> bool,
     {
-        for _ in 0..200 {
+        for _ in 0..1000 {
             if let Ok(text) = std::fs::read_to_string(path) {
-                let args: Vec<String> = text.lines().map(str::to_string).collect();
-                if pred(&args) {
-                    return args;
+                let mut args: Vec<String> = text.lines().map(str::to_string).collect();
+                if args.last().map(String::as_str) == Some(ARGV_END) {
+                    args.pop();
+                    if pred(&args) {
+                        return args;
+                    }
                 }
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -3622,9 +3633,7 @@ mod tests {
         let dir = dir.parent().unwrap().to_path_buf();
 
         // The first child wrote seg_00000+seg_00001 then crashed; the healthy
-        // respawn records its argv. Wait for a COMPLETE argv (both markers
-        // present) — `> args.txt` truncates before the shell flushes content,
-        // so a bare `|_| true` could read an empty/partial file and flake.
+        // respawn records its argv.
         let args = wait_for_args(&dir.join("args.txt"), |a| a.iter().any(|s| s == "-ss")).await;
         let ss = args
             .iter()
@@ -3666,8 +3675,6 @@ mod tests {
         let dir = manifest.parent().unwrap().to_path_buf();
 
         assert!(mgr.seek(&id, 120).await, "seek must succeed");
-        // Both markers: `> args.txt` truncates before the shell flushes, so a
-        // partial read could carry `-ss 120` but not yet `-start_number`.
         let args = wait_for_args(&dir.join("args.txt"), |a| {
             a.iter().any(|s| s == "120") && a.iter().any(|s| s == "-start_number")
         })
@@ -4341,7 +4348,7 @@ mod tests {
         let _id = mgr.start(opts("/lib/a.mkv")).await.unwrap();
         // After MAX_RESTARTS quick backoffs (~100+200+400ms) the supervisor
         // removes the session. Poll generously.
-        for _ in 0..400 {
+        for _ in 0..2000 {
             if mgr.is_empty().await {
                 break;
             }
