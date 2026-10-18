@@ -351,8 +351,6 @@ jobs:
           curl -fsS http://127.0.0.1:3001/api/version | grep -q '"release":"${{ steps.rel.outputs.short }}"'
           # Node-free: the runtime image carries no node binary.
           ! docker exec backend sh -c 'command -v node'
-          # The owner re-key CLI ships beside the gateway (DEPLOY.md section 9).
-          docker exec backend test -x /usr/local/bin/eex-rekey
           docker rm -f backend
 
       - name: Push backend image (main only, after the boot check)

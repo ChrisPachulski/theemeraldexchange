@@ -1,5 +1,5 @@
 # Multi-stage build for the backend container: the Rust gateway (eex-gateway,
-# crates/gateway) plus the owner re-key CLI (eex-rekey, crates/auth).
+# crates/gateway).
 #
 # Build context is the REPO ROOT so cargo resolves the full workspace: the
 # gateway links crates/auth in-process and depends on media-core and
@@ -29,13 +29,13 @@ COPY crates ./crates
 ARG CARGO_BUILD_JOBS
 # BuildKit cache mounts keep target/ and the registry across builds, so a source
 # change recompiles only the changed crates. They are not in the image layer, so
-# the binaries are copied out for the runtime stage.
+# the binary is copied out for the runtime stage.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/build/target,sharing=locked \
     if [ -z "${CARGO_BUILD_JOBS:-}" ]; then unset CARGO_BUILD_JOBS; fi \
- && cargo build --release -p gateway --bin eex-gateway -p auth --bin eex-rekey \
- && cp /build/target/release/eex-gateway /build/target/release/eex-rekey /usr/local/bin/
+ && cargo build --release -p gateway --bin eex-gateway \
+ && cp /build/target/release/eex-gateway /usr/local/bin/
 
 # ---------------------------------------------------------------------------
 # SPA build: the SELF-HOST image serves the web client same-origin from
@@ -99,7 +99,7 @@ COPY --from=mwader/static-ffmpeg:7.1@sha256:a8090df5f5608daef387e1b2e93b98aaacb4
 COPY --chmod=0755 bin/eex-ytresolve /usr/local/bin/eex-ytresolve
 ENV EEX_YTRESOLVE_BIN=/usr/local/bin/eex-ytresolve
 
-COPY --from=builder /usr/local/bin/eex-gateway /usr/local/bin/eex-rekey /usr/local/bin/
+COPY --from=builder /usr/local/bin/eex-gateway /usr/local/bin/
 
 # SPA bundle: empty dir when BUNDLE_SPA=off (SERVE_SPA auto-off), the vite
 # build when 'on' (self-host: the gateway serves it same-origin at /).

@@ -69,7 +69,10 @@ Open it and fill the required rows plus whichever optional integrations you use:
 | `DEVICE_TOKEN_SECRET` | `openssl rand -base64 48`. IKM for the device-token JWE (Apple device pairing). Must be distinct from every other secret. |
 | `INTERNAL_PRINCIPAL_SECRET` | `openssl rand -base64 48`. IKM for the internal-principal JWE the backend mints toward recommender/media-core/transcoder. Distinct from every other secret. |
 | `RECOMMENDER_EVENT_SECRET` | `openssl rand -base64 48`. Shared secret signing backend → recommender calls. |
-| `ADMIN_SUBS` | Your own provider sub (`workos:user_…`, `apple:…`, `google:…`): the owner bootstrap, admin with no invite. |
+| `ADMIN_SUBS` | Your own provider sub (`plex:…`, `workos:user_…`, `apple:…`, `google:…`): the owner bootstrap, admin with no invite. |
+| `PLEX_CLIENT_ID` *(optional)* | Enables Plex sign-in. Any stable UUID (`uuidgen`). Leave unset for a server without Plex: the Plex routes then answer 503 `plex_not_configured`. |
+| `PLEX_SERVER_ID` *(conditional)* | Your home Plex server's machineIdentifier; scopes Plex sign-ins to your household. Required in production when `PLEX_CLIENT_ID` is set, unless `ALLOW_UNSCOPED_PLEX_LOGIN=1` permits an emergency boot (it bypasses no membership gate). |
+| `PLEX_SERVER_URL` *(optional)* | Your Plex Media Server's URL, for Play in Plex links, the Users tab and the remote-access check. Default `http://theemeraldexchange.local:32400`. |
 | `WORKOS_CLIENT_ID`, `WORKOS_API_KEY`, `WORKOS_REDIRECT_URI` *(optional)* | WorkOS dashboard → API keys. Redirect URI is `https://api.theemeraldexchange.com/api/auth/workos/callback`, registered verbatim in the dashboard. Turn "Sign up" off there; add your `workos:user_…` id to `ADMIN_SUBS` for owner access. |
 | `ALLOWED_ORIGINS` | `https://theemeraldexchange.com` |
 | `SONARR_URL`, `SONARR_API_KEY` | Existing Sonarr install. |
@@ -283,102 +286,50 @@ images and compose file and, because that compose has no `iptv` service, moves
 `exchange-iptv`, move `iptv/iptv.db*` back to `data/` (`chown 10001:10001`),
 retag the `:rollback-<ts>` images and `docker compose up -d --no-build`.
 
-### 9. Cutover to the Rust gateway: deploy, then re-key the owner off Plex (one time)
+### 9. Cutover to the Rust gateway (one time, no identity change)
 
 The backend is now the Rust gateway. CI's docker-build job builds it from
 `Dockerfile` and pushes **`ghcr.io/chrispachulski/theemeraldexchange-backend:sha-<commit>`**
 (and `:main`) after booting it to `/api/health`. It is the same `backend`
 compose service (`exchange-backend`, port 3001, healthcheck `/api/health`) and
-carries two binaries: `eex-gateway` (the default command) and `eex-rekey`
-(source `crates/auth/src/rekey.rs`). There is no Node in the image.
+carries one binary, `eex-gateway`. There is no Node in the image.
 
-Plex sign-in is gone with the Node backend. The owner's household data
-(members row, invites, watch state, favorites, playlists, feedback, watchlist,
-policies, recommender history, usage and grab logs) is keyed on her `plex:`
-sub, and `eex-rekey` moves it to the identity she signs in with from then on.
-It is an identity change: the owner runs and confirms every step below
-herself. Never run it from a workflow or with the stack up.
-
-What the re-key does: one `VACUUM INTO` backup (`<db>.pre-rekey-<stamp>`) and
-then one transaction per SQLite file. Data rows move to the target, and where
-the target already has the same item, the target's copy is kept. The target's
-members row gets the source's access (admin wins); the source row is revoked
-and kept for audit. Invites move. Device tokens and playlist tokens are
-revoked, because the sub is sealed inside them. Device-link codes the source
-claimed are deleted. The stored Anthropic key is re-encrypted under the new
-sub when `--session-secret-file` is given, and deleted otherwise. JSON files
-are merged (target entries kept) and JSONL `sub` fields are rewritten; each
-changed file is copied to `<file>.pre-rekey-<stamp>` first. It is a dry run
-unless you pass `--apply`. Running it again after an apply changes nothing.
+The cutover changes no identity. The gateway reads the same `PLEX_CLIENT_ID`,
+`PLEX_SERVER_ID` and `PLEX_SERVER_URL` as the Node server, and the owner stays
+admin as her `plex:` sub in `ADMIN_SUBS`. Members, invites and every per-sub
+data row stay keyed on their `plex:` subs, so nothing moves. Session cookies
+the Node server issued keep verifying (same key, derived from `SESSION_SECRET`,
+and the cookie's Plex token is read back), so a signed-in household member
+stays signed in. Apple devices keep their pairing because their device tokens
+verify again. Nothing is re-paired and nothing is re-keyed.
 
 Order:
 
-1. **Before merging**, while the Node stack still serves prod: choose the
-   target sub. It must be one that can sign in: `workos:`, `apple:` or
-   `google:` (it warns on `local:`; nothing signs in as local today). Issue
-   yourself an owner invite (Admin, Invites, role admin) and redeem it by
-   signing in with the target provider. Then read the target sub from Admin,
-   Members. The source sub is the `plex:` value in `ADMIN_SUBS`.
-2. **Merge the stacked PRs and deploy together.** Netlify publishes the SPA as
-   soon as main moves, and that SPA has no Plex sign-in, so do this step in
-   one sitting. In `.env.production` set `ADMIN_SUBS` to the target sub and
-   delete `ADMINS` and every `PLEX_*` line (the gateway reads none of them).
-   Wait for CI to go green on the merge commit, then run
-   `scripts/deploy-nas.sh`: it pulls the `:sha-<commit>` images (no NAS
-   compile), recreates the stack and health-gates it. The gateway is up, but
-   the owner's data still sits under the `plex:` sub until step 4.
-3. Stop the stack and back up the four data dirs. Record their owners, because
-   the re-key runs as root:
+1. **`.env.production`.** Keep every secret as it is (`SESSION_SECRET`,
+   `STREAM_TOKEN_SECRET`, `DEVICE_TOKEN_SECRET`, `INTERNAL_PRINCIPAL_SECRET`):
+   a new `SESSION_SECRET` signs everyone out and leaves the stored Anthropic
+   keys undecryptable. Keep `PLEX_CLIENT_ID`, `PLEX_SERVER_ID` and
+   `PLEX_SERVER_URL`. `ADMIN_SUBS` stays the owner's `plex:` sub. `ADMINS` is
+   no longer read; delete the line.
+2. **Merge the stacked PRs and deploy.** Netlify publishes the SPA as soon as
+   main moves, so deploy the backend in the same sitting. Wait for CI to go
+   green on the merge commit, then run `scripts/deploy-nas.sh`: it pulls the
+   `:sha-<commit>` images (nothing compiles on the NAS), recreates the stack
+   and health-gates it.
+3. **Verify end to end:**
+   - `/api/health` is 200, and `/api/version` shows `release` = the deployed
+     short sha.
+   - Plex sign-in works in a fresh browser window (the PIN is created in the
+     browser), and `/api/me` shows role `admin` for the owner.
+   - Play in Plex on a local library title opens that title in Plex.
+   - Admin, Users lists the Plex server's users.
+   - An Apple TV that was paired opens signed in; a new Apple TV completes the
+     Plex sign-in through the device poll (`POST /api/auth/device/poll`).
 
-   ```bash
-   ssh theemeraldexchange 'cd /mnt/user/appdata/exchange-backend && docker compose stop \
-     && stat -c "%u:%g %n" data iptv media-core-db recommender-db \
-     && tar czf /mnt/user/appdata/pre-rekey-$(date +%Y%m%d).tgz data iptv media-core-db recommender-db'
-   ```
-
-4. Put `SESSION_SECRET` (from `.env.production`) in a root-only file on the
-   NAS, e.g. `/root/rekey-secret` (`chmod 600`). Dry-run, read the counts, then
-   run the same command with `--apply`. `theemeraldexchange-backend:latest` is
-   the image step 2 pulled and retagged:
-
-   ```bash
-   A=/mnt/user/appdata/exchange-backend
-   docker run --rm --user 0:0 --entrypoint eex-rekey \
-     -v $A/data:/rk/data -v $A/iptv:/rk/iptv -v $A/media-core-db:/rk/media \
-     -v $A/recommender-db:/rk/rec -v /root/rekey-secret:/rk/secret:ro \
-     theemeraldexchange-backend:latest \
-     --from plex:<owner id> --to <target sub> \
-     --server-db /rk/data/server.db --iptv-db /rk/iptv/iptv.db \
-     --media-db /rk/media/media.db --recommender-db /rk/rec/exchange.db \
-     --data-dir /rk/data --session-secret-file /rk/secret
-   ```
-
-   A second dry run after the apply should show only zeros. Then delete
-   `/root/rekey-secret` and give each dir back its recorded owner
-   (`chown -R <uid>:<gid> <dir>`; that covers the backups, too).
-5. Start the stack and re-join the tunnel (cloudflared shares the backend's
-   netns):
-
-   ```bash
-   ssh theemeraldexchange 'cd /mnt/user/appdata/exchange-backend \
-     && docker compose up -d --no-build && docker compose up -d --no-build --force-recreate cloudflared'
-   ```
-
-   Then verify end to end: `/api/health` is 200; `/api/version` shows
-   `release` = the deployed short sha; sign in as the target; `/api/me` shows
-   role admin and Admin, Members lists the target as admin and the `plex:` row
-   as revoked; a Sonarr read (TV tab loads the library); a suggestion strip on
-   Home; a library playback grant (Play on a local title); a live grant (play
-   a channel on Live).
-6. Re-pair each Apple device through the device link (the code the app shows,
-   claimed in the SPA while signed in as the target), and re-mint the M3U
-   playlist URLs. If the secret file was left out, re-enter the Anthropic key.
-
-Rollback: stop the stack, restore the tarball from step 3 (or copy each
-`*.pre-rekey-*` file over its original and delete the `-wal`/`-shm` files), put
-the old `.env.production` back, and redeploy the previous sha image (retag its
-`:rollback-<stamp>` generation to `:latest` and `docker compose up -d
---no-build`, or run `scripts/deploy-nas.sh` from the previous commit).
+Rollback: redeploy the previous image. `deploy-nas.sh` tags each image it
+replaces as `:rollback-<stamp>`; retag that generation to `:latest` and run
+`docker compose up -d --no-build`, or run `scripts/deploy-nas.sh` from the
+previous commit. No data moved, so there is nothing to restore.
 
 ---
 

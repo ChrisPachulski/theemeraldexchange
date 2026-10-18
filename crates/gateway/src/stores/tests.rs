@@ -803,20 +803,14 @@ async fn pool(dir: &tempfile::TempDir) -> SqlitePool {
 
 #[test]
 fn api_key_crypto_round_trip_binds_the_sub() {
-    let cipher = auth::rekey::api_key_cipher(SECRET.as_bytes());
-    let a = auth::rekey::encrypt_api_key(&cipher, "a:1", KEY);
-    let b = auth::rekey::encrypt_api_key(&cipher, "a:1", KEY);
+    let cipher = api_key_cipher(SECRET.as_bytes());
+    let a = encrypt_api_key(&cipher, "a:1", KEY);
+    let b = encrypt_api_key(&cipher, "a:1", KEY);
     assert_ne!(a, b, "random IV per write");
-    assert_eq!(
-        auth::rekey::decrypt_api_key(&cipher, "a:1", &a).as_deref(),
-        Some(KEY)
-    );
-    assert_eq!(auth::rekey::decrypt_api_key(&cipher, "a:999", &a), None);
-    assert_eq!(
-        auth::rekey::decrypt_api_key(&cipher, "a:1", "not-base64-!!"),
-        None
-    );
-    assert_eq!(auth::rekey::decrypt_api_key(&cipher, "a:1", ""), None);
+    assert_eq!(decrypt_api_key(&cipher, "a:1", &a).as_deref(), Some(KEY));
+    assert_eq!(decrypt_api_key(&cipher, "a:999", &a), None);
+    assert_eq!(decrypt_api_key(&cipher, "a:1", "not-base64-!!"), None);
+    assert_eq!(decrypt_api_key(&cipher, "a:1", ""), None);
 }
 
 #[tokio::test]

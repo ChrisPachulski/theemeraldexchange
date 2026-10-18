@@ -17,9 +17,13 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, Generate, KeyInit, Nonce, Payload};
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -817,8 +821,7 @@ impl JsonStore<PoliciesFile> {
 
 // --- the BYO Anthropic key (server.db user_api_keys) ----------------------------
 //
-// AES-256-GCM per row with the sub as AAD (auth::rekey holds the layout the
-// re-key re-encrypts with). The plaintext is never logged or returned by any
+// AES-256-GCM per row with the sub as AAD. The plaintext is never logged or returned by any
 // surface except [`api_key`], which only the suggestions path consumes.
 
 pub const API_KEY_PREFIX: &str = "sk-ant-";
@@ -833,20 +836,65 @@ pub fn plausible_anthropic_key(key: &str) -> bool {
         && !key.chars().any(auth::js_space)
 }
 
+fn api_key_cipher(session_secret: &[u8]) -> Aes256Gcm {
+    let key = emerald_contracts::hkdf::derive_key(session_secret, b"eex/user-api-key/v1");
+    Aes256Gcm::new(&key.into())
+}
+
+fn api_key_aad(sub: &str) -> String {
+    format!("eex/user-api-key/v1:{sub}")
+}
+
+fn decrypt_api_key(cipher: &Aes256Gcm, sub: &str, stored: &str) -> Option<String> {
+    let raw = STANDARD.decode(stored).ok()?;
+    if raw.len() < 12 + 16 + 1 {
+        return None;
+    }
+    let nonce = Nonce::<Aes256Gcm>::try_from(&raw[..12]).ok()?;
+    let aad = api_key_aad(sub);
+    let pt = cipher
+        .decrypt(
+            &nonce,
+            Payload {
+                msg: &raw[12..],
+                aad: aad.as_bytes(),
+            },
+        )
+        .ok()?;
+    String::from_utf8(pt).ok()
+}
+
+fn encrypt_api_key(cipher: &Aes256Gcm, sub: &str, plaintext: &str) -> String {
+    let nonce = Nonce::<Aes256Gcm>::generate();
+    let aad = api_key_aad(sub);
+    let ct = cipher
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext.as_bytes(),
+                aad: aad.as_bytes(),
+            },
+        )
+        .expect("aes-gcm encrypt with a random nonce does not fail");
+    let mut raw = nonce.to_vec();
+    raw.extend_from_slice(&ct);
+    STANDARD.encode(raw)
+}
+
 pub async fn set_api_key(
     pool: &SqlitePool,
     session_secret: &str,
     sub: &str,
     key: &str,
 ) -> Result<(), sqlx::Error> {
-    let cipher = auth::rekey::api_key_cipher(session_secret.as_bytes());
+    let cipher = api_key_cipher(session_secret.as_bytes());
     sqlx::query(
         "INSERT INTO user_api_keys (sub, ciphertext, updated_at) VALUES (?, ?, datetime('now')) \
          ON CONFLICT(sub) DO UPDATE SET ciphertext = excluded.ciphertext, \
          updated_at = excluded.updated_at",
     )
     .bind(sub)
-    .bind(auth::rekey::encrypt_api_key(&cipher, sub, key))
+    .bind(encrypt_api_key(&cipher, sub, key))
     .execute(pool)
     .await?;
     Ok(())
@@ -864,8 +912,8 @@ pub async fn api_key(
             .bind(sub)
             .fetch_optional(pool)
             .await?;
-    let cipher = auth::rekey::api_key_cipher(session_secret.as_bytes());
-    Ok(row.and_then(|ct| auth::rekey::decrypt_api_key(&cipher, sub, &ct)))
+    let cipher = api_key_cipher(session_secret.as_bytes());
+    Ok(row.and_then(|ct| decrypt_api_key(&cipher, sub, &ct)))
 }
 
 /// The UI-safe view: whether a key is stored plus its last 4 characters.
