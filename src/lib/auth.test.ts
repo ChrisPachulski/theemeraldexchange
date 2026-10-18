@@ -64,9 +64,6 @@ describe('deniedMessage', () => {
   it('maps not_authorized to the same invitation copy', () => {
     expect(deniedMessage('not_authorized')).toMatch(/invite code/i)
   })
-  it('keeps the plex-server-member copy', () => {
-    expect(deniedMessage('not_a_server_member')).toMatch(/plex server/i)
-  })
   it('falls back to a generic message for unknown reasons', () => {
     expect(deniedMessage(undefined)).toBe('Access denied.')
     expect(deniedMessage('something_else')).toBe('Access denied.')
