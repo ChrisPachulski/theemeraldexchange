@@ -3,11 +3,14 @@
 //! every protected route needs its answer, so a network hop per request would
 //! buy nothing.
 
+mod admin;
 mod client_address;
 pub mod config;
 pub mod csrf;
 pub mod db;
+mod device_link;
 pub mod device_tokens;
+mod devices;
 pub mod invites;
 pub mod jwks;
 pub mod members;
@@ -19,16 +22,19 @@ mod signin;
 pub mod workos;
 
 #[cfg(test)]
+mod route_goldens;
+#[cfg(test)]
 mod testutil;
 
 pub use db::ensure_server_id;
-pub use members::{effective_role, member_status};
+pub use device_tokens::spawn_sweep;
+pub use members::{effective_role, member_status, revoke_self};
 pub use reconcile::{Principal, Rejection, RequireAdmin, RequireAuth, authenticate};
 
 use std::sync::Arc;
 
 use axum::http::header;
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Serialize;
@@ -85,20 +91,30 @@ impl AuthState {
     }
 }
 
-/// The auth routes, at their full /api paths.
+/// The auth routes, at their full /api paths: /api/me, /api/auth/*,
+/// /api/devices/*, /api/admin/{devices,invites,members}. CSRF, CORS and the
+/// request id are the gateway's layers.
 pub fn router(state: AuthState) -> Router {
     Router::new()
         .route("/api/me", get(me))
         .route("/api/auth/logout", post(logout))
         .merge(signin::routes())
         .merge(workos::routes())
+        .merge(device_link::routes())
+        .merge(devices::routes())
+        .merge(admin::routes())
         .with_state(state)
 }
 
 /// GET /api/me: the reconciled caller. Over a Bearer the username is the
 /// device's name.
-async fn me(RequireAuth(p): RequireAuth) -> Json<serde_json::Value> {
-    Json(serde_json::json!({ "user": p.session }))
+async fn me(RequireAuth(p): RequireAuth) -> impl IntoResponse {
+    // A struct, not `json!`, so the keys keep the TS order.
+    #[derive(Serialize)]
+    struct Me {
+        user: session::Session,
+    }
+    Json(Me { user: p.session })
 }
 
 /// POST /api/auth/logout: clears the session cookie, nothing else. The
@@ -125,6 +141,14 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+/// A store failure inside a route: logged, then the generic 500.
+impl IntoResponse for Error {
+    fn into_response(self) -> Response {
+        tracing::error!(event = "auth_store", error = %self, "auth store error");
+        Rejection::Internal.into_response()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
 #[serde(rename_all = "lowercase")]
@@ -196,4 +220,24 @@ pub(crate) fn iso(t: chrono::DateTime<chrono::Utc>) -> String {
 
 pub(crate) fn now_iso() -> String {
     iso(chrono::Utc::now())
+}
+
+/// JS whitespace (`String#trim`, regex `\s`): Unicode White_Space minus
+/// U+0085, plus U+FEFF.
+pub(crate) fn js_space(c: char) -> bool {
+    c == '\u{feff}' || (c.is_whitespace() && c != '\u{85}')
+}
+
+pub(crate) fn js_trim(s: &str) -> &str {
+    s.trim_matches(js_space)
+}
+
+/// JS `String#length`: UTF-16 code units.
+pub(crate) fn js_len(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
+/// The provider namespace of a sub (`apple`, `workos`, ...).
+pub(crate) fn sub_namespace(sub: &str) -> &str {
+    sub.split(':').next().unwrap_or_default()
 }

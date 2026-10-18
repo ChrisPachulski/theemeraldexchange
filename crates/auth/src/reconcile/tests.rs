@@ -12,7 +12,7 @@ use tower::ServiceExt;
 
 use super::*;
 use crate::device_tokens::{Keys, MintInput};
-use crate::testutil::{add_member, capture_logs, goldens, logs, set_revoked, state};
+use crate::testutil::{add_member, capture_logs, goldens, insert_rows, logs, set_revoked, state};
 
 const OWNER: &str = "workos:user_01E4ZCR3C56J083X43JQXF3JK5";
 const MEMBER: &str = "apple:000001.0123456789abcdef0123456789abcdef.0001";
@@ -54,28 +54,6 @@ async fn send(app: &Router, path: &str, headers: &[(&str, &str)]) -> (u16, Value
         .await
         .unwrap();
     (status, serde_json::from_slice(&body).unwrap(), cookie)
-}
-
-/// Insert golden rows verbatim (every column the TS DB held).
-async fn insert_rows(pool: &SqlitePool, table: &str, rows: &Value) {
-    for row in rows.as_array().unwrap() {
-        let row = row.as_object().unwrap();
-        let cols: Vec<&str> = row.keys().map(String::as_str).collect();
-        let sql = format!(
-            "INSERT INTO {table} ({}) VALUES ({})",
-            cols.join(", "),
-            vec!["?"; cols.len()].join(", ")
-        );
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
-        for v in row.values() {
-            q = match v {
-                Value::Null => q.bind(None::<String>),
-                Value::Number(n) => q.bind(n.as_i64().unwrap()),
-                v => q.bind(v.as_str().unwrap().to_string()),
-            };
-        }
-        q.execute(pool).await.unwrap();
-    }
 }
 
 #[tokio::test]

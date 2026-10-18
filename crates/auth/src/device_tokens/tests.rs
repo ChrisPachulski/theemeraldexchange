@@ -303,3 +303,56 @@ async fn cascade_revokes_exactly_the_subs_tokens_idempotently() {
     );
     assert_eq!(jtis(&db, "device_token_revocations").await.len(), 3);
 }
+
+#[test]
+fn the_sweep_cron_takes_node_cron_syntax_and_falls_back_to_0315() {
+    assert!(parse_cron("15 3 * * *").is_some());
+    assert!(
+        parse_cron("*/5 * * * * *").is_some(),
+        "six fields: leading seconds"
+    );
+    assert!(parse_cron("not a cron").is_none());
+    let fallback = sweep_cron("not a cron");
+    let now = chrono::Local::now();
+    let next = fallback.find_next_occurrence(&now, false).unwrap();
+    let default = parse_cron(DEFAULT_TOKEN_SWEEP_CRON).unwrap();
+    assert_eq!(next, default.find_next_occurrence(&now, false).unwrap());
+    assert_eq!(next.format("%H:%M:%S").to_string(), "03:15:00");
+}
+
+#[tokio::test]
+async fn spawn_sweep_deletes_expired_rows_on_its_schedule() {
+    let db = crate::testutil::pool().await;
+    for (jti, expires) in [
+        ("dead", "2020-01-01T00:00:00.000Z"),
+        ("live", "2099-01-01T00:00:00.000Z"),
+    ] {
+        sqlx::query(
+            "INSERT INTO device_tokens (jti, sub, device_id, device_name, platform, server_id, issued_at, expires_at) \
+             VALUES (?, 'google:1', ?, 'dev', 'ios', 'srv', '2019-01-01T00:00:00.000Z', ?)",
+        )
+        .bind(jti)
+        .bind(format!("device-{jti}"))
+        .bind(expires)
+        .execute(&*db)
+        .await
+        .unwrap();
+    }
+    let handle = spawn_sweep((*db).clone(), "* * * * * *");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let left: Vec<String> = sqlx::query_scalar("SELECT jti FROM device_tokens ORDER BY jti")
+            .fetch_all(&*db)
+            .await
+            .unwrap();
+        if left == ["live"] {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "sweep never ran: {left:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    handle.abort();
+}

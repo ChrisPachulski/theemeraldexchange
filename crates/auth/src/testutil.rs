@@ -57,6 +57,28 @@ pub async fn set_revoked(pool: &SqlitePool, sub: &str) {
         .unwrap();
 }
 
+/// Insert golden rows verbatim (every column the TS DB held).
+pub async fn insert_rows(pool: &SqlitePool, table: &str, rows: &Value) {
+    for row in rows.as_array().unwrap() {
+        let row = row.as_object().unwrap();
+        let cols: Vec<&str> = row.keys().map(String::as_str).collect();
+        let sql = format!(
+            "INSERT INTO {table} ({}) VALUES ({})",
+            cols.join(", "),
+            vec!["?"; cols.len()].join(", ")
+        );
+        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        for v in row.values() {
+            q = match v {
+                Value::Null => q.bind(None::<String>),
+                Value::Number(n) => q.bind(n.as_i64().unwrap()),
+                v => q.bind(v.as_str().unwrap().to_string()),
+            };
+        }
+        q.execute(pool).await.unwrap();
+    }
+}
+
 /// tests/fixtures/auth-goldens.json, written by gen-auth-goldens.ts.
 pub fn goldens() -> &'static serde_json::Value {
     static G: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
@@ -281,4 +303,142 @@ pub async fn dead_url() -> String {
 
 pub fn unix_now() -> i64 {
     chrono::Utc::now().timestamp()
+}
+
+// ── Route helpers ──
+
+pub struct Reply {
+    pub status: u16,
+    pub headers: axum::http::HeaderMap,
+    /// The raw body text (the route goldens compare it byte for byte).
+    pub text: String,
+}
+
+impl Reply {
+    pub fn json(&self) -> Value {
+        serde_json::from_str(&self.text).unwrap_or(Value::Null)
+    }
+}
+
+/// Send one request through `app`. `body` is sent as-is.
+pub async fn call(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+    body: Option<&str>,
+) -> Reply {
+    use tower::ServiceExt;
+    let mut req = axum::http::Request::builder().method(method).uri(path);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let body = match body {
+        Some(b) => axum::body::Body::from(b.to_string()),
+        None => axum::body::Body::empty(),
+    };
+    let res = app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
+    let status = res.status().as_u16();
+    let headers = res.headers().clone();
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    Reply {
+        status,
+        headers,
+        text: String::from_utf8(bytes.to_vec()).unwrap(),
+    }
+}
+
+/// `Cookie: eex.session=...` for `sub` (role and provider as given).
+pub fn cookie(st: &crate::AuthState, sub: &str, username: &str, role: crate::Role) -> String {
+    let session = crate::session::Session {
+        sub: sub.into(),
+        username: username.into(),
+        role,
+        auth_mode: crate::AuthMode::parse(crate::sub_namespace(sub)).unwrap(),
+    };
+    format!(
+        "eex.session={}",
+        crate::session::mint(&st.session_key, &session, unix_now())
+    )
+}
+
+/// Mint a device token (and its row) for `sub`.
+pub async fn device_token(st: &crate::AuthState, sub: &str, device_id: &str, name: &str) -> String {
+    crate::device_tokens::mint(
+        &st.pool,
+        st.device_keys.as_deref().unwrap(),
+        &crate::device_tokens::MintInput {
+            sub,
+            role: crate::Role::User,
+            auth_mode: crate::AuthMode::parse(crate::sub_namespace(sub)).unwrap(),
+            device_id,
+            device_platform: "tvos",
+            device_name: name,
+            username: None,
+            server_id: "01HXYZ01234567890ABCDEFGHJ",
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// `METHOD path` and the Authorization header, per request.
+pub type Calls = Arc<std::sync::Mutex<Vec<(String, Option<String>)>>>;
+
+/// A local stand-in for the iptv service: records `METHOD path` and the
+/// Authorization header of every request, answers `status` with {"ok":true}.
+pub struct IptvStub {
+    pub url: String,
+    pub calls: Calls,
+    pub status: Arc<AtomicU16>,
+}
+
+impl IptvStub {
+    pub fn calls(&self) -> Vec<String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(c, _)| c.clone())
+            .collect()
+    }
+}
+
+pub async fn iptv_stub() -> IptvStub {
+    #[derive(Clone)]
+    struct S {
+        calls: Calls,
+        status: Arc<AtomicU16>,
+    }
+    async fn any(
+        axum::extract::State(s): axum::extract::State<S>,
+        req: axum::extract::Request,
+    ) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let auth = req
+            .headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .map(|v| v.to_str().unwrap().to_string());
+        s.calls
+            .lock()
+            .unwrap()
+            .push((format!("{} {}", req.method(), req.uri()), auth));
+        let status = axum::http::StatusCode::from_u16(s.status.load(Ordering::SeqCst)).unwrap();
+        (status, axum::Json(json!({ "ok": true }))).into_response()
+    }
+    let s = S {
+        calls: Arc::default(),
+        status: Arc::new(AtomicU16::new(200)),
+    };
+    let app = axum::Router::new().fallback(any).with_state(s.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    IptvStub {
+        url,
+        calls: s.calls,
+        status: s.status,
+    }
 }

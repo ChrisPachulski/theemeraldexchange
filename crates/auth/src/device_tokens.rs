@@ -171,5 +171,50 @@ pub async fn sweep_expired(pool: &SqlitePool, now_iso: &str) -> Result<u64> {
     )
 }
 
+pub const DEFAULT_TOKEN_SWEEP_CRON: &str = "15 3 * * *";
+
+/// node-cron syntax: five fields, or six with leading seconds.
+fn parse_cron(expr: &str) -> Option<croner::Cron> {
+    croner::parser::CronParser::builder()
+        .seconds(croner::parser::Seconds::Optional)
+        .build()
+        .parse(expr)
+        .ok()
+}
+
+/// TOKEN_SWEEP_CRON, or 03:15 with an error log when it does not parse.
+fn sweep_cron(expr: &str) -> croner::Cron {
+    parse_cron(expr).unwrap_or_else(|| {
+        tracing::error!("invalid TOKEN_SWEEP_CRON {expr:?}; using {DEFAULT_TOKEN_SWEEP_CRON}");
+        parse_cron(DEFAULT_TOKEN_SWEEP_CRON).expect("default cron parses")
+    })
+}
+
+/// Run [`sweep_expired`] at every occurrence of `cron_expr` (local time, as
+/// node-cron's was). Failures are `tracing::error!` (Glitchtip). The handle
+/// lets shutdown abort it.
+pub fn spawn_sweep(pool: SqlitePool, cron_expr: &str) -> tokio::task::JoinHandle<()> {
+    let cron = sweep_cron(cron_expr);
+    tokio::spawn(async move {
+        let mut last = chrono::Local::now();
+        loop {
+            // From the later of now and the last fire, so a wake a hair early
+            // never fires the same occurrence twice.
+            let from = chrono::Local::now().max(last);
+            let Ok(next) = cron.find_next_occurrence(&from, false) else {
+                return tracing::error!("TOKEN_SWEEP_CRON has no next occurrence; sweep stopped");
+            };
+            let wait = (next - chrono::Local::now()).to_std().unwrap_or_default();
+            tokio::time::sleep(wait).await;
+            last = next;
+            match sweep_expired(&pool, &crate::now_iso()).await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(device_tokens = n, "removed expired device tokens"),
+                Err(e) => tracing::error!(error = %e, "expired-auth-row sweep failed"),
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests;

@@ -201,7 +201,7 @@ fn round_elapsed(ms: u128) -> u64 {
 /// X-Request-Id when it passes Hono's requestId() rule (word characters, `-`
 /// and `=`, at most 255), else "unavailable". The gateway's request-id layer
 /// sets it.
-fn request_id(headers: &HeaderMap) -> String {
+pub(crate) fn request_id(headers: &HeaderMap) -> String {
     headers
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())

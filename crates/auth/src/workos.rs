@@ -251,6 +251,15 @@ fn found(location: &str, cookies: &[HeaderValue]) -> Response {
     res
 }
 
+/// The request's own origin, as node-server builds `c.req.url`: the Host
+/// header plus the scheme (http unless the URI carries https).
+pub(crate) fn request_origin(uri: &Uri, headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .map(|host| format!("{}://{host}", uri.scheme_str().unwrap_or("http")))
+}
+
 /// A redirect to the SPA root: the request's own origin when the backend
 /// serves the SPA, else the first allowed SPA origin, else a relative `/`.
 fn spa_redirect(
@@ -261,10 +270,7 @@ fn spa_redirect(
     cookies: &[HeaderValue],
 ) -> Response {
     let base = if config.serve_spa {
-        headers
-            .get(header::HOST)
-            .and_then(|h| h.to_str().ok())
-            .map(|host| format!("{}://{host}", uri.scheme_str().unwrap_or("http")))
+        request_origin(uri, headers)
     } else {
         config.allowed_origins.first().cloned()
     };

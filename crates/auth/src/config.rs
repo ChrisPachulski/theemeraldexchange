@@ -41,6 +41,13 @@ pub struct Config {
     pub workos_redirect_uri: Option<String>,
     pub workos_native_redirect_uri: String,
     pub server_db_path: String,
+    /// The iptv service (crates/iptv): a member revoke calls its
+    /// /internal/members/:sub/revoke-playlist-tokens.
+    pub iptv_service_url: String,
+    /// IPTV_DISABLED=1|true: no IPTV surface, so nothing to call.
+    pub iptv_disabled: bool,
+    /// The nightly expired-device-token sweep (node-cron syntax).
+    pub token_sweep_cron: String,
 }
 
 impl Config {
@@ -191,6 +198,16 @@ impl Config {
             workos_native_redirect_uri: opt("WORKOS_NATIVE_REDIRECT_URI")
                 .unwrap_or_else(|| "emerald://auth/workos".into()),
             server_db_path: get("SERVER_DB_PATH").unwrap_or_else(|| "./data/server.db".into()),
+            iptv_service_url: opt("IPTV_SERVICE_URL").unwrap_or_else(|| {
+                if is_prod {
+                    "http://iptv:8004"
+                } else {
+                    "http://127.0.0.1:8004"
+                }
+                .into()
+            }),
+            iptv_disabled: matches!(get("IPTV_DISABLED").as_deref(), Some("1" | "true")),
+            token_sweep_cron: get("TOKEN_SWEEP_CRON").unwrap_or_else(|| "15 3 * * *".into()),
         })
     }
 
@@ -273,6 +290,10 @@ mod tests {
         assert_eq!(c.internal_principal_secret, None);
         assert_eq!(c.server_db_path, "./data/server.db");
         assert_eq!(c.workos_native_redirect_uri, "emerald://auth/workos");
+        assert_eq!(c.iptv_service_url, "http://127.0.0.1:8004");
+        assert!(!c.iptv_disabled);
+        assert_eq!(c.token_sweep_cron, "15 3 * * *");
+        assert!(dev(&[("IPTV_DISABLED", "true")]).unwrap().iptv_disabled);
         assert!(c.admin_subs.is_empty());
         assert!(!c.apple_configured() && !c.google_configured() && !c.workos_configured());
         // A short secret is fine outside production.
@@ -303,7 +324,7 @@ mod tests {
 
     #[test]
     fn production_requires_device_and_internal_secrets() {
-        assert!(prod(&[]).is_ok());
+        assert_eq!(prod(&[]).unwrap().iptv_service_url, "http://iptv:8004");
         for k in ["DEVICE_TOKEN_SECRET", "INTERNAL_PRINCIPAL_SECRET"] {
             let err = prod(&[(k, "")]).err().unwrap();
             assert!(err.contains(k), "{err}");
