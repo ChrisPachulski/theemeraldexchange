@@ -35,39 +35,21 @@ jobs:
           node-version: '26'
           cache: npm
 
-      # The @emerald/contracts-napi file: dep builds its .node during `npm ci`
-      # (prepare script). The crate's rust-version is 1.96, so the runner's
-      # default rust is too old — pin 1.96 explicitly, otherwise the addon
-      # silently fails to build and the device-token crypto tests can't load it.
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
-        with:
-          toolchain: '1.96'
-
       - name: Install dependencies
         run: npm ci
 
       - name: Type-check (SPA)
-        run: npx tsc --noEmit
-
-      - name: Type-check (server)
-        run: npx tsc -p server/tsconfig.json
+        run: npx tsc -b
 
       - name: Lint
         run: npm run lint
 
-      # vitest run --coverage runs the suite once and produces an HTML
-      # coverage report. No separate `npm test` step — would just rerun.
+      # vitest run --coverage runs the suite once (SPA + repo contracts) and
+      # produces an HTML coverage report. No separate `npm test` step.
       - name: Test + coverage
         run: npm run test:coverage
 
-      # Recommendation-quality eval gate (vitest.eval.config.ts). Fully
-      # offline — Anthropic + TMDB are mocked — so it is deterministic and
-      # cheap. It rotted once already (vitest.env.ts drift) precisely because
-      # nothing ran it in CI; this step keeps it alive.
-      - name: Recommendation eval gate (offline)
-        run: npm run eval:recs
-
-      - name: Build (Vite + server tsc)
+      - name: Build (Vite)
         run: npm run build
 
       # Install only the Chromium browser + its OS deps. The
@@ -104,56 +86,11 @@ jobs:
           path: dist/
           retention-days: 7
 
-  test-no-iptv:
-    # Reviewer-insurance gate per contract §13.3 — boot with
-    # IPTV_DISABLED=1 and confirm the test suite still passes. The
-    # IPTV-disabled-specific test (server/app.iptv-disabled.test.ts)
-    # already runs in the main job; this matrix re-runs the WHOLE
-    # suite with the env set globally to catch any cross-feature
-    # surface that quietly depends on /api/iptv being mounted.
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    env:
-      IPTV_DISABLED: '1'
-
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '26'
-          cache: npm
-
-      # The @emerald/contracts-napi file: dep builds its .node during `npm ci`
-      # (prepare script). The crate's rust-version is 1.96, so the runner's
-      # default rust is too old — pin 1.96 explicitly, otherwise the addon
-      # silently fails to build and the device-token crypto tests can't load it.
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
-        with:
-          toolchain: '1.96'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Vitest (IPTV_DISABLED=1)
-        run: npm test
-
-      - name: Build (Vite — confirms SPA still bundles without IPTV at runtime)
-        run: npm run build:spa
-
   recommender:
     # Python sidecar — syntax check + cross-language parity tests against
     # the emerald-contracts PyO3 binding. The parity tests are the same
-    # tests/vectors/*.json the Rust and TS sides run; if recommender
-    # produces different bytes than Hono, this job fails.
-    #
-    # This job is also the home of the N-API↔PyO3 cross-binding gate
-    # (M13): it has BOTH toolchains (Python+Rust for the PyO3 wheel,
-    # Node for the napi addon), so it's the one place we can mint a JWE
-    # via N-API and decrypt it via PyO3 in the same run. The wheel is
-    # installed into recommender/.venv so the Node test's PYTHON_PATH
-    # resolves, and the Node test runs with CI_REQUIRE_CROSS_BINDING=1
-    # so a missing/drifted extension turns the gate red, not green.
+    # tests/vectors/*.json the Rust crate runs; if the recommender produces
+    # different bytes than the gateway's emerald-contracts, this job fails.
     runs-on: ubuntu-latest
     timeout-minutes: 12
 
@@ -163,11 +100,6 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '26'
-          cache: npm
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable branch, 2026-03-27; explicit `toolchain` input pins the actual compiler
         with:
@@ -210,25 +142,12 @@ jobs:
         working-directory: recommender
         run: ruff check .
 
-      # Build once into a wheel, then install it into BOTH the bare job
-      # interpreter (for the pytest parity step) and a recommender/.venv
-      # (for the Node cross-binding gate, whose PYTHON_PATH resolves to
-      # recommender/.venv/bin/python). One wheel, two install targets.
       - name: Build emerald-contracts wheel
         working-directory: crates/emerald-contracts-pyo3
         run: maturin build --release --out wheels
 
       - name: Install wheel into job's Python env
         run: pip install crates/emerald-contracts-pyo3/wheels/*.whl
-
-      # Provision the venv the Node cross-binding test expects and install
-      # the same wheel into it, so HAVE_PYTHON is true there.
-      - name: Provision recommender/.venv with PyO3 wheel (cross-binding gate)
-        run: |
-          python3 -m venv recommender/.venv
-          recommender/.venv/bin/python -m pip install --upgrade pip
-          recommender/.venv/bin/python -m pip install crates/emerald-contracts-pyo3/wheels/*.whl
-          recommender/.venv/bin/python -c "import emerald_contracts; print('emerald_contracts OK')"
 
       - name: Recommender test suite (tests/ + eval/, full lock minus torch)
         working-directory: recommender
@@ -240,28 +159,12 @@ jobs:
         # test_build_holdout.py for the operator holdout tooling.
         run: pytest tests/ eval/test_build_holdout.py -v
 
-      # Node side of the gate: install JS deps + build the napi addon,
-      # then run the N-API→PyO3 cross-binding test with the require flag
-      # so a missing/drifted PyO3 extension fails the job instead of
-      # skipping. This is the M3-cutover wire-parity property exercised
-      # in CI for the first time.
-      - name: Install JS dependencies
-        run: npm ci
-
-      - name: Build napi addon
-        run: npm run build:napi
-
-      - name: Cross-binding N-API↔PyO3 gate (Node)
-        env:
-          CI_REQUIRE_CROSS_BINDING: '1'
-        run: npx vitest run server/services/internalPrincipal.crossBinding.test.ts
-
   rust:
-    # emerald-contracts crate: canonical cross-language source of truth
-    # for token formats, HKDF derivations, sub-namespace, PII scrub.
-    # Hono (N-API) and Apple (Swift port) MUST agree with this crate
-    # byte-for-byte. tests/vectors/*.json are the interop oracle —
-    # every TS/Rust/Swift impl runs them and the bytes must match.
+    # The Rust workspace: the gateway (the backend), auth, media-core, iptv,
+    # transcoder and emerald-contracts, the canonical cross-language source
+    # of truth for token formats, HKDF derivations, sub-namespace, PII
+    # scrub. The PyO3 binding and the Apple Swift port MUST agree with it
+    # byte-for-byte; tests/vectors/*.json are the interop oracle.
     runs-on: ubuntu-latest
     timeout-minutes: 8
 
@@ -311,10 +214,10 @@ jobs:
       - name: cargo build (workspace minus pyo3)
         run: cargo build --workspace --exclude emerald-contracts-pyo3 --all-targets
 
-      # Vector parity test gate — Rust crate produces byte-identical
-      # output to TS for stream-token-canonical.json and hkdf-parity.json.
-      # If this fails, Rust and TS have diverged on a wire-level format
-      # and Apple/M3/M4 ports will silently break.
+      # Vector parity test gate — the Rust crates produce the bytes
+      # tests/vectors/*.json pin (stream-token-canonical.json,
+      # hkdf-parity.json, ...). If this fails, a wire-level format drifted
+      # and the Apple / recommender ports will silently break.
       - name: cargo test (workspace minus pyo3)
         # The scanner's 100-file wall-clock guard asserts only when
         # EEX_PERF_ASSERT names a budget in seconds; the runner is a shared
@@ -452,7 +355,8 @@ jobs:
     # Every other job runs on the host runner via npm/cargo/pytest — nothing
     # else builds the multi-stage Dockerfiles that actually ship. Validate
     # compose interpolation on every run and build the backend image so
-    # image-build regressions are caught pre-deploy. On main the four images
+    # image-build regressions are caught pre-deploy; the backend image is
+    # also booted to /api/health before anything is pushed. On main the images
     # are also PUSHED to GHCR as :main and :sha-<commit>: scripts/deploy-nas.sh
     # pulls exactly the :sha- image CI tested, so the NAS never compiles (its
     # on-box compiles wedged it three times — see scripts/deploy-image.sh).
@@ -491,7 +395,7 @@ jobs:
       - name: Stage eex-ytresolve placeholder
         # The Dockerfile COPYs bin/eex-ytresolve (the prebuilt Rust YouTube
         # resolver). Its repo is private, so CI can only ship an exec-fail stub
-        # (the backend falls back to yt-dlp). The owner deploy bind-mounts the
+        # (the gateway falls back to yt-dlp). The owner deploy bind-mounts the
         # real binary over this path (docker-compose.yml backend volumes), so
         # the pushed image is still the production image.
         run: |
@@ -516,19 +420,50 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build backend image (push on main)
+      - name: Build backend image (loaded for the boot check)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: ./Dockerfile
-          push: ${{ env.PUSH == 'true' }}
+          load: true
           build-args: |
             EEX_RELEASE=${{ steps.rel.outputs.short }}
           tags: |
+            theemeraldexchange-backend:ci
             ${{ steps.rel.outputs.base }}-backend:main
             ${{ steps.rel.outputs.base }}-backend:${{ steps.rel.outputs.sha }}
           cache-from: type=gha,scope=ci-backend
           cache-to: type=gha,mode=max,scope=ci-backend
+
+      - name: Boot the backend image to /api/health
+        # The production posture the owner deploy runs: NODE_ENV=production,
+        # the four secrets, an allowed origin, no SPA. A boot-gate failure
+        # (config, ffmpeg >= 6, server.db migrations) never reaches GHCR.
+        run: |
+          secret() { head -c 48 /dev/urandom | base64 | tr -d '\n'; }
+          docker run -d --name backend -p 127.0.0.1:3001:3001 \
+            -e SESSION_SECRET="$(secret)" \
+            -e STREAM_TOKEN_SECRET="$(secret)" \
+            -e DEVICE_TOKEN_SECRET="$(secret)" \
+            -e INTERNAL_PRINCIPAL_SECRET="$(secret)" \
+            -e ALLOWED_ORIGINS=https://example.invalid \
+            theemeraldexchange-backend:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:3001/api/health && break || sleep 2
+            [ "$i" = 30 ] && { docker logs backend; exit 1; }
+          done
+          curl -fsS http://127.0.0.1:3001/api/version | grep -q '"release":"${{ steps.rel.outputs.short }}"'
+          # Node-free: the runtime image carries no node binary.
+          ! docker exec backend sh -c 'command -v node'
+          # The owner re-key CLI ships beside the gateway (DEPLOY.md section 9).
+          docker exec backend test -x /usr/local/bin/eex-rekey
+          docker rm -f backend
+
+      - name: Push backend image (main only, after the boot check)
+        if: env.PUSH == 'true'
+        run: |
+          docker push "${{ steps.rel.outputs.base }}-backend:main"
+          docker push "${{ steps.rel.outputs.base }}-backend:${{ steps.rel.outputs.sha }}"
 
       - name: Build + push media-core image (main only)
         if: env.PUSH == 'true'

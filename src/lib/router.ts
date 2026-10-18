@@ -1,8 +1,8 @@
 import { useEffect, useEffectEvent, useState } from 'react'
 
-export type Route = 'home' | 'tv' | 'movies' | 'downloads' | 'users' | 'live' | 'youtube' | 'music'
+export type Route = 'home' | 'tv' | 'movies' | 'downloads' | 'live' | 'youtube' | 'music'
 
-const ROUTES: Route[] = ['home', 'tv', 'movies', 'live', 'downloads', 'users', 'youtube', 'music']
+const ROUTES: Route[] = ['home', 'tv', 'movies', 'live', 'downloads', 'youtube', 'music']
 const DEFAULT_ROUTE: Route = 'home'
 
 // `#/<tab>/<ref>` asks that tab to open one item, so any surface (Home shelves,

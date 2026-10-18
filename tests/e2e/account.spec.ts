@@ -25,7 +25,7 @@ async function openMenu(page: Page, user: MockUser) {
 test('the sign-in block offers email through the WorkOS hosted page, invite included', async ({ page }) => {
   await installBackgroundMocks(page)
   await page.route('**/api/auth/methods', (route) =>
-    route.fulfill(json({ plex: true, apple: false, google: false, workos: true })),
+    route.fulfill(json({ apple: false, google: false, workos: true })),
   )
   await mockMe(page, null)
   await page.goto('/')
@@ -42,7 +42,7 @@ test('the sign-in block offers email through the WorkOS hosted page, invite incl
 test('the menu names the sign-in provider', async ({ page }) => {
   await signedIn(page, REGULAR_USER)
   await openMenu(page, REGULAR_USER)
-  await expect(page.getByText('Signed in with Plex as')).toBeVisible()
+  await expect(page.getByText('Signed in with WorkOS as')).toBeVisible()
 })
 
 test('revoking a device and signing out everywhere both ask first', async ({ page }) => {
@@ -104,7 +104,7 @@ test('admins see invite history on request and confirm before revoking a member'
     }
     return route.fulfill(json({
       members: [{
-        sub: 'plex:7', display_name: 'Cousin', role: 'user', auth_mode: 'plex', invited_by: ADMIN_USER.sub,
+        sub: 'workos:user_7', display_name: 'Cousin', role: 'user', auth_mode: 'workos', invited_by: ADMIN_USER.sub,
         joined_at: '2026-10-01T00:00:00Z', revoked_at: null, is_admin: false,
       }],
     }))
@@ -124,7 +124,7 @@ test('admins see invite history on request and confirm before revoking a member'
   await expect(dialog.getByText('Cousin will lose access on every sign-in method.')).toBeVisible()
   expect(memberDeletes).toEqual([])
   await dialog.getByRole('button', { name: 'Revoke' }).click()
-  await expect.poll(() => memberDeletes).toEqual(['/api/admin/members/plex:7'])
+  await expect.poll(() => memberDeletes).toEqual(['/api/admin/members/workos:user_7'])
 })
 
 test('Delete account removes the account, clears local data and signs out', async ({ page }) => {
@@ -148,7 +148,7 @@ test('Delete account removes the account, clears local data and signs out', asyn
   await page.getByRole('button', { name: 'Delete account' }).click()
   await page.getByRole('dialog').getByRole('button', { name: 'Delete account' }).click()
 
-  await expect(page.getByRole('button', { name: 'Sign in with Plex' }).first()).toBeVisible()
+  await expect(page.getByRole('textbox', { name: /Invite code/ }).first()).toBeVisible()
   expect(deleted).toBe(true)
   expect(await page.evaluate(() => [localStorage.getItem('eex.suggestionMode'), localStorage.getItem('guide.categoryIds')]))
     .toEqual([null, null])

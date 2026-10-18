@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  authModeFromUser,
   createInvite,
   listInvites,
   listMembers,
@@ -49,8 +48,12 @@ function providerLabel(mode: MemberView['auth_mode']): string {
   switch (mode) {
     case 'apple':
       return 'Apple'
-    case 'plex':
-      return 'Plex'
+    case 'google':
+      return 'Google'
+    case 'workos':
+      return 'WorkOS'
+    case 'local':
+      return 'Local'
     default:
       return mode
   }
@@ -142,8 +145,8 @@ export function InvitesPanel() {
 
       <p className="invites-panel__hint">
         Generate an invite link, then send it to the new household member. It
-        fills their one-time code automatically; after that their Apple or Plex
-        login is remembered. Invites are single-use and expire.
+        fills their one-time code automatically; after that their sign-in
+        is remembered. Invites are single-use and expire.
       </p>
 
       {/* Create */}
@@ -284,7 +287,7 @@ export function InvitesPanel() {
                     {m.is_admin && <span className="invites-panel__badge">owner</span>}
                   </span>
                   <span className="invites-panel__item-meta">
-                    {providerLabel(authModeFromUser({ sub: m.sub, auth_mode: m.auth_mode }))}
+                    {providerLabel(m.auth_mode)}
                     {' · joined '}
                     {fmtDate(m.joined_at)}
                     {m.revoked_at && ' · revoked'}

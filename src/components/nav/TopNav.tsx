@@ -1,25 +1,17 @@
 import { useRef } from 'react'
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
-import { authModeFromUser, useAuth } from '../../lib/auth'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useRatingGate, useSectionAccess } from '../../lib/hooks/usePolicy'
 import { UserMenu } from '../auth/UserMenu'
-import { usePlexUser } from '../../lib/hooks/usePlexLinks'
 import { EmeraldMark } from '../atmosphere/EmeraldMark'
 import './TopNav.css'
-
-// app.plex.tv is Plex's hosted web client — works on AND off network.
-// The LAN URL (http://theemeraldexchange.local:32400/web) was mDNS-only
-// and broke for every household member outside the house.
-const PLEX_URL = 'https://app.plex.tv/desktop'
 
 type NavRoute = Exclude<Route, 'home'>
 
 type Tab = {
   route: NavRoute
   label: string
-  adminOnly?: boolean
   iptv?: boolean
   /** Limits key gating this tab (plan 006 Phase 3): tab hides when the
    *  matching integration is unconfigured on this install. */
@@ -42,9 +34,6 @@ const TABS: Tab[] = [
   // (contract §13.3 reviewer-insurance gate).
   { route: 'live', label: 'Live', iptv: true, section: 'live' },
   { route: 'downloads', label: 'Downloads', needs: 'sabEnabled', section: 'downloads' },
-  // Admin-only, and only on a Plex-backed session: the list reads plex.tv
-  // with the session's Plex token.
-  { route: 'users', label: 'Users', adminOnly: true },
 ]
 
 const ROUTE_LABEL: Record<NavRoute, string> = {
@@ -54,7 +43,6 @@ const ROUTE_LABEL: Record<NavRoute, string> = {
   music: 'Music',
   live: 'Live',
   downloads: 'Downloads',
-  users: 'Users',
 }
 
 
@@ -64,9 +52,6 @@ type Props = {
 
 export function TopNav({ active }: Props) {
   const { transitionTo, navigate } = useNavTransition()
-  const plexUser = usePlexUser()
-  const { isAdmin, user } = useAuth()
-  const plexAdmin = isAdmin && user !== null && authModeFromUser(user) === 'plex'
   const limits = useLimits()
   const sections = useSectionAccess()
   const ratingGate = useRatingGate()
@@ -78,11 +63,9 @@ export function TopNav({ active }: Props) {
     music: null,
     live: null,
     downloads: null,
-    users: null,
   })
   const visibleTabs = TABS.filter(
     (t) =>
-      (!t.adminOnly || plexAdmin) &&
       (!t.iptv || iptvEnabled) &&
       (!t.section || sections[t.section]) &&
       (!t.unrated || !ratingGate.capped) &&
@@ -116,7 +99,7 @@ export function TopNav({ active }: Props) {
 
       <nav className="top-nav__tabs" role="tablist" aria-label="Primary">
         {/* Hide the current tab — sitting on TV Shows means the only
-            navigation actions are Movies / Downloads / (Users for admins).
+            navigation actions are Movies / Downloads / ....
             The pill for the page you're already on is wasted space. */}
         {visibleTabs.map((t) => (
           <button
@@ -147,19 +130,6 @@ export function TopNav({ active }: Props) {
       </nav>
 
       <div className="top-nav__right">
-        {plexUser && (
-          <a
-            href={PLEX_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="top-nav__watch"
-            aria-label="Open Plex in a new tab"
-          >
-            <EmeraldMark width={18} variant="single" className="top-nav__watch-glyph" />
-            <span className="top-nav__watch-label">Watch</span>
-            <span className="top-nav__watch-arrow" aria-hidden="true">{'->'}</span>
-          </a>
-        )}
         <UserMenu />
       </div>
     </>

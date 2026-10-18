@@ -1,7 +1,7 @@
 import { apiUrl } from '../api/base'
 import { throwApiError } from '../api/errors'
 import type { Policy } from '../parentalGate'
-import type { AuthMode, Role } from './types'
+import type { Role } from './types'
 
 // ── Admin allowlist API — invites + members ────────────────────────
 //
@@ -11,7 +11,7 @@ import type { AuthMode, Role } from './types'
 // only ever called from the admin InvitesPanel, not on the hot auth path.
 // The server contract is the parallel-model authZ layer: members are the
 // allowlist; invites are the owner-issued grant that creates a member on
-// first Apple/Plex login.
+// first sign-in.
 
 export type InviteStatus = 'active' | 'expired' | 'exhausted' | 'revoked'
 
@@ -43,7 +43,8 @@ export type MemberView = {
   sub: string
   display_name: string | null
   role: Role
-  auth_mode: AuthMode
+  /** members.auth_mode as stored (a pre-re-key row may still say 'plex'). */
+  auth_mode: string
   invited_by: string | null
   joined_at: string
   revoked_at: string | null

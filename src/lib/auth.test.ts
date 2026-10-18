@@ -38,7 +38,7 @@ afterEach(() => {
 
 describe('authModeFromUser', () => {
   it('prefers an explicit auth_mode', () => {
-    expect(authModeFromUser({ sub: 'plex:1', auth_mode: 'apple' })).toBe('apple')
+    expect(authModeFromUser({ sub: 'workos:user_1', auth_mode: 'apple' })).toBe('apple')
   })
   it('infers apple from the sub prefix when auth_mode is absent', () => {
     expect(authModeFromUser({ sub: 'apple:000000.deadbeef.0000' })).toBe('apple')
@@ -49,8 +49,8 @@ describe('authModeFromUser', () => {
   it('infers google from the sub prefix', () => {
     expect(authModeFromUser({ sub: 'google:member-42' })).toBe('google')
   })
-  it('defaults to plex for an unprefixed/plex sub', () => {
-    expect(authModeFromUser({ sub: 'plex:42' })).toBe('plex')
+  it('infers workos from the sub prefix', () => {
+    expect(authModeFromUser({ sub: 'workos:user_01HZY3Q6D0AXTW5V6XWXQ2B3C4' })).toBe('workos')
   })
 })
 
@@ -60,9 +60,6 @@ describe('deniedMessage', () => {
   })
   it('maps not_authorized to the same invitation copy', () => {
     expect(deniedMessage('not_authorized')).toMatch(/invite code/i)
-  })
-  it('keeps the legacy plex-server-member copy', () => {
-    expect(deniedMessage('not_a_server_member')).toMatch(/plex server/i)
   })
   it('falls back to a generic message for unknown reasons', () => {
     expect(deniedMessage(undefined)).toBe('Access denied.')

@@ -70,13 +70,6 @@ updates:
           - "minor"
           - "patch"
 
-  # napi binding package (pins @napi-rs/cli — keep on the same cadence).
-  - package-ecosystem: "npm"
-    directory: "/crates/emerald-contracts-napi"
-    schedule:
-      interval: "monthly"
-    open-pull-requests-limit: 3
-
   # Rust workspace (emerald-contracts crypto crate + media-core/transcoder).
   - package-ecosystem: "cargo"
     directory: "/"

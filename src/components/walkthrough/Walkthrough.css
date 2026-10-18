@@ -427,9 +427,9 @@
 }
 
 /* Provider buttons sit in a row that wraps on narrow viewports so the
-   Apple and Plex affordances read as a pair. */
+   Apple and WorkOS affordances read as a pair. */
 .walkthrough__signin-buttons {
-  /* A single full-width vertical stack — every sign-in method (Plex, Apple,
+  /* A single full-width vertical stack — every sign-in method (Apple,
      WorkOS) gets the same footprint and reflows cleanly at any viewport
      width. The previous flex-wrap ROW broke on resize once the full-width
      provider block was added: a width:100% column mixed with inline buttons
@@ -526,80 +526,6 @@
   margin: 0;
   font-size: var(--t-sm);
   color: var(--danger);
-}
-
-/* First-run server discovery list — rare path, but the only way the
-   operator sees discoveredServers when PLEX_SERVER_ID is unset. */
-.walkthrough__discovery {
-  margin-top: var(--s-2);
-  padding-top: var(--s-3);
-  border-top: 1px solid var(--border);
-  display: grid;
-  gap: var(--s-2);
-}
-
-.walkthrough__discovery-title {
-  font-size: var(--t-xs);
-  color: var(--text-subtle);
-  margin: 0;
-  text-transform: uppercase;
-  letter-spacing: var(--tr-eyebrow);
-  font-family: var(--font-display);
-}
-
-.walkthrough__discovery-title code,
-.walkthrough__discovery-id {
-  font-family: var(--font-mono);
-  color: var(--emerald);
-}
-
-.walkthrough__discovery-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: var(--s-2);
-}
-
-.walkthrough__discovery-list li {
-  display: grid;
-  grid-template-columns: auto auto 1fr;
-  gap: var(--s-2);
-  align-items: center;
-  font-size: var(--t-xs);
-}
-
-.walkthrough__discovery-name { color: var(--text); }
-
-.walkthrough__discovery-tag {
-  font-family: var(--font-mono);
-  font-size: 0.625rem;
-  text-transform: uppercase;
-  letter-spacing: var(--tr-hud);
-  color: var(--emerald);
-  background: var(--emerald-bg);
-  padding: 2px 6px;
-  border-radius: var(--r-pod);
-}
-
-.walkthrough__discovery-id {
-  font-size: var(--t-xs);
-  color: var(--text-subtle);
-  user-select: all;
-  text-overflow: ellipsis;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-@media (max-width: 480px) {
-  .walkthrough__discovery-list li {
-    grid-template-columns: 1fr auto;
-    grid-template-areas: 'name tag' 'id id';
-    gap: var(--s-1) var(--s-2);
-  }
-  .walkthrough__discovery-name { grid-area: name; }
-  .walkthrough__discovery-tag { grid-area: tag; }
-  .walkthrough__discovery-id { grid-area: id; }
 }
 
 /* Footer */

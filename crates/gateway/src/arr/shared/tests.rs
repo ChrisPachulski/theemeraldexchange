@@ -296,6 +296,41 @@ fn pick_profile_prefers_the_name_then_1080p_hd_not_any_first() {
     assert_eq!(p(json!([])), None);
 }
 
+/// tests/vectors/arr-add-defaults.json: the SPA pre-fills the Add modals with
+/// the same picks (pickDefaultProfileId / pickDefaultRootFolder run the file too).
+#[test]
+fn add_defaults_agree_with_the_spa_vectors() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/vectors/arr-add-defaults.json"
+    );
+    let v: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    for c in v["profiles"].as_array().unwrap() {
+        // Config trims and lowercases DEFAULT_PROFILE_NAME.
+        let preferred = c["preferred"].as_str().unwrap().trim().to_lowercase();
+        let got = pick_profile(c["profiles"].as_array().unwrap(), &preferred).map(|p| &p["id"]);
+        assert_eq!(
+            got,
+            c["expected_id"].as_i64().map(|_| &c["expected_id"]),
+            "{}",
+            c["name"]
+        );
+    }
+    for c in v["root_folders"].as_array().unwrap() {
+        // Config turns a blank value into unset.
+        let configured = c["configured"].as_str().filter(|s| !s.is_empty());
+        let got = default_folder(c["folders"].as_array().unwrap(), configured)
+            .ok()
+            .map(path_str);
+        let want = match (configured, c["matched"].as_bool().unwrap()) {
+            // A configured path the live list lacks is refused, not replaced.
+            (Some(_), false) => None,
+            _ => c["expected_path"].as_str(),
+        };
+        assert_eq!(got, want, "{}", c["name"]);
+    }
+}
+
 #[test]
 fn normalize_path_strips_trailing_separators_and_lowercases() {
     assert_eq!(normalize_path("/Data/TV///"), "/data/tv");

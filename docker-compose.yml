@@ -20,12 +20,12 @@ services:
       context: .
       args:
         # Build identifier baked into the image (Dockerfile ARG → ENV →
-        # env.ts → /api/version `release`). scripts/deploy-nas.sh exports
-        # EEX_RELEASE=<short sha of the archived HEAD> in the remote shell
-        # before `compose up --build`; ad-hoc builds fall back to 'dev'.
+        # /api/version `release`). CI passes the short sha; ad-hoc builds
+        # fall back to 'dev'.
         EEX_RELEASE: "${EEX_RELEASE:-dev}"
-        # Cap the napi-builder stage's Rust compile on the shared NAS (see the
-        # transcoder service's identical arg for the incident history).
+        # Cap the gateway's Rust compile on a shared host (see the transcoder
+        # service's identical arg for the incident history). The owner deploy
+        # pulls the CI-built image and compiles nothing.
         CARGO_BUILD_JOBS: "${CARGO_BUILD_JOBS:-}"
     image: theemeraldexchange-backend:latest
     container_name: exchange-backend
@@ -47,14 +47,14 @@ services:
     cpus: 1.5
     # Readiness probe (audit 9-1) so cloudflared waits for a serving backend
     # instead of racing a not-yet-listening container. /api/health is public.
+    # The image runs eex-gateway (the Rust backend) by default; stated here so
+    # the service's process is explicit at the compose layer.
+    command: ["eex-gateway"]
     healthcheck:
-      # The backend's Node base image does NOT ship curl (only media-core/
-      # transcoder images add it). A curl-based probe therefore fails with
-      # "exec: curl: not found" on every tick → the container is perpetually
-      # "unhealthy" → cloudflared's `depends_on: service_healthy` gate refuses
-      # to start the tunnel on `docker compose up`, taking the public site down.
-      # Use node (always present — it runs the app) to probe /api/health instead.
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      # The gateway image ships curl for exactly this probe. cloudflared's
+      # `depends_on: service_healthy` gate waits on it, so a probe that cannot
+      # run takes the public site down.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3001/api/health"]
       interval: 30s
       timeout: 5s
       start_period: 20s
@@ -84,15 +84,12 @@ services:
       # serving OFF (plan 006 Phase 2; the self-host compose leaves this
       # unset so the bundled dist auto-enables it).
       SERVE_SPA: "${SERVE_SPA:-0}"
-      # Optional since plan 006 Phase 0: unset means Plex login is not
-      # configured (Plex auth routes 503 plex_not_configured).
-      PLEX_CLIENT_ID: "${PLEX_CLIENT_ID:-}"
       SESSION_SECRET: "${SESSION_SECRET}"
       # Token-signing IKMs — each HKDF'd to a distinct AES-256-GCM key.
-      # env.ts requires all three in production and asserts they are
+      # The gateway requires all three in production and asserts they are
       # pairwise distinct (and distinct from SESSION_SECRET). Without
       # these passthroughs the backend container boots and immediately
-      # crashes on the env.ts production gate.
+      # exits on the production config gate.
       STREAM_TOKEN_SECRET: "${STREAM_TOKEN_SECRET}"
       DEVICE_TOKEN_SECRET: "${DEVICE_TOKEN_SECRET}"
       INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET}"
@@ -108,12 +105,9 @@ services:
       # network (http://<key>@exchange-glitchtip:8000/<project>).
       EEX_TELEMETRY_DSN_INTERNAL: "${EEX_TELEMETRY_DSN_INTERNAL:-}"
       TELEMETRY_ENABLED: "${TELEMETRY_ENABLED:-}"
-      ADMINS: "${ADMINS:-}"
-      # Owner-bootstrap + admin namespaced subs (apple:/plex:/google:/local:). The
-      # auth overhaul added env.ts READING of ADMIN_SUBS but not this
-      # passthrough, so the value lived in .env yet never reached the
-      # container — which silently locked the owner out the moment the
-      # invite/members gate became authoritative (PLEX_SERVER_ID set).
+      # Owner-bootstrap + admin namespaced subs (local:/apple:/google:/workos:).
+      # Without this passthrough the value lives in .env yet never reaches the
+      # container, which silently locks the owner out.
       ADMIN_SUBS: "${ADMIN_SUBS:-}"
       # Sign in with Apple — setting the Services ID enables SIWA. The ENABLE
       # value is an optional deployment assertion that makes a missing ID fatal.
@@ -129,14 +123,6 @@ services:
       WORKOS_API_KEY: "${WORKOS_API_KEY:-}"
       WORKOS_REDIRECT_URI: "${WORKOS_REDIRECT_URI:-}"
       ENABLE_WORKOS_SIGN_IN: "${ENABLE_WORKOS_SIGN_IN:-}"
-      PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
-      # Bootstrap escape hatch for the brief first-deploy window before
-      # PLEX_SERVER_ID is known. Without this passthrough, env.ts's
-      # production gate sees an unset value inside the container and
-      # crashes the boot — even when the host-side deploy script
-      # accepted the same opt-in. Default 0 keeps the gate locked.
-      ALLOW_UNSCOPED_PLEX_LOGIN: "${ALLOW_UNSCOPED_PLEX_LOGIN:-0}"
-      PLEX_SERVER_URL: "${PLEX_SERVER_URL:-}"
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS}"
       # Trust CF-Connecting-IP/True-Client-IP for per-client auth buckets
       # only in this compose topology:
@@ -163,7 +149,7 @@ services:
       # non-admin adds. Without this passthrough the .env.production
       # value never reaches the backend container and the server falls
       # back to "choose me" — fine if the household happens to use that
-      # name, silently wrong otherwise. env.ts lowercases on load so the
+      # name, silently wrong otherwise. The gateway lowercases on load so the
       # comparison is symmetric.
       DEFAULT_PROFILE_NAME: "${DEFAULT_PROFILE_NAME:-Choose Me}"
       DEFAULT_ROOT_FOLDER_PATH: "${DEFAULT_ROOT_FOLDER_PATH:-}"

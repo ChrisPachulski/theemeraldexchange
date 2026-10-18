@@ -1,12 +1,14 @@
 # PR-time docker builds for the sidecar images.
 #
-# ci.yml's docker-build job builds the backend image on every run but the
-# heavy sidecars (recommender torch stack, media-core/transcoder/iptv Rust
-# workspaces) only on push to main — which meant a PR could break a sidecar
-# Dockerfile and the failure surfaced only AFTER merge. This workflow closes
-# that gap: it builds the sidecar images on PRs and exercises the
-# recommender's real embedding/persistence path, but only when the inputs that
-# feed them change (path filter below), so routine SPA/server PRs stay fast.
+# ci.yml's docker-build job builds and boots the backend image (the Rust
+# gateway) on every run but the heavy sidecars (recommender torch stack,
+# media-core/transcoder/iptv Rust workspaces) only on push to main — which
+# meant a PR could break a sidecar Dockerfile and the failure surfaced only
+# AFTER merge. This workflow closes that gap: it builds the sidecar images on
+# PRs and exercises the recommender's real embedding/persistence path, but
+# only when the inputs that feed them change (path filter below), so routine
+# SPA PRs stay fast. The backend Dockerfile shares the crates/ workspace, so a
+# crates/ change rebuilds the sidecars here and the backend in ci.yml.
 #
 # The matrix fans the images out in parallel; per-image GHA cache
 # scopes keep layer caches from clobbering each other.

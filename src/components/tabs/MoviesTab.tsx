@@ -24,7 +24,6 @@ import { useRadarrLibrary, useRadarrProfiles, useRadarrRootFolders } from '../..
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useRatingGate, useSectionAccess } from '../../lib/hooks/usePolicy'
-import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
 import { resumePosition, useLocalMovieIndex, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
 import { MediaPlayer } from '../media/MediaPlayer'
 import { TrendingRow } from '../search/TrendingRow'
@@ -175,7 +174,6 @@ export function MoviesTab() {
   const confirm = useConfirm()
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
-  const { linkFor: plexLinkFor } = usePlexLinks()
 
   const [adding, setAdding] = useState<MovieSearchResult | null>(null)
   const [pickedViewing, setViewing] = useState<MovieSearchResult | Movie | null>(null)
@@ -623,18 +621,6 @@ export function MoviesTab() {
         castLoading={cast.isLoading}
         inLibrary={viewing !== null && 'id' in viewing}
         canRemove={isAdmin}
-        playUrl={
-          // No play affordance for an in-library title with no file on
-          // disk — Plex can't have it either, and the title-search
-          // fallback link would render a dead "Play in Plex" button.
-          viewing && viewingAvailability === 'playable'
-            ? plexLinkFor('movie', {
-                tmdbId: viewing.tmdbId,
-                imdbId: viewing.imdbId ?? null,
-                title: viewing.title,
-              })
-            : null
-        }
         unavailableNote={
           viewingAvailability === 'not_released'
             ? 'Not released yet'

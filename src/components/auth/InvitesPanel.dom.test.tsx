@@ -15,10 +15,7 @@ const mocks = vi.hoisted(() => ({
   revokeMember: vi.fn(),
 }))
 
-vi.mock('../../lib/auth', () => ({
-  authModeFromUser: () => 'plex',
-  ...mocks,
-}))
+vi.mock('../../lib/auth', () => ({ ...mocks }))
 
 function mount() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -84,7 +81,7 @@ describe('InvitesPanel sharing', () => {
 function invite(prefix: string, status: 'active' | 'expired' | 'exhausted' | 'revoked') {
   return {
     code_hash_prefix: prefix,
-    issued_by: 'plex:1',
+    issued_by: 'workos:user_1',
     label: `${status} invite`,
     expires_at: '2026-07-29T00:00:00.000Z',
     max_uses: 1,
@@ -127,11 +124,11 @@ describe('InvitesPanel history and confirmations', () => {
     mocks.listInvites.mockResolvedValue([])
     mocks.listMembers.mockResolvedValue([
       {
-        sub: 'plex:7',
+        sub: 'workos:user_7',
         display_name: 'Cousin',
         role: 'user',
-        auth_mode: 'plex',
-        invited_by: 'plex:1',
+        auth_mode: 'workos',
+        invited_by: 'workos:user_1',
         joined_at: '2026-07-01T00:00:00.000Z',
         revoked_at: null,
         is_admin: false,
@@ -149,6 +146,6 @@ describe('InvitesPanel history and confirmations', () => {
 
     fireEvent.click(within(row).getByRole('button', { name: 'Revoke' }))
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Revoke' }))
-    await vi.waitFor(() => expect(mocks.revokeMember).toHaveBeenCalledWith('plex:7'))
+    await vi.waitFor(() => expect(mocks.revokeMember).toHaveBeenCalledWith('workos:user_7'))
   })
 })

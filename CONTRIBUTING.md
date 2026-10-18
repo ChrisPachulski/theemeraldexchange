@@ -19,7 +19,7 @@ welcome; opening a PR is not the path for changes.
   **pachun95@gmail.com** directly. Do not open a public issue for anything
   exploitable.
 - **Non-security bugs**: email the same address with the affected component
-  (`server/`, `crates/media-core`, `crates/transcoder`, `recommender/`, the
+  (`crates/gateway`, `crates/auth`, `crates/media-core`, `crates/iptv`, `crates/transcoder`, `recommender/`, the
   SPA, or the Apple app) and reproduction steps.
 
 ## Running your own instance
@@ -38,10 +38,9 @@ From the repository root (Node 26, see `package.json` → `engines.node`):
 npm install
 npm run hooks:install   # pre-push: rustfmt/clippy + tsc/eslint on what you push
 npm run lint              # eslint .
-npm run build             # tsc -b && vite build && tsc -p server/tsconfig.json
+npm run build             # tsc -b && vite build
 npm test                  # vitest run
 npm run test:coverage     # vitest run --coverage
-npm run build:napi        # crates/emerald-contracts-napi binding
 npm run test:e2e          # playwright test --project=chromium
 npm run test:e2e:integration
 npm run test:e2e:playback

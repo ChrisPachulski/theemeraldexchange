@@ -1,11 +1,11 @@
 // Minimal HTTP stubs for every upstream the backend talks to during the
 // REAL-integration e2e tier (playwright project `integration` +
 // `playback-chrome`). One listener hosts all upstreams under path
-// prefixes; the backend is pointed at them via SONARR_URL / RADARR_URL /
-// SAB_URL / PLEX_SERVER_URL / MEDIA_CORE_URL / MEDIA_TRANSCODER_URL in
+// prefixes; the gateway is pointed at them via SONARR_URL / RADARR_URL /
+// SAB_URL / MEDIA_CORE_URL / MEDIA_TRANSCODER_URL in
 // tests/e2e/helpers/integrationServer.ts.
 //
-// The point of this tier is exercising the REAL Hono routes, middleware,
+// The point of this tier is exercising the REAL gateway routes, layers,
 // session crypto and proxies end-to-end from a browser — the stubs only
 // replace the third-party services at the HTTP boundary, with the
 // smallest response shapes the routes actually consume.
@@ -195,13 +195,6 @@ export function startStubUpstreams(port: number): Promise<{ server: Server; stat
       if (mode === 'queue') return json(res, 200, SAB_QUEUE)
       if (mode === 'history') return json(res, 200, SAB_HISTORY)
       return json(res, 200, { status: true })
-    }
-
-    // ── Plex Media Server (link resolver etc.) ─────────────────────────
-    // The SPA's Plex deep-link queries are best-effort chrome; an empty
-    // container keeps the resolver happy without modelling PMS.
-    if (path.startsWith('/plex') || path === '/identity' || path.startsWith('/library')) {
-      return json(res, 200, { MediaContainer: {} })
     }
 
     // ── Transcoder (HLS surface behind /api/transcode proxy) ──────────

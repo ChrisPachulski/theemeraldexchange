@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Deploy the Hono backend + Cloudflare Tunnel sidecar to the NAS.
+# Deploy the backend (the Rust gateway) + sidecars + Cloudflare Tunnel to the NAS.
 #
 # Architecture (V2):
 #   theemeraldexchange.com         → Netlify (SPA)             [auto-deploys on git push]
 #   api.theemeraldexchange.com     → Cloudflare Tunnel
 #                                   → cloudflared container sharing backend netns
 #                                   → 127.0.0.1:3001
-#                                   → exchange-backend container (Hono on Node)
+#                                   → exchange-backend container (eex-gateway, Rust)
 #                                   → Sonarr / Radarr / SAB on the LAN
 #
 # What this script does:
@@ -15,9 +15,9 @@
 #      would silently not ship).
 #   2. Validates a local .env.production exists with all required keys.
 #   3. Stages a clean payload from `git archive HEAD` into a temp dir and
-#      rsyncs Dockerfile, docker-compose.yml, package*.json, tsconfig.json,
-#      server/, recommender/, crates/ FROM THAT STAGE — never the working
-#      tree — to /mnt/user/appdata/exchange-backend/ on the NAS.
+#      rsyncs Dockerfile, docker-compose.yml, recommender/, crates/ FROM THAT
+#      STAGE — never the working tree — to /mnt/user/appdata/exchange-backend/
+#      on the NAS.
 #   4. Ships .env.production → NAS as .env (consumed by docker compose).
 #   5. Tags every currently-deployed image as :rollback, pulls the five
 #      CI-built images for HEAD (ghcr.io ...:sha-<commit>, pushed by the CI
@@ -185,11 +185,10 @@ for key in "${required[@]}"; do
   fi
 done
 
-# SESSION_SECRET protects every user's encrypted Plex auth token. The
-# backend SHA-256s this value to derive the A256GCM key, so a short or
-# placeholder secret is equivalent to publishing the AES key. Mirror
-# env.ts's prod gate here so deploy fails fast with a clearer message
-# than a container crash loop.
+# SESSION_SECRET keys every session cookie (the gateway HKDFs it to the
+# A256GCM key), so a short or placeholder secret is equivalent to publishing
+# the AES key. Mirror the gateway's prod gate here so deploy fails fast with
+# a clearer message than a container crash loop.
 session_secret_value=$(env_value SESSION_SECRET)
 if [ "${#session_secret_value}" -lt 32 ]; then
   echo "ERROR: SESSION_SECRET in $LOCAL_ENV must be at least 32 bytes (${#session_secret_value} found)." >&2
@@ -204,29 +203,6 @@ case "$session_secret_lower" in
     exit 1
     ;;
 esac
-
-# PLEX_SERVER_ID enables verified household-share admission. When Plex login
-# is configured, the backend requires either that id or an explicit boot-only
-# opt-in. The opt-in grants no authorization; mirror the backend check here so
-# deploy fails before a container crash loop.
-plex_client_id_value=$(env_value PLEX_CLIENT_ID || true)
-plex_server_id_value=$(env_value PLEX_SERVER_ID || true)
-allow_unscoped_plex_login_value=$(env_value ALLOW_UNSCOPED_PLEX_LOGIN || true)
-if [[ -z "$plex_client_id_value" ]]; then
-  : # Plex login disabled — no server scope is required.
-elif [[ -n "$plex_server_id_value" ]]; then
-  : # populated — good
-elif [[ "$allow_unscoped_plex_login_value" == "1" ]]; then
-  echo "[deploy] WARN: PLEX_SERVER_ID is blank and ALLOW_UNSCOPED_PLEX_LOGIN=1 is set." >&2
-  echo "         This permits boot only; Plex identities still need membership or an invite." >&2
-  echo "         Set PLEX_SERVER_ID and remove the escape hatch as soon as possible." >&2
-else
-  echo "ERROR: production env needs PLEX_SERVER_ID (your home Plex server's" >&2
-  echo "       machineIdentifier) so sign-in is scoped to household members." >&2
-  echo "       To permit boot without share admission, set ALLOW_UNSCOPED_PLEX_LOGIN=1." >&2
-  echo "       This does not grant login access. See DEPLOY.md." >&2
-  exit 1
-fi
 
 # ── Stage the payload from the committed tree, never the working tree ──────
 # `git archive HEAD` materializes exactly what is committed: no uncommitted
@@ -295,15 +271,7 @@ ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && \
 echo "→ Syncing build context (from stage, commit ${DEPLOY_SHA_SHORT})"
 rsync -av \
   "${STAGE_DIR}/Dockerfile" "${STAGE_DIR}/docker-compose.yml" "${STAGE_DIR}/.dockerignore" \
-  "${STAGE_DIR}/package.json" "${STAGE_DIR}/package-lock.json" "${STAGE_DIR}/tsconfig.json" \
   "${NAS_USER}@${NAS_HOST}:${APPDATA}/"
-
-echo "→ Syncing server/"
-rsync -av --delete --delete-excluded \
-  --exclude 'test/' \
-  --exclude '*.test.ts' \
-  --exclude 'middleware/*.test.ts' \
-  "${STAGE_DIR}/server/" "${NAS_USER}@${NAS_HOST}:${APPDATA}/server/"
 
 echo "→ Syncing recommender/"
 rsync -av --delete \
@@ -316,16 +284,10 @@ rsync -av --delete \
   --exclude 'eval/holdout.jsonl' \
   "${STAGE_DIR}/recommender/" "${NAS_USER}@${NAS_HOST}:${APPDATA}/recommender/"
 
-# crates/ feeds two multi-stage image builds:
-#   - recommender/Dockerfile compiles the PyO3 wheel from
-#     crates/emerald-contracts + crates/emerald-contracts-pyo3.
-#   - Dockerfile (backend) compiles the @emerald/contracts-napi
-#     linux-x64-gnu .node from crates/emerald-contracts +
-#     crates/emerald-contracts-napi.
-# The Cargo workspace requires all three members present even when only
-# two are built per stage, so we ship every member's manifest. *.node
-# files are excluded because each image's builder stage produces a
-# fresh artifact for its target triple.
+# crates/ is the Cargo workspace every Rust image builds from (the backend
+# gateway, media-core, iptv, transcoder) plus the recommender's PyO3 wheel.
+# Only the --build-on-nas fallback compiles it on the box; the workspace
+# needs every member present, so the whole tree ships.
 echo "→ Syncing crates/"
 rsync -av --delete \
   --exclude 'target' \
@@ -334,12 +296,11 @@ rsync -av --delete \
   --exclude 'node_modules' \
   --exclude '__pycache__' \
   --exclude '*.pyc' \
-  --exclude '*.node' \
   "${STAGE_DIR}/crates/" "${NAS_USER}@${NAS_HOST}:${APPDATA}/crates/"
 
 # Cargo.toml + Cargo.lock + LICENSE live at the repo root and are
-# required for `cargo build` inside the rust-builder stage. The earlier
-# rsync block ships Dockerfile/compose/package*.json but not these.
+# required for `cargo build` inside the builder stages. The earlier
+# rsync block ships Dockerfile/compose but not these.
 echo "→ Syncing Cargo workspace manifest"
 rsync -av "${STAGE_DIR}/Cargo.toml" "${STAGE_DIR}/Cargo.lock" "${STAGE_DIR}/LICENSE" \
   "${NAS_USER}@${NAS_HOST}:${APPDATA}/"
@@ -522,7 +483,7 @@ ssh "${NAS_USER}@${NAS_HOST}" "chmod +x ${APPDATA}/scripts/nas-cloudflared-watch
 
 # Post-deploy healthcheck. The 5s log tail this replaces was shorter than the
 # container's 20s health start_period, so a crash-looping or boot-failing
-# backend (bad migration, env-gate crash, napi ABI mismatch) shipped with an
+# backend (bad migration, config-gate crash) shipped with an
 # "✓ Deployed" and the API was simply down. Poll the backend's health until it
 # is actually serving; if it never does, roll back to the :rollback image.
 # Gate on the WHOLE service stack, not just the backend: recommender,

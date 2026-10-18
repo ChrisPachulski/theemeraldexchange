@@ -1,42 +1,41 @@
-import { test, expect, type Page } from '@playwright/test'
+import { test, expect } from '@playwright/test'
+import { loginAsAdmin } from '../helpers/session'
 
 // REAL client↔server integration flows (playwright project `integration`,
 // PW_INTEGRATION=1). NOTHING here is route-mocked: the browser talks to
-// the real Vite dev server, which proxies /api/* to the REAL Hono backend
+// the real Vite dev server, which proxies /api/* to the REAL Rust gateway
 // (tests/e2e/helpers/integrationServer.ts) running against throwaway
-// sqlite, with only the third-party upstreams (Radarr/Sonarr/SAB/PMS)
+// sqlite, with only the third-party upstreams (Radarr/Sonarr/SAB)
 // stubbed at the HTTP boundary (tests/e2e/helpers/stubUpstreams.ts).
 //
-// That means these specs exercise for real: session JWE mint/verify, the
-// reconcile-per-request authz gate, CSRF middleware, the *arr allowlist
+// That means these specs exercise for real: session JWE verify, the
+// reconcile-per-request authz gate, the CSRF layer, the *arr allowlist
 // proxies, the capped-grab pipeline, and the SPA's actual fetch layer —
 // the layers the mocked tier (tests/e2e/*.spec.ts) bypasses entirely.
 
 const STUB_BASE = 'http://127.0.0.1:3106'
 
-// Mint a real session via the helper-layer test-only login route. The
-// cookie lands in the browser context (page.request shares its jar), so
-// subsequent SPA fetches are authenticated exactly like a logged-in user.
-async function login(page: Page, role: 'admin' | 'user' = 'admin'): Promise<void> {
-  const res = await page.request.post('/api/test/login', { data: { role } })
-  expect(res.ok(), `test login failed: ${res.status()}`).toBeTruthy()
-}
 
 test.describe('real backend integration', () => {
-  test('home loads with a real session and the real suggestions fallback', async ({ page }) => {
-    await login(page)
+  test('home loads with a real session and the real suggestions fallback', async ({
+    page,
+    baseURL,
+  }) => {
+    await loginAsAdmin(page, baseURL)
 
     // The SPA's /api/me hits the real reconcile pipeline (session JWE
-    // decrypt + ADMIN_SUBS allowlist) — a real admin shell must render,
+    // decrypt + ADMIN_SUBS allowlist) — a real signed-in shell must render,
     // not the logged-out walkthrough. HomeTab's section entries are the
-    // logged-in marker; "Users" additionally proves the admin role
-    // survived the round-trip (it's filtered out for non-admins).
+    // logged-in marker.
     await page.goto('/')
     const sections = page.getByRole('navigation', { name: 'Sections' })
     await expect(sections.getByRole('button', { name: 'Movies' })).toBeVisible({
       timeout: 15_000,
     })
-    await expect(sections.getByRole('button', { name: 'Users' })).toBeVisible()
+    // The admin role survived the round-trip through the gateway.
+    const me = await page.request.get('/api/me')
+    expect(me.status()).toBe(200)
+    expect(await me.json()).toMatchObject({ user: { role: 'admin', auth_mode: 'local' } })
 
     // The integration env deliberately configures NO TMDB key and NO
     // local recommender, so the REAL suggestions route must degrade
@@ -54,8 +53,11 @@ test.describe('real backend integration', () => {
     })
   })
 
-  test('add-movie drives the real capped-grab pipeline against stub Radarr', async ({ page }) => {
-    await login(page)
+  test('add-movie drives the real capped-grab pipeline against stub Radarr', async ({
+    page,
+    baseURL,
+  }) => {
+    await loginAsAdmin(page, baseURL)
     await page.goto('/#/movies')
 
     // Search hits the real /api/radarr/api/v3/movie/lookup proxy → stub.
@@ -103,8 +105,8 @@ test.describe('real backend integration', () => {
     await expect(dialog).toBeHidden({ timeout: 10_000 })
   })
 
-  test('downloads tab renders the real SAB queue through the proxy', async ({ page }) => {
-    await login(page)
+  test('downloads tab renders the real SAB queue through the proxy', async ({ page, baseURL }) => {
+    await loginAsAdmin(page, baseURL)
 
     const queueResponse = page.waitForResponse(
       (r) => r.url().includes('/api/sab/api') && r.url().includes('mode=queue'),

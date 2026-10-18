@@ -32,10 +32,9 @@ if grep -qE '^(crates/|Cargo\.(toml|lock)$|rust-toolchain)' <<<"$files"; then
   cargo fmt --all -- --check
   cargo clippy --all-targets --workspace -- -D warnings
 fi
-if grep -qE '\.(ts|tsx|mts|js|mjs|cjs)$|^package(-lock)?\.json$|^tsconfig|^server/tsconfig|^eslint\.config' <<<"$files"; then
-  echo "[pre-push] TypeScript changed: tsc (SPA + server) + eslint"
-  npx tsc --noEmit
-  npx tsc -p server/tsconfig.json
+if grep -qE '\.(ts|tsx|mts|js|mjs|cjs)$|^package(-lock)?\.json$|^tsconfig|^eslint\.config' <<<"$files"; then
+  echo "[pre-push] TypeScript changed: tsc -b + eslint"
+  npx tsc -b
   npm run lint
 fi
 echo "[pre-push] ok"

@@ -7,8 +7,9 @@
 # qemu that is hours, natively it is minutes) and NEVER build on the NAS.
 #
 # Images:
-#   ghcr.io/<owner>/theemeraldexchange-backend      (Dockerfile, BUNDLE_SPA=on
-#                                                    → serves the SPA same-origin)
+#   ghcr.io/<owner>/theemeraldexchange-backend      (Dockerfile: the Rust gateway,
+#                                                    BUNDLE_SPA=on → serves the
+#                                                    SPA same-origin)
 #   ghcr.io/<owner>/theemeraldexchange-media-core   (crates/media-core/Dockerfile)
 #   ghcr.io/<owner>/theemeraldexchange-transcoder   (crates/transcoder/Dockerfile)
 #   ghcr.io/<owner>/theemeraldexchange-iptv         (crates/iptv/Dockerfile)
@@ -18,7 +19,7 @@
 # `develop` on workflow_dispatch from a branch.
 #
 # eex-ytresolve: prebuilt x86_64 release asset (its own repo's CI). The
-# arm64 image ships an exec-fail stub instead — server/services/ytresolve.ts
+# arm64 image ships an exec-fail stub instead — the gateway's trailer path
 # falls back to yt-dlp on any resolver failure, so trailers still work.
 
 name: publish-images

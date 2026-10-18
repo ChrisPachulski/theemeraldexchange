@@ -12,18 +12,18 @@ components listed below, which remain governed by their own upstream licenses.
 
 The distributed images do **not** all provision FFmpeg the same way. The table
 below is the authoritative per-image record; it is guard-tested against the
-actual Dockerfiles by `server/licensing.test.ts`, so it cannot silently drift.
+actual Dockerfiles by `tests/contracts/licensing.test.ts`, so it cannot silently drift.
 
 | Image | Dockerfile | FFmpeg provisioning | Binary license |
 | --- | --- | --- | --- |
-| backend server | `Dockerfile` | Static build copied from `mwader/static-ffmpeg:7.1` | GPL-3.0-or-later |
+| backend (Rust gateway) | `Dockerfile` | Static build copied from `mwader/static-ffmpeg:7.1` | GPL-3.0-or-later |
 | media-core | `crates/media-core/Dockerfile` | Static build copied from `mwader/static-ffmpeg:7.1` | GPL-3.0-or-later |
 | transcoder | `crates/transcoder/Dockerfile` | Debian bookworm `ffmpeg` package (dynamically linked, installed via apt) | GPL-2.0-or-later |
 | iptv | `crates/iptv/Dockerfile` | Debian bookworm `ffmpeg` package (dynamically linked, installed via apt) | GPL-2.0-or-later |
 
-### Server and media-core images — static FFmpeg (GPL-3.0-or-later)
+### Backend and media-core images — static FFmpeg (GPL-3.0-or-later)
 
-The backend server image (root `Dockerfile`) and the media-core image
+The backend image (root `Dockerfile`, the Rust gateway) and the media-core image
 (`crates/media-core/Dockerfile`) each bundle a statically-linked FFmpeg build
 copied from the upstream binaries-only image `mwader/static-ffmpeg:7.1`, pinned
 by digest
@@ -90,12 +90,12 @@ remux, feed check and recording). Consequently the GPL obligations attach to the
 distributed FFmpeg binaries and libraries alone and do **not** extend to the
 project's first-party source code, which remains proprietary under `LICENSE`.
 
-## yt-dlp (backend server image)
+## yt-dlp (backend image)
 
-The backend server image also bundles **`yt-dlp`**, a third-party executable used
-to resolve a YouTube trailer/extra id to a directly-playable progressive URL.
-`server/services/ytdlp.ts` shells to it (`yt-dlp -g`); there is no linking of any
-kind against it.
+The backend image also bundles **`yt-dlp`**, a third-party executable used to
+resolve a YouTube trailer/extra id to a directly-playable progressive URL. The
+gateway's trailer path (`crates/gateway/src/trailer.rs`) runs it as a separate
+process (`yt-dlp -g`); there is no linking of any kind against it.
 
 Its license is **not recorded in this repository** and must be taken from the
 upstream project's own notices before relying on this section for compliance;
@@ -103,7 +103,7 @@ the same applies to the transitive Python packages pip resolves alongside it.
 
 **Supply-chain note.** Unlike the digest-pinned FFmpeg images, `yt-dlp` is
 installed **unpinned and unhashed** at image build time
-(`Dockerfile:182` — `pip3 install --no-cache-dir --break-system-packages -U
+(`Dockerfile:78` — `pip3 install --no-cache-dir --break-system-packages -U
 yt-dlp`), so the exact version conveyed in any given image is whatever PyPI
 served at build time and is not recorded in this repository. It is upgraded
 deliberately (`-U`) because extractor breakage tracks upstream site changes.
@@ -150,7 +150,7 @@ offer above.
 ## Web Application Supply-Chain Note
 
 Every package in `package-lock.json` resolves from the npm registry with an
-`integrity` hash. `server/licensing.test.ts` fails if a non-registry (git URL)
+`integrity` hash. `tests/contracts/licensing.test.ts` fails if a non-registry (git URL)
 dependency ever appears without being documented in this section; the last such
 entry, `webworkify-webpack` via `mpegts.js`, left the tree with mpegts.js 1.8.
 

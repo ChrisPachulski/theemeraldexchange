@@ -1,6 +1,6 @@
-//! `server.db`: pool, migrations and the stable server_id. The SQL is embedded
-//! from server/migrations/server by relative path until step 3 moves the
-//! directory here (git mv), so the checksums match the Node migrator's ledger.
+//! `server.db`: pool, migrations and the stable server_id. The SQL files in
+//! crates/auth/migrations are the ones the Node migrator applied (moved by
+//! git mv), so their checksums match the prod ledger.
 
 use sqlx::sqlite::{
     SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
@@ -11,7 +11,7 @@ macro_rules! migration {
         (
             $v,
             $name,
-            include_str!(concat!("../../../server/migrations/server/", $name, ".sql")),
+            include_str!(concat!("../migrations/", $name, ".sql")),
         )
     };
 }

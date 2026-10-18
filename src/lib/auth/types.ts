@@ -5,10 +5,10 @@
 
 export type Role = 'admin' | 'user'
 /** Which federated identity provider minted the session. Mirrors the
- *  server's AuthMode (session.ts). `local` is legacy/dev-only. */
-export type AuthMode = 'plex' | 'apple' | 'google' | 'workos' | 'local'
+ *  gateway's AuthMode (crates/auth). `local` is the passkey-era owner. */
+export type AuthMode = 'apple' | 'google' | 'workos' | 'local'
 export type AuthUser = {
-  /** Namespaced subject: `plex:<id>` | `apple:<subject>`. Used by the
+  /** Namespaced subject: `apple:<subject>` | `workos:user_…` | …. Used by the
    *  SPA to scope per-user localStorage (BYO API key, etc.) so a shared
    *  device that's been signed in as different family members reads the
    *  right state. The prefix also tells us which provider authed. */
@@ -16,20 +16,19 @@ export type AuthUser = {
   username: string
   role: Role
   /** Provider that authenticated this session, so chrome can render
-   *  "Signed in with Apple" vs "Signed in with Plex". May be absent on
+   *  "Signed in with Apple" vs "Signed in with WorkOS". May be absent on
    *  pre-existing sessions; derive from the `sub` prefix when missing. */
   auth_mode?: AuthMode
 }
 
-/** Best-effort provider inference when the server omits `auth_mode`
- *  (older session cookies). The sub prefix is authoritative. */
+/** Best-effort provider inference when the server omits `auth_mode`. The
+ *  sub prefix is authoritative; authUserFromApi admits only these four. */
 export function authModeFromUser(user: Pick<AuthUser, 'sub' | 'auth_mode'>): AuthMode {
   if (user.auth_mode) return user.auth_mode
   if (user.sub.startsWith('apple:')) return 'apple'
   if (user.sub.startsWith('google:')) return 'google'
   if (user.sub.startsWith('workos:')) return 'workos'
-  if (user.sub.startsWith('local:')) return 'local'
-  return 'plex'
+  return 'local'
 }
 
 export type SessionState =
@@ -45,10 +44,7 @@ export type SessionReadResult =
   | { status: 'aborted' }
 
 export type SignInState = 'idle' | 'opening' | 'pending' | 'denied' | 'error'
-export type ActiveSignIn =
-  | 'plex'
-  | 'apple'
-  | null
+export type ActiveSignIn = 'apple' | null
 
 export type AuthCtx = {
   loading: boolean
@@ -74,14 +70,6 @@ export type AuthCtx = {
   activeSignIn: ActiveSignIn
   signInError: string | null
   signOutError: string | null
-  /** Discovered Plex servers, only present when PLEX_SERVER_ID isn't set yet. */
-  discoveredServers: { name: string; id: string; owned: boolean }[] | null
-  /**
-   * Open the Plex PIN popup and poll to completion. An optional invite
-   * code is forwarded to the server for first-time redemption — a known
-   * member doesn't need one, a new member must present a valid invite.
-   */
-  signIn: (inviteCode?: string) => Promise<void>
   /**
    * Complete the web Sign in with Apple flow. The caller has already
    * obtained an Apple identity token (JWT) from AppleID.auth.signIn();
@@ -110,7 +98,6 @@ export type AuthCtx = {
    * never hides the way in.
    */
   authMethods: {
-    plex: boolean
     apple: boolean
     google: boolean
     workos?: boolean

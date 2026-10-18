@@ -5,7 +5,7 @@ import {
   readBrowserSession,
   SESSION_UNAVAILABLE_ERROR,
 } from './session'
-import type { AuthCtx, AuthUser, Role, SessionReadResult, SessionState } from './types'
+import type { AuthUser, Role, SessionReadResult, SessionState } from './types'
 
 const AUTH_INVALIDATION_CHANNEL = 'exchange:auth-change:v1'
 const SESSION_REFRESH_DEDUPE_MS = 100
@@ -17,7 +17,6 @@ export type SessionReconcileDeps = {
   signInInFlightRef: { current: boolean }
   signOutInFlightRef: { current: boolean }
   setViewAs: (role: Role | null) => void
-  setDiscoveredServers: (servers: AuthCtx['discoveredServers']) => void
 }
 
 /**
@@ -31,7 +30,6 @@ export function useSessionReconcile({
   signInInFlightRef,
   signOutInFlightRef,
   setViewAs,
-  setDiscoveredServers,
 }: SessionReconcileDeps) {
   const qc = useQueryClient()
   const [sessionState, setSessionState] = useState<SessionState>('loading')
@@ -130,7 +128,6 @@ export function useSessionReconcile({
         setSessionState('anonymous')
         setSessionError(null)
         setViewAs(null)
-        setDiscoveredServers(null)
         if (wasAuthenticated && options.broadcastAnonymous) {
           broadcastAuthInvalidation()
         }
@@ -140,7 +137,7 @@ export function useSessionReconcile({
         setSessionError(SESSION_UNAVAILABLE_ERROR)
       }
     },
-    [applyUser, broadcastAuthInvalidation, setDiscoveredServers, setViewAs],
+    [applyUser, broadcastAuthInvalidation, setViewAs],
   )
 
   const cancelScheduledSessionRefresh = useCallback(() => {

@@ -116,13 +116,9 @@ type Props = {
   onUpgrade?: () => void
   /** Whether the upgrade mutation is in flight (disables the button). */
   upgrading?: boolean
-  /** Deep link into Plex web for an in-library title. When present
-   *  alongside inLibrary=true, the action footer gains a primary
-   *  "Play in Plex →" button. Opens in a new tab. */
-  playUrl?: string | null
   /** When the title exists in the local media-core library, the footer gains a
    *  primary "Play Direct here" button that streams it in-browser (direct-play
-   *  or transcoded HLS) instead of bouncing to Plex. */
+   *  or transcoded HLS). */
   onPlayDirect?: () => void
   /** Label for the direct-play button (e.g. "Resume · 42 min left" for a
    *  movie, "Resume S1E2" for a show). Defaults to "Play Direct here". */
@@ -130,7 +126,7 @@ type Props = {
   /** In library but nothing exists to play yet (unreleased title, or
    *  released but not downloaded). Rendered as a non-interactive status
    *  note in the footer where a play button would otherwise sit — callers
-   *  are expected to suppress playUrl/onPlayDirect alongside setting it. */
+   *  are expected to suppress onPlayDirect alongside setting it. */
   unavailableNote?: string | null
   /** Admin-only "Advanced" power-user actions surface (Sonarr/Radarr). When
    *  provided, the footer gains an "Advanced" toggle that reveals this node
@@ -180,7 +176,6 @@ export function DetailModal({
   defaultSeason,
   onUpgrade,
   upgrading,
-  playUrl,
   onPlayDirect,
   playDirectLabel,
   unavailableNote,
@@ -361,22 +356,6 @@ export function DetailModal({
                   >
                     {playDirectLabel ?? 'Play Direct here'}
                   </button>
-                )}
-                {/* Recorded PRODUCT.md exception (re-review fix3, orchestrator
-                    decision): a TRANSITIONAL per-title affordance beyond the
-                    Watch-entry exception, kept while Plex remains the household's
-                    playback surface. It stays available to every member (playback
-                    is not an operator action). Expected to retire when in-app
-                    playback fully covers the library. */}
-                {inLibrary && playUrl && (
-                  <a
-                    className={`detail__btn ${onPlayDirect ? 'detail__btn--secondary' : 'detail__btn--primary'}`}
-                    href={playUrl}
-                    target="_blank"
-                    rel="noopener"
-                  >
-                    Play in Plex -&gt;
-                  </a>
                 )}
               </div>
 

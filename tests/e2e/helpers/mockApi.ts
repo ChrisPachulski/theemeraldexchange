@@ -23,13 +23,13 @@ export type MockUser = {
 }
 
 export const ADMIN_USER: MockUser = {
-  sub: 'plex:1001',
+  sub: 'workos:user_01HE2E0ADM1N00000000000001',
   username: 'Admin',
   role: 'admin',
 }
 
 export const REGULAR_USER: MockUser = {
-  sub: 'plex:1002',
+  sub: 'workos:user_01HE2E0VSER000000000000002',
   username: 'Someone',
   role: 'user',
 }
@@ -56,7 +56,7 @@ export async function installBackgroundMocks(page: Page) {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ plex: true, apple: false, google: false, workos: false }),
+      body: JSON.stringify({ apple: false, google: false, workos: false }),
     }),
   )
 
@@ -105,16 +105,6 @@ export async function installBackgroundMocks(page: Page) {
       body: '{}',
     })
   })
-
-  // Plex deep-link metadata. The hook fetches both endpoints and just
-  // uses them for "Play in Plex" hrefs; safe to return empty.
-  await page.route('**/api/plex/**', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({}),
-    }),
-  )
 
   // Sonarr / Radarr library + queue endpoints not otherwise mocked.
   await page.route('**/api/sonarr/api/v3/**', (route) =>

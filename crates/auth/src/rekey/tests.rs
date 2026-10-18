@@ -16,10 +16,8 @@ const SECRET: &str = "rekey-test-session-secret-0123456789abcdef-XYZ";
 /// 'eex/user-api-key/v1:plex:1001') for "sk-ant-test-key-1234" under SECRET.
 const NODE_CIPHERTEXT: &str = "AAECAwQFBgcICQoLpADpulrRs8UmgZ9EI5DkFsaN3Eg030ib1M0QTND7MmAluhgQ";
 
-/// Where each store's migrations live. server.db's move to crates/auth at
-/// step 3 (git mv) is listed ahead of time.
+/// Where each store's migrations live.
 const MIGRATION_DIRS: &[(&str, Store)] = &[
-    ("server/migrations/server", Store::Server),
     ("crates/auth/migrations", Store::Server),
     ("crates/iptv/migrations", Store::Iptv),
     ("crates/media-core/migrations", Store::Media),

@@ -77,7 +77,7 @@ cat <<'DONE'
 
     docker compose up -d
 
-Make yourself the owner: put your provider sub (workos:user_..., plex:<id>,
+Make yourself the owner: put your provider sub (workos:user_...,
 apple:<subject> or google:<subject>) in ADMIN_SUBS in .env, then
 `docker compose up -d` again. Sign in with that provider and invite the
 household from the avatar menu.

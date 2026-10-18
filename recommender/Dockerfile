@@ -39,7 +39,6 @@ COPY Cargo.toml Cargo.lock LICENSE ./
 # sibling crates is cheap (Rust source only) and avoids needing to
 # patch the workspace manifest at build time.
 COPY crates/emerald-contracts ./crates/emerald-contracts
-COPY crates/emerald-contracts-napi ./crates/emerald-contracts-napi
 COPY crates/emerald-contracts-pyo3 ./crates/emerald-contracts-pyo3
 COPY crates/media-core ./crates/media-core
 COPY crates/transcoder ./crates/transcoder

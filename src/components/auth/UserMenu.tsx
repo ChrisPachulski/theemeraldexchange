@@ -33,7 +33,6 @@ const APP_LINKS = [
 ] as const
 
 const PROVIDER_LABELS: Record<AuthMode, string> = {
-  plex: 'Plex',
   apple: 'Apple',
   google: 'Google',
   workos: 'WorkOS',

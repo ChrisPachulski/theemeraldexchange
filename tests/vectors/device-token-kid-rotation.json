@@ -19,7 +19,7 @@
       "JWE tokens are NOT deterministic (random 12-byte IV per encrypt). Consumers MUST decrypt and compare the claims object, not the token bytes.",
       "expectedClaims keys use the canonical wire serialization of emerald-contracts::device_token::DeviceClaims (snake_case, flat device_id/device_platform). The N-API binding exposes the same fields camelCased (deviceId/devicePlatform); the wire bytes inside the JWE are snake_case.",
       "ULID charset check: 01HWXYZ01234567890ABCDEFGS, 01HWXYZ01234567890ABCDEFGT, 01HWXYZ01234567890ABCDEFGV, 01HWXYZ01234567890ABCDEFGW — all Crockford Base32, no I/L/O/U.",
-      "Executed by: crates/emerald-contracts/tests/vectors.rs (Rust) and server/services/contractsBinding.test.ts (TS via the production N-API binding — the same functions server/session.ts mint/verify call)."
+      "Executed by: crates/emerald-contracts/tests/vectors.rs (Rust; crates/auth mints and verifies device tokens through the same functions)."
     ]
   },
   "keyMap": {

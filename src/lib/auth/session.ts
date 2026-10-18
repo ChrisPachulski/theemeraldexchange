@@ -20,7 +20,7 @@ function isProviderSub(value: unknown): value is string {
   const providerId = value.slice(separator + 1)
   return (
     separator > 0 &&
-    ['plex', 'apple', 'google', 'workos', 'local'].includes(provider) &&
+    ['apple', 'google', 'workos', 'local'].includes(provider) &&
     Boolean(providerId.trim())
   )
 }
@@ -43,7 +43,6 @@ export function authUserFromApi(value: unknown): AuthUser | null {
   if (role !== 'admin' && role !== 'user') return null
   if (
     authMode !== undefined &&
-    authMode !== 'plex' &&
     authMode !== 'apple' &&
     authMode !== 'google' &&
     authMode !== 'workos' &&

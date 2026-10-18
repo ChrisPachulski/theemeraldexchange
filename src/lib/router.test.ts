@@ -14,7 +14,7 @@ afterEach(() => {
 })
 
 describe('parseHash', () => {
-  const routes: Route[] = ['home', 'tv', 'movies', 'live', 'downloads', 'users', 'youtube', 'music']
+  const routes: Route[] = ['home', 'tv', 'movies', 'live', 'downloads', 'youtube', 'music']
 
   it.each(routes)('resolves canonical #/%s to itself', (route) => {
     stubHash(`#/${route}`)
@@ -83,7 +83,7 @@ describe('nextHash', () => {
   it('builds #/<next> for a route change', () => {
     expect(nextHash('home', 'tv')).toBe('#/tv')
     expect(nextHash('movies', 'live')).toBe('#/live')
-    expect(nextHash('users', 'home')).toBe('#/home')
+    expect(nextHash('downloads', 'home')).toBe('#/home')
   })
 })
 

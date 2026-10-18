@@ -44,7 +44,7 @@ describe('AppleSignInButton shared ceremony state', () => {
         }
         if (url.endsWith('/api/auth/methods')) {
           return Promise.resolve(
-            json({ plex: true, apple: true, google: false, workos: false }),
+            json({ apple: true, google: false, workos: false }),
           )
         }
         return Promise.reject(new Error(`unexpected fetch: ${url}`))

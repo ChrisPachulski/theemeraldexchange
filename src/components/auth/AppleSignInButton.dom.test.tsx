@@ -11,10 +11,7 @@ const mocks = vi.hoisted(() => ({
   beginAppleSignIn: vi.fn(),
   cancelAppleSignIn: vi.fn(),
   runAppleSignIn: vi.fn(),
-  activeSignIn: null as
-    | 'plex'
-    | 'apple'
-    | null,
+  activeSignIn: null as 'apple' | null,
 }))
 
 vi.mock('../../lib/auth', () => ({
@@ -42,17 +39,6 @@ describe('AppleSignInButton browser behavior', () => {
   afterEach(() => {
     cleanup()
     vi.clearAllMocks()
-  })
-
-  it('keeps Apple copy static while Plex is active', () => {
-    mocks.activeSignIn = 'plex'
-
-    render(<AppleSignInButton />)
-
-    const button = screen.getByRole('button', { name: 'Sign in with Apple' })
-    expect(button).toBeDisabled()
-    expect(button).toHaveTextContent('Sign in with Apple')
-    expect(button).not.toHaveTextContent('Signing in…')
   })
 
   it.each([
