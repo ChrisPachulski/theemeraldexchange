@@ -71,7 +71,7 @@ fn failed(code: &str, reply: &Reply) -> Response {
 }
 
 /// A JS value interpolated into a path.
-fn js_string(v: &Value) -> String {
+pub(crate) fn js_string(v: &Value) -> String {
     match v {
         Value::Number(n) => n
             .as_f64()

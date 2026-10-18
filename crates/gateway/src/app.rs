@@ -47,6 +47,8 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::routes::router())
         .merge(crate::arr::router())
         .merge(crate::tmdb::router())
+        .merge(crate::suggestions::router(&state))
+        .merge(crate::usage::router())
         .with_state(state.clone())
         .merge(auth::router(state.auth.clone()));
     edge(routes, &state)

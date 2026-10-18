@@ -68,7 +68,7 @@ pub struct Config {
     pub ext: External,
 }
 
-/// Where TMDB, OMDb, Wikidata and Rotten Tomatoes live and which binaries
+/// Where TMDB, OMDb, Wikidata, Rotten Tomatoes and Anthropic live and which binaries
 /// resolve and mux trailers. The defaults are production's; only
 /// EEX_YTRESOLVE_BIN is read from env (as in TS), and tests point the rest
 /// at local fakes and stubs.
@@ -78,6 +78,8 @@ pub struct External {
     pub omdb_base: String,
     pub wikidata_sparql: String,
     pub rt_base: String,
+    /// The Messages API (`{base}/v1/messages`).
+    pub anthropic_base: String,
     pub ytresolve_bin: String,
     pub ytdlp_bin: String,
     pub ffmpeg_bin: String,
@@ -93,6 +95,7 @@ impl External {
             omdb_base: "https://www.omdbapi.com/".into(),
             wikidata_sparql: "https://query.wikidata.org/sparql".into(),
             rt_base: "https://www.rottentomatoes.com/".into(),
+            anthropic_base: "https://api.anthropic.com".into(),
             ytresolve_bin: ytresolve_bin.unwrap_or_else(|| "eex-ytresolve".into()),
             ytdlp_bin: "yt-dlp".into(),
             ffmpeg_bin: "ffmpeg".into(),

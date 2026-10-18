@@ -62,7 +62,7 @@ pub struct RecommenderError {
 /// The server_id the principal names, memoized after the first success
 /// (resolving it writes server.db). A failure degrades this call to no
 /// Bearer and is retried on the next.
-async fn server_id(st: &AppState) -> Option<String> {
+pub(crate) async fn server_id(st: &AppState) -> Option<String> {
     st.server_id
         .get_or_try_init(|| auth::ensure_server_id(&st.auth.pool))
         .await

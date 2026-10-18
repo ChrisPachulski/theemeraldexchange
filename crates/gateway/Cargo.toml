@@ -36,6 +36,8 @@ indexmap = { version = "2", features = ["serde"] }
 # raw_value: grab-log lines are served as written.
 serde_json = { workspace = true, features = ["raw_value"] }
 regex.workspace = true
+# The candidate pool's per-request shuffle.
+rand.workspace = true
 ulid.workspace = true
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"

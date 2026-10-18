@@ -914,6 +914,7 @@ dependencies = [
  "http-body-util",
  "indexmap",
  "media-core",
+ "rand",
  "regex",
  "reqwest 0.12.28",
  "sentry",

@@ -13,11 +13,13 @@ pub mod ratings;
 pub mod recommender;
 pub mod routes;
 pub mod stores;
+pub mod suggestions;
 pub mod syncplay;
 pub mod telemetry;
 pub mod tmdb;
 pub mod trailer;
 pub mod upstream;
+pub mod usage;
 
 #[cfg(test)]
 mod edge_goldens;
@@ -58,6 +60,10 @@ pub struct AppState {
     pub ratings: Arc<ratings::Ratings>,
     /// Trailer resolver caches and the mux single-flight.
     pub trailers: Arc<trailer::Trailers>,
+    /// The suggestion strip's caches, rotation and media.db handle.
+    pub suggestions: Arc<suggestions::Suggestions>,
+    /// data/usage.jsonl: one line per Claude call.
+    pub usage: Arc<jsonl::JsonlLog>,
 }
 
 impl AppState {
@@ -73,6 +79,8 @@ impl AppState {
             arr: Arc::new(arr::ArrState::new(&config, arr::shared::Timings::default())),
             ratings: Arc::default(),
             trailers: Arc::default(),
+            suggestions: Arc::default(),
+            usage: Arc::new(jsonl::JsonlLog::new(&config.usage_log_path)),
             config: Arc::new(config),
         }
     }

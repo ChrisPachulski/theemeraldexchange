@@ -44,6 +44,7 @@ pub fn config(extra: &[(&str, &str)]) -> Config {
     config.ext.omdb_base = format!("{dead}/omdb/");
     config.ext.wikidata_sparql = format!("{dead}/wikidata/sparql");
     config.ext.rt_base = format!("{dead}/rt/");
+    config.ext.anthropic_base = format!("{dead}/anthropic");
     for bin in [
         &mut config.ext.ytresolve_bin,
         &mut config.ext.ytdlp_bin,
