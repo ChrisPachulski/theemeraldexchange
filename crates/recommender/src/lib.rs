@@ -2,10 +2,14 @@
 //! `/events/*` to the gateway. Port of the Python `recommender/` service.
 
 pub mod config;
+pub mod context;
 pub mod db;
 pub mod holdout;
 pub mod http;
 pub mod metrics;
+pub mod reasons;
+pub mod recipes;
+pub mod retrieval;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

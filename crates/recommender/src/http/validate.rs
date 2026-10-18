@@ -62,6 +62,27 @@ pub struct Rejection {
     pub tmdb_id: i64,
 }
 
+pub struct LibraryItem {
+    pub tmdb_id: Option<i64>,
+    pub title: Option<String>,
+}
+
+/// ScoreRequest. LibraryItem.source is checked but not kept (it only fed the
+/// dead persist_library upsert).
+pub struct Score {
+    pub sub: String,
+    pub kind: &'static str,
+    pub n: i64,
+    pub exclude_recently_shown: bool,
+    pub library: Option<Vec<LibraryItem>>,
+    /// (tmdb_id, signal)
+    pub feedback: Option<Vec<(i64, &'static str)>>,
+    pub household_rejections: Option<Vec<i64>>,
+}
+
+/// The max_length of the three ScoreRequest lists.
+const SCORE_LIST_MAX: usize = 5000;
+
 pub type Errors = Vec<Value>;
 
 #[derive(Default)]
@@ -208,8 +229,8 @@ impl V {
         Some(n)
     }
 
-    /// Lax `int` with ge=0: integral floats, bools and numeric strings coerce.
-    fn lax_int_ge0(&mut self, x: &Value, loc: &[Value]) -> Option<i64> {
+    /// Lax `int`: integral floats, bools and numeric strings coerce.
+    fn lax_int(&mut self, x: &Value, loc: &[Value]) -> Option<i64> {
         let n = match x {
             Value::Number(num) => match num.as_i64() {
                 Some(n) => Some(n),
@@ -242,21 +263,79 @@ impl V {
             },
             _ => None,
         };
-        let Some(n) = n else {
+        if n.is_none() {
             self.push("int_type", loc, "Input should be a valid integer", x);
-            return None;
-        };
-        if n < 0 {
+        }
+        n
+    }
+
+    /// Lax `int` with ge/le bounds.
+    fn lax_int_in(&mut self, x: &Value, loc: &[Value], ge: i64, le: Option<i64>) -> Option<i64> {
+        let n = self.lax_int(x, loc)?;
+        if n < ge {
             self.push_ctx(
                 "greater_than_equal",
                 loc,
-                "Input should be greater than or equal to 0",
+                format!("Input should be greater than or equal to {ge}"),
                 x,
-                json!({ "ge": 0 }),
+                json!({ "ge": ge }),
+            );
+            return None;
+        }
+        if let Some(le) = le
+            && n > le
+        {
+            self.push_ctx(
+                "less_than_equal",
+                loc,
+                format!("Input should be less than or equal to {le}"),
+                x,
+                json!({ "le": le }),
             );
             return None;
         }
         Some(n)
+    }
+
+    fn lax_int_ge0(&mut self, x: &Value, loc: &[Value]) -> Option<i64> {
+        self.lax_int_in(x, loc, 0, None)
+    }
+
+    /// Lax `bool`: 0/1 numbers and pydantic's yes/no words, any case.
+    fn lax_bool(&mut self, x: &Value, loc: &[Value]) -> Option<bool> {
+        const TRUE: &[&str] = &["1", "on", "t", "true", "y", "yes"];
+        const FALSE: &[&str] = &["0", "off", "f", "false", "n", "no"];
+        let parsing = "Input should be a valid boolean, unable to interpret input";
+        match x {
+            Value::Bool(b) => return Some(*b),
+            Value::Number(n) if n.is_i64() || n.is_u64() => match n.as_i64() {
+                Some(0) => return Some(false),
+                Some(1) => return Some(true),
+                _ => self.push("bool_parsing", loc, parsing, x),
+            },
+            Value::Number(n) if n.as_f64() == Some(0.0) => return Some(false),
+            Value::Number(n) if n.as_f64() == Some(1.0) => return Some(true),
+            Value::String(s) => {
+                let l = s.to_ascii_lowercase();
+                if TRUE.contains(&l.as_str()) {
+                    return Some(true);
+                }
+                if FALSE.contains(&l.as_str()) {
+                    return Some(false);
+                }
+                self.push("bool_parsing", loc, parsing, x);
+            }
+            _ => self.push("bool_type", loc, "Input should be a valid boolean", x),
+        }
+        None
+    }
+
+    /// `str | None`.
+    fn opt_string(&mut self, x: &Value, loc: &[Value]) -> Option<Option<String>> {
+        match x {
+            Value::Null => Some(None),
+            _ => self.string(x, loc).map(Some),
+        }
     }
 
     /// Lax `float`: numbers, bools and numeric strings.
@@ -461,6 +540,76 @@ pub fn rejection(body: &Body) -> Result<Rejection, Errors> {
         Some(Rejection {
             kind: kind?,
             tmdb_id: tmdb_id?,
+        })
+    })();
+    v.finish(out)
+}
+
+fn library_item(v: &mut V, x: &Value, loc: &[Value]) -> Option<LibraryItem> {
+    let o = v.model(x, loc.to_vec())?;
+    let tmdb_id = match o.opt("tmdb_id") {
+        None | Some((Value::Null, _)) => Some(None),
+        Some((x, loc)) => v.positive_strict_int(x, &loc).map(Some),
+    };
+    let mut opt_str = |key| match o.opt(key) {
+        None => Some(None),
+        Some((x, loc)) => v.opt_string(x, &loc),
+    };
+    let title = opt_str("title");
+    let source = opt_str("source");
+    source?;
+    Some(LibraryItem {
+        tmdb_id: tmdb_id?,
+        title: title?,
+    })
+}
+
+fn feedback_entry(v: &mut V, x: &Value, loc: &[Value]) -> Option<(i64, &'static str)> {
+    let o = v.model(x, loc.to_vec())?;
+    let tmdb_id = field!(v, o, "tmdb_id", positive_strict_int);
+    let signal = field!(v, o, "signal", literal, SIGNALS);
+    Some((tmdb_id?, signal?))
+}
+
+pub fn score(body: &Body) -> Result<Score, Errors> {
+    let v = &mut V::default();
+    let Some(o) = v.body(body) else {
+        return Err(std::mem::take(&mut v.errors));
+    };
+    let sub = field!(v, o, "sub", sub);
+    let kind = field!(v, o, "kind", literal, KINDS);
+    let n = match o.opt("n") {
+        None => Some(20),
+        Some((x, loc)) => v.lax_int_in(x, &loc, 1, Some(50)),
+    };
+    let exclude_recently_shown = match o.opt("exclude_recently_shown") {
+        None => Some(true),
+        Some((x, loc)) => v.lax_bool(x, &loc),
+    };
+    // Each list: absent or null means "use the stored rows".
+    let library = match o.opt("library") {
+        None | Some((Value::Null, _)) => Some(None),
+        Some((x, loc)) => v.list(x, &loc, SCORE_LIST_MAX, library_item).map(Some),
+    };
+    let feedback = match o.opt("feedback") {
+        None | Some((Value::Null, _)) => Some(None),
+        Some((x, loc)) => v.list(x, &loc, SCORE_LIST_MAX, feedback_entry).map(Some),
+    };
+    let household_rejections = match o.opt("household_rejections") {
+        None | Some((Value::Null, _)) => Some(None),
+        Some((x, loc)) => v
+            .list(x, &loc, SCORE_LIST_MAX, V::positive_strict_int)
+            .map(Some),
+    };
+    let out = (|| {
+        Some(Score {
+            sub: sub?,
+            kind: kind?,
+            n: n?,
+            exclude_recently_shown: exclude_recently_shown?,
+            library: library?,
+            feedback: feedback?,
+            household_rejections: household_rejections?,
         })
     })();
     v.finish(out)

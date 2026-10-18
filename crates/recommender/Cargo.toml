@@ -22,6 +22,7 @@ media-core = { path = "../media-core" }
 # parse_sub and internal-principal claims.
 emerald-contracts = { path = "../emerald-contracts" }
 axum = { version = "0.8", features = ["json"] }
+serde.workspace = true
 serde_json.workspace = true
 subtle.workspace = true
 # /metrics/funnel reads its query by hand (FastAPI semantics: last value wins).

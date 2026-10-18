@@ -1,6 +1,6 @@
-//! The HTTP surface of `recommender/app/main.py`: /health, /events/* and
-//! /metrics/funnel (/score comes with the recipes). Every route but /health
-//! sits behind the x-recommender-secret gate; the event writers also verify
+//! The HTTP surface of `recommender/app/main.py`: /health, /score, /events/*
+//! and /metrics/funnel. Every route but /health
+//! sits behind the x-recommender-secret gate; /score and the event writers verify
 //! the internal-principal Bearer the gateway mints.
 //!
 //! Checks run in FastAPI's order: an unparsable JSON body is a 422 before
@@ -8,6 +8,7 @@
 //! schema (422), then the handler (403 on a sub mismatch in enforce).
 
 pub mod events;
+pub mod score;
 pub mod validate;
 
 use std::sync::Arc;
@@ -40,6 +41,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/metrics/funnel", get(funnel))
+        .route("/score", post(score::score))
         .route("/events/feedback", post(events::feedback))
         .route("/events/feedback/clear", post(events::clear_feedback))
         .route("/events/shown", post(events::shown))
@@ -65,6 +67,12 @@ pub enum ApiError {
 
 impl From<sqlx::Error> for ApiError {
     fn from(e: sqlx::Error) -> Self {
+        ApiError::Internal(e.to_string())
+    }
+}
+
+impl From<crate::Error> for ApiError {
+    fn from(e: crate::Error) -> Self {
         ApiError::Internal(e.to_string())
     }
 }

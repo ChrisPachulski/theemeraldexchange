@@ -588,3 +588,266 @@ async fn python_goldens() {
     }
     assert!(steps_run > 200, "{steps_run}");
 }
+
+// ---- /score ----------------------------------------------------------------
+
+// test_main_principal.py test_score_enforce_rejects_body_sub_mismatch: /score
+// binds the verified principal like the writers do.
+#[tokio::test]
+async fn score_enforce_rejects_body_sub_mismatch() {
+    let a = app(&[
+        ("RECOMMENDER_EVENT_SECRET", EVENT),
+        ("RECOMMENDER_INTERNAL_PRINCIPAL_MODE", "enforce"),
+        ("INTERNAL_PRINCIPAL_SECRET", SECRET),
+    ])
+    .await;
+    let send = |sub: &str| {
+        Request::post("/score")
+            .header("x-recommender-secret", EVENT)
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {}", mint("plex:1001")))
+            .body(HttpBody::from(
+                json!({"sub": sub, "kind": "movie", "n": 5}).to_string(),
+            ))
+            .unwrap()
+    };
+    let (status, body) = a.send(send("plex:2002")).await;
+    assert_eq!(status, 403, "{body}");
+    let (status, body) = a.send(send("plex:1001")).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["recipe"], "cold_start_trending");
+}
+
+fn splitmix(mut state: u64) -> impl FnMut() -> u64 {
+    move || {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+}
+
+/// gen_score_goldens.py's embedding(): every value is k/256, exact in f32.
+fn golden_embedding(kind: &str, tmdb_id: u64, cluster: u64) -> Vec<f32> {
+    let mut c = splitmix(1000 + cluster);
+    let mut r = splitmix(tmdb_id * 2 + u64::from(kind == "tv"));
+    (0..crate::db::EMBED_DIM)
+        .map(|_| {
+            let v = (c() >> 56) as i64 - 128 + 2 * ((r() >> 58) as i64 - 32);
+            v as f32 / 256.0
+        })
+        .collect()
+}
+
+async fn seed_score_golden(pool: &SqlitePool, g: &Value) {
+    for r in g["catalog"].as_array().unwrap() {
+        let (kind, id) = (r["kind"].as_str().unwrap(), r["tmdb_id"].as_i64().unwrap());
+        sqlx::query(
+            "INSERT INTO titles(tmdb_id, kind, title, year, release_date, overview, poster_path,
+                                vote_average, vote_count, popularity, status, adult, fetched_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '2026-01-01')",
+        )
+        .bind(id)
+        .bind(kind)
+        .bind(r["title"].as_str())
+        .bind(r["year"].as_i64())
+        .bind(r["release_date"].as_str())
+        .bind(r["overview"].as_str())
+        .bind(r["poster_path"].as_str())
+        .bind(r["vote_average"].as_f64())
+        .bind(r["vote_count"].as_i64())
+        .bind(r["popularity"].as_f64())
+        .bind(r["status"].as_str())
+        .execute(pool)
+        .await
+        .unwrap();
+        for genre in r["genres"].as_array().unwrap() {
+            sqlx::query("INSERT INTO title_genres VALUES (?, ?, ?)")
+                .bind(id)
+                .bind(kind)
+                .bind(genre.as_i64())
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        let blob = crate::db::serialize_f32(&golden_embedding(
+            kind,
+            id as u64,
+            r["cluster"].as_u64().unwrap(),
+        ));
+        if r["features"] == true {
+            sqlx::query("INSERT INTO title_features VALUES (?, ?, '{}', ?, 384, '2026-01-01')")
+                .bind(id)
+                .bind(kind)
+                .bind(&blob)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+        if r["vec"] == true {
+            sqlx::query("INSERT INTO title_vec(rowid, kind, embedding) VALUES (?, ?, ?)")
+                .bind(crate::db::encode_vec_rowid(kind, id).unwrap())
+                .bind(kind)
+                .bind(&blob)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+    let h = &g["household"];
+    let rows = |t: &str| h[t].as_array().unwrap().clone();
+    for r in rows("library_items") {
+        sqlx::query("INSERT INTO library_items VALUES (?, ?, 'radarr', '2026-01-01')")
+            .bind(r[0].as_str())
+            .bind(r[1].as_i64())
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    for r in rows("user_feedback") {
+        sqlx::query("INSERT INTO user_feedback VALUES (?, ?, ?, ?, '2026-01-01')")
+            .bind(r[0].as_str())
+            .bind(r[1].as_str())
+            .bind(r[2].as_i64())
+            .bind(r[3].as_str())
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    for r in rows("household_rejections") {
+        sqlx::query("INSERT INTO household_rejections VALUES (?, ?, '2026-01-01')")
+            .bind(r[0].as_str())
+            .bind(r[1].as_i64())
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+    for r in rows("recently_shown") {
+        sqlx::query(
+            "INSERT INTO recently_shown VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', ?))",
+        )
+        .bind(r[0].as_str())
+        .bind(r[1].as_str())
+        .bind(r[2].as_i64())
+        .bind(format!("-{} minutes", r[3]))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+}
+
+/// Replays tests/fixtures/score-goldens.json (recorded from the untouched
+/// FastAPI /score by gen_score_goldens.py over a synthetic catalog): item ids
+/// and order exactly, scores within 1e-5, every other item field, and the
+/// diag block except elapsed_ms (its key must still be there).
+#[tokio::test]
+async fn score_goldens() {
+    let g: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/score-goldens.json")).unwrap();
+    let event = g["event_secret"].as_str().unwrap();
+    let a = app(&[]).await;
+    seed_score_golden(&a.pool, &g).await;
+    let mut scored = 0;
+    for sc in g["scenarios"].as_array().unwrap() {
+        let name = sc["name"].as_str().unwrap();
+        sqlx::query("DELETE FROM model_config")
+            .execute(&a.pool)
+            .await
+            .unwrap();
+        for r in sc["model_config"].as_array().unwrap() {
+            sqlx::query(
+                "INSERT INTO model_config(version, recipe, params_json, active, created_at)
+                 VALUES (?, ?, ?, ?, '2026-01-01')",
+            )
+            .bind(r[0].as_str())
+            .bind(r[1].as_str())
+            .bind(r[2].as_str())
+            .bind(r[3].as_i64())
+            .execute(&a.pool)
+            .await
+            .unwrap();
+        }
+        let c = &sc["config"];
+        let threshold = c["cold_start_threshold"].as_i64().unwrap_or(10).to_string();
+        let recipe = c["default_recipe"].as_str().unwrap_or("mmr_diverse");
+        let cfg = config(&[
+            ("RECOMMENDER_DB_PATH", a.db_path.as_str()),
+            ("RECOMMENDER_EVENT_SECRET", event),
+            ("RECOMMENDER_INTERNAL_PRINCIPAL_MODE", "off"),
+            ("RECOMMENDER_COLD_START_THRESHOLD", threshold.as_str()),
+            ("RECOMMENDER_DEFAULT_RECIPE", recipe),
+        ]);
+        let r = router(AppState {
+            pool: a.pool.clone(),
+            config: Arc::new(cfg),
+        });
+        let mut req =
+            Request::post("/score").header("x-recommender-secret", sc["secret"].as_str().unwrap());
+        let body = match sc["raw"].as_str() {
+            Some(raw) => {
+                req = req.header("content-type", "application/json");
+                HttpBody::from(raw.to_string())
+            }
+            None => HttpBody::empty(),
+        };
+        let res = r.oneshot(req.body(body).unwrap()).await.unwrap();
+        let status = res.status().as_u16();
+        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let got: Value = serde_json::from_slice(&bytes).unwrap();
+        let expect = &sc["expect"];
+        assert_eq!(
+            status as u64,
+            expect["status"].as_u64().unwrap(),
+            "{name}: {got}"
+        );
+        let want = &expect["body"];
+        if status != 200 {
+            assert_eq!(
+                normalize("/score", &got),
+                normalize("/score", want),
+                "{name}"
+            );
+            continue;
+        }
+        scored += 1;
+        for key in ["model_version", "recipe"] {
+            assert_eq!(got[key], want[key], "{name}: {key}");
+        }
+        let (gi, wi) = (
+            got["items"].as_array().unwrap(),
+            want["items"].as_array().unwrap(),
+        );
+        let ids = |v: &Vec<Value>| {
+            v.iter()
+                .map(|i| i["tmdb_id"].as_i64().unwrap())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(gi), ids(wi), "{name}: ids");
+        for (x, y) in gi.iter().zip(wi) {
+            let (sx, sy) = (x["score"].as_f64().unwrap(), y["score"].as_f64().unwrap());
+            assert!(
+                (sx - sy).abs() <= 1e-5,
+                "{name} {}: score {sx} vs {sy}",
+                y["tmdb_id"]
+            );
+            let strip = |v: &Value| {
+                let mut v = v.clone();
+                v.as_object_mut().unwrap().remove("score");
+                v
+            };
+            assert_eq!(strip(x), strip(y), "{name}: item");
+        }
+        let mut gd = got["diag"].as_object().unwrap().clone();
+        let mut wd = want["diag"].as_object().unwrap().clone();
+        assert!(
+            gd.remove("elapsed_ms").is_some_and(|v| v.is_f64()),
+            "{name}: elapsed_ms"
+        );
+        wd.remove("elapsed_ms");
+        assert_eq!(gd, wd, "{name}: diag");
+    }
+    assert!(scored >= 25, "{scored}");
+}
