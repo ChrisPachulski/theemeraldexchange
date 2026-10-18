@@ -11,6 +11,7 @@ pub mod config;
 pub mod jsonl;
 pub mod media_token;
 pub mod parental;
+pub mod plex;
 pub mod principal;
 pub mod proxy;
 pub mod ratings;
@@ -72,6 +73,8 @@ pub struct AppState {
     pub proxy: Arc<proxy::Proxy>,
     /// Radarr/Sonarr certification caches for the rating gate.
     pub certs: Arc<parental::Certs>,
+    /// The per-sub "Play in Plex" link maps.
+    pub plex_links: Arc<plex::Links>,
     /// POST /api/telemetry/tunnel's bucket.
     pub tunnel: Arc<media_core::rate_limit::RateLimiter>,
 }
@@ -93,6 +96,7 @@ impl AppState {
             usage: Arc::new(jsonl::JsonlLog::new(&config.usage_log_path)),
             proxy: Arc::default(),
             certs: Arc::default(),
+            plex_links: Arc::default(),
             tunnel: Arc::new(telemetry::tunnel_limiter()),
             config: Arc::new(config),
         }

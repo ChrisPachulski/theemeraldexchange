@@ -50,6 +50,7 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::suggestions::router(&state))
         .merge(crate::usage::router())
         .merge(crate::account::router())
+        .merge(crate::plex::router())
         .merge(crate::telemetry::router())
         .merge(crate::proxy::iptv::router(&state))
         .merge(media_routes(&state))

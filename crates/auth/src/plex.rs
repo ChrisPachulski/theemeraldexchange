@@ -327,6 +327,26 @@ impl Plex {
         }
     }
 
+    /// A GET on our PMS (`PLEX_SERVER_URL` + `path`) as `token`, for the
+    /// gateway's library links and remote-access diagnostic, which send it
+    /// through their own timeout. Like every Plex request it follows no
+    /// redirect, so the token stays on the PMS.
+    pub fn pms_get(
+        &self,
+        config: &Config,
+        path: &str,
+        token: &str,
+        accept: &str,
+    ) -> RequestBuilder {
+        self.http
+            .get(format!(
+                "{}{path}",
+                config.plex_server_url.trim_end_matches('/')
+            ))
+            .header("X-Plex-Token", token)
+            .header(ACCEPT, accept)
+    }
+
     /// Plex Home profiles under the owner's account (not shares).
     pub async fn list_home_users(&self, config: &Config, token: &str) -> Result<Vec<PlexFriend>> {
         const OP: &str = "listHomeUsers";

@@ -1,6 +1,6 @@
 //! Replays tests/fixtures/edge-goldens.json through [`crate::router`]. The
-//! generator (gen-gateway-goldens.ts) ran the untouched TS app (server/app.ts)
-//! under the same env; here every scenario must give the same status, the
+//! generator (gen-gateway-goldens.ts) ran the untouched TS app (server/app.ts;
+//! the `plex ...` scenarios from the main checkout's) under the same env; here every scenario must give the same status, the
 //! same body text, the same edge headers and the same request log lines.
 //!
 //! Documented deltas, applied to the TS side before comparing:
@@ -82,6 +82,8 @@ async fn golden_state(dir: &tempfile::TempDir) -> AppState {
     env.push(("PLEX_CLIENT_ID", "edge-golden-plex-client"));
     let mut st = state_in(dir, &env).await;
     st.spa_dir = Some(dir.path().join("dist"));
+    // The generator's members row: requireAuth reconciles the cookie with it.
+    add_member(&st, g["member"].as_str().unwrap(), "Mom", "user").await;
     st
 }
 

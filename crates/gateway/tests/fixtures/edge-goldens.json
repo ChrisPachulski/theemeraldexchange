@@ -367,6 +367,124 @@
         "[app] <-- GET /assets/app.js [<request-id>] ua=\"-\"",
         "[app] --> GET /assets/app.js 200 <ms>ms [<request-id>]"
       ]
+    },
+    {
+      "name": "plex library-links without a session",
+      "path": "/api/plex/library-links",
+      "request_id_generated": true,
+      "status": 401,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"error\":\"unauthenticated\"}",
+      "logs": [
+        "[app] <-- GET /api/plex/library-links [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/plex/library-links 401 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "plex library-links as a member, no plex token",
+      "path": "/api/plex/library-links",
+      "cookie": true,
+      "request_id_generated": true,
+      "status": 409,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"error\":\"no_plex_token\"}",
+      "logs": [
+        "[app] <-- GET /api/plex/library-links [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/plex/library-links 409 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "plex server-id as a member",
+      "path": "/api/plex/server-id",
+      "cookie": true,
+      "request_id_generated": true,
+      "status": 200,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"serverId\":null}",
+      "logs": [
+        "[app] <-- GET /api/plex/server-id [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/plex/server-id 200 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "plex remote-access as a member",
+      "path": "/api/plex/remote-access",
+      "cookie": true,
+      "request_id_generated": true,
+      "status": 403,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+      "logs": [
+        "[app] <-- GET /api/plex/remote-access [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/plex/remote-access 403 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "plex users as a member",
+      "path": "/api/users",
+      "cookie": true,
+      "request_id_generated": true,
+      "status": 403,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+      "logs": [
+        "[app] <-- GET /api/users [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/users 403 <ms>ms [<request-id>]"
+      ]
+    },
+    {
+      "name": "plex users without a session",
+      "path": "/api/users",
+      "request_id_generated": true,
+      "status": 401,
+      "headers": {
+        "content-type": "application/json",
+        "content-security-policy": "frame-ancestors 'none'",
+        "x-frame-options": "DENY",
+        "x-request-id": "<request-id>",
+        "access-control-allow-credentials": "true",
+        "access-control-expose-headers": "Retry-After,X-Request-Id"
+      },
+      "body": "{\"error\":\"unauthenticated\"}",
+      "logs": [
+        "[app] <-- GET /api/users [<request-id>] ua=\"-\"",
+        "[app] --> GET /api/users 401 <ms>ms [<request-id>]"
+      ]
     }
   ]
 }
