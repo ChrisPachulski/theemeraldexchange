@@ -710,6 +710,10 @@ mod tests {
         config.transcoder_url = Some(url.to_string());
         AppState {
             db,
+            artwork: Arc::new(crate::artwork::Store::open(
+                config.images_dir.clone(),
+                config.image_cache_bytes,
+            )),
             config: Arc::new(config),
             tmdb: crate::tmdb::TmdbClient::new(None),
             scanning: Arc::new(std::sync::atomic::AtomicBool::new(false)),

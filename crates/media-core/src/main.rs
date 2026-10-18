@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use media_core::{
-    AppState, build_router, config::Config, db::Db, spawn_scheduler, tmdb::TmdbClient,
+    AppState, artwork::Store as ArtworkStore, build_router, config::Config, db::Db,
+    spawn_scheduler, tmdb::TmdbClient,
 };
 
 #[tokio::main]
@@ -29,8 +30,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let db = Db::connect(&config.db_path).await?;
     let port = config.port;
     let tmdb = TmdbClient::new(config.tmdb_api_key.clone());
+    // Seeds the image-cache byte counter with one walk of <data>/images/cache.
+    let artwork = Arc::new(ArtworkStore::open(
+        config.images_dir.clone(),
+        config.image_cache_bytes,
+    ));
     let state = AppState {
         db,
+        artwork,
         config: Arc::new(config),
         tmdb,
         scanning: Arc::new(AtomicBool::new(false)),

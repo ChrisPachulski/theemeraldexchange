@@ -6,6 +6,9 @@ use crate::filename::RootKind;
 /// `MEDIA_SCAN_INTERVAL_SECS` is unset or malformed (one hour).
 pub const DEFAULT_SCAN_INTERVAL_SECS: u64 = 3600;
 
+/// Default image-cache cap in MiB when `MEDIA_IMAGE_CACHE_MB` is unset.
+pub const DEFAULT_IMAGE_CACHE_MB: u64 = 2048;
+
 /// Parse a boolean-ish env var. Recognizes `1/true/yes/on` (true) and
 /// `0/false/no/off` (false), case-insensitively; an unset or unrecognized
 /// value falls back to `default`. Used for soft toggles where a typo should
@@ -136,6 +139,11 @@ pub struct Config {
     /// Where scan-extracted album art lives (`<db dir>/artwork`; folder art
     /// found beside the tracks is referenced in place instead).
     pub artwork_dir: PathBuf,
+    /// Artwork store root (`<db dir>/images`): resized-variant cache and
+    /// fetched TMDB originals.
+    pub images_dir: PathBuf,
+    /// Disk cap for the image cache (`MEDIA_IMAGE_CACHE_MB`, default 2048).
+    pub image_cache_bytes: u64,
 }
 
 impl Config {
@@ -219,6 +227,13 @@ impl Config {
             .map(PathBuf::from)
             .unwrap_or_else(|| default_subtitles_dir(&db_path));
         let artwork_dir = data_sibling_dir(&db_path, "artwork");
+        let images_dir = data_sibling_dir(&db_path, "images");
+        let image_cache_bytes = std::env::var("MEDIA_IMAGE_CACHE_MB")
+            .ok()
+            .and_then(|s| s.trim().parse::<u64>().ok())
+            .unwrap_or(DEFAULT_IMAGE_CACHE_MB)
+            * 1024
+            * 1024;
 
         // Fail-fast safety gates (pure, unit-tested via `validate_posture`).
         validate_posture(&host, &principal_mode, internal_principal_secret.is_some())?;
@@ -244,6 +259,8 @@ impl Config {
             whisper_model,
             subtitles_dir,
             artwork_dir,
+            images_dir,
+            image_cache_bytes,
         })
     }
 

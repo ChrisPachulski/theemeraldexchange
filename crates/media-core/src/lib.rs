@@ -6,6 +6,7 @@
 //! the SPA directly. ffprobe/ffmpeg are runtime deps invoked via
 //! `tokio::process::Command` — no FFI bindings.
 
+pub mod artwork;
 pub mod auth;
 pub mod backup;
 pub mod capability;
@@ -68,6 +69,8 @@ pub struct AppState {
     /// tasks against a possibly-degraded volume. Cloning `AppState` shares the
     /// same `Semaphore` (Arc), so the cap is process-wide.
     pub stream_semaphore: Arc<Semaphore>,
+    /// Artwork store: disk-capped variant cache plus the 2-permit CPU pool.
+    pub artwork: Arc<artwork::Store>,
 }
 
 /// Build the full axum router (public `/health` + `/version`, authed
@@ -262,6 +265,10 @@ mod tests {
         config.scan_interval_secs = scan_interval_secs;
         AppState {
             db,
+            artwork: Arc::new(artwork::Store::open(
+                config.images_dir.clone(),
+                config.image_cache_bytes,
+            )),
             config: Arc::new(config),
             tmdb: tmdb::TmdbClient::new(None),
             scanning: Arc::new(AtomicBool::new(false)),

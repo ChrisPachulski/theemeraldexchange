@@ -82,6 +82,11 @@ pub const MIGRATIONS: &[(i64, &str, &str)] = &[
         "0015_youtube",
         include_str!("../migrations/0015_youtube.sql"),
     ),
+    (
+        16,
+        "0016_images",
+        include_str!("../migrations/0016_images.sql"),
+    ),
 ];
 
 #[derive(Clone)]
@@ -414,6 +419,33 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(default_attempts.as_deref(), Some("0"));
+    }
+
+    #[tokio::test]
+    async fn images_table_and_audiobook_art_path_exist_after_migration() {
+        let db = Db::connect_memory().await.unwrap();
+        let cols: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('images')")
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        for c in [
+            "key",
+            "blurhash",
+            "width",
+            "height",
+            "fetched_at",
+            "failed_at",
+            "attempts",
+        ] {
+            assert!(cols.iter().any(|n| n == c), "images.{c} missing: {cols:?}");
+        }
+        let art: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('audiobooks') WHERE name = 'art_path'",
+        )
+        .fetch_one(&db.pool)
+        .await
+        .unwrap();
+        assert_eq!(art, 1, "0016 adds audiobooks.art_path");
     }
 
     #[tokio::test]
