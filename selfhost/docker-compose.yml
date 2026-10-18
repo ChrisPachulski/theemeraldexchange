@@ -14,7 +14,7 @@
 #   remote     — private remote access via Tailscale Serve (TS_AUTHKEY)
 #
 # First run:  ./install.sh   (or: sh scripts/self-host-env.sh && docker compose up -d)
-# Then set ADMIN_SUBS to your provider sub (workos:/apple:/google:/local:) and
+# Then set ADMIN_SUBS to your provider sub (workos:/plex:/apple:/google:/local:) and
 # restart: that identity is the owner.
 
 services:
@@ -61,6 +61,12 @@ services:
       # ── everything below is OPTIONAL — leave blank to skip ──
       # Owner/administrator bootstrap: namespaced provider subs.
       ADMIN_SUBS: "${ADMIN_SUBS:-}"
+      # Plex login (one optional provider; WorkOS/Apple/Google are the others)
+      PLEX_CLIENT_ID: "${PLEX_CLIENT_ID:-}"
+      PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
+      # Emergency production boot opt-in when Plex is configured without a
+      # server id. This does not bypass the members/provider authorization gate.
+      ALLOW_UNSCOPED_PLEX_LOGIN: "${ALLOW_UNSCOPED_PLEX_LOGIN:-0}"
       # Federated login providers. Identity-token verification uses public
       # provider keys, so no Apple/Google client secret is required here.
       APPLE_CLIENT_ID: "${APPLE_CLIENT_ID:-}"

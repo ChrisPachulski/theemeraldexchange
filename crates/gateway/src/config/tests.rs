@@ -1,5 +1,5 @@
-//! Boot rules carried over from server/env.test.ts (the Plex cases are gone
-//! with Plex) and services/authPosture.test.ts.
+//! Boot rules carried over from server/env.test.ts (the Plex cases live with
+//! auth's config) and services/authPosture.test.ts.
 
 use std::collections::HashMap;
 
@@ -436,6 +436,8 @@ fn auth_config(over: &[(&str, &str)]) -> auth::config::Config {
 #[test]
 fn posture_reports_only_public_configuration() {
     let mut c = auth_config(&[
+        ("PLEX_CLIENT_ID", "public-plex-client-id"),
+        ("PLEX_SERVER_ID", "public-plex-server-id"),
         ("APPLE_CLIENT_ID", "com.example.web"),
         ("GOOGLE_CLIENT_ID", "public-google-client-id"),
         ("TRUST_CLIENT_IP_HEADERS", "1"),
@@ -448,6 +450,7 @@ fn posture_reports_only_public_configuration() {
         AuthPosture {
             event: "auth_posture",
             providers: Providers {
+                plex: true,
                 apple: true,
                 google: true,
                 workos: false
@@ -459,9 +462,9 @@ fn posture_reports_only_public_configuration() {
         }
     );
     let json = serde_json::to_string(&p).unwrap();
-    assert!(!json.contains("client-id"));
+    assert!(!json.contains("client-id") && !json.contains("server-id"));
     assert!(
-        json.starts_with(r#"{"event":"auth_posture","providers":{"apple":true"#),
+        json.starts_with(r#"{"event":"auth_posture","providers":{"plex":true,"apple":true"#),
         "{json}"
     );
 }
@@ -472,6 +475,7 @@ fn posture_reports_lax_for_same_origin_and_development() {
     c.is_prod = true;
     let p = auth_posture(&c);
     assert!(p.providers.workos && !p.providers.apple && !p.providers.google);
+    assert!(!p.providers.plex);
     assert_eq!(p.session_cookie_same_site, "lax");
     let c = auth_config(&[]);
     assert_eq!(auth_posture(&c).session_cookie_same_site, "lax");

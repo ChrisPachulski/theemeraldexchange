@@ -54,6 +54,7 @@ async fn caller(st: &AppState, sub: &str, role: &str) -> Caller {
             username: "u".into(),
             role: auth::Role::parse(role).unwrap(),
             auth_mode: auth::AuthMode::parse(sub.split(':').next().unwrap()).unwrap(),
+            plex_auth_token: None,
         },
         device: None,
     };

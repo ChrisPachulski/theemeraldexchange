@@ -8,6 +8,7 @@ use crate::testutil::*;
 
 const WORKOS: &str = "workos:user_01M12813GMJQQ4DXDWTBRC75G1";
 const APPLE: &str = "apple:000001.0123456789abcdef0123456789abcdef.0001";
+const PLEX: &str = "plex:12345";
 const DEVICE: &str =
     r#"{"device_id":"ulid-tv-1","device_name":"Living room","device_platform":"tvos"}"#;
 
@@ -254,29 +255,47 @@ async fn a_bearer_claim_binds_the_device_name_and_its_provider() {
 }
 
 #[tokio::test]
-async fn a_claimed_row_without_a_usable_mode_is_denied_and_left_unconsumed() {
+async fn a_plex_members_claim_mints_a_plex_device_token_that_authenticates() {
     let (_db, st) = state().await;
-    insert_code(&st, "LEGA2345", st.now() + 60).await;
-    sqlx::query(
-        "UPDATE device_link_codes SET claimed_sub = ?, claimed_auth_mode = 'plex' \
-         WHERE code = 'LEGA2345'",
-    )
-    .bind(APPLE)
-    .execute(&st.pool)
-    .await
-    .unwrap();
+    add_member(&st.pool, PLEX, "user", "plex").await;
     let app = crate::router(st.clone());
-    let r = post(&app, "/poll", &poll_body("LEGA2345", "ulid-tv-1"), &[]).await;
+    let code = started(&app).await;
+    let cookie = cookie(&st, PLEX, "plexuser", Role::User);
+    let claim = post(
+        &app,
+        "/claim",
+        &json!({ "code": code }).to_string(),
+        &[("cookie", &cookie)],
+    )
+    .await;
+    assert_eq!(claim.status, 200, "{}", claim.text);
+    let done = post(&app, "/poll", &poll_body(&code, "ulid-tv-1"), &[]).await;
+    let body = done.json();
+    assert_eq!(body["status"], "authorized", "{}", done.text);
+    let token = body["token"].as_str().unwrap();
+    let claims = device_tokens::verify(
+        &st.pool,
+        st.device_keys.as_deref().unwrap(),
+        token,
+        unix_now(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(
-        r.json(),
-        json!({ "status": "denied", "reason": "unknown_code" })
+        (claims.sub.as_str(), claims.auth_mode.as_str()),
+        (PLEX, "plex")
     );
-    let consumed: Option<i64> =
-        sqlx::query_scalar("SELECT consumed_at FROM device_link_codes WHERE code = 'LEGA2345'")
-            .fetch_one(&st.pool)
-            .await
-            .unwrap();
-    assert_eq!(consumed, None);
+    let me = call(
+        &app,
+        "GET",
+        "/api/me",
+        &[("authorization", &format!("Bearer {token}"))],
+        None,
+    )
+    .await;
+    assert_eq!(me.status, 200, "{}", me.text);
+    assert_eq!(me.json()["user"]["auth_mode"], "plex");
 }
 
 #[tokio::test]

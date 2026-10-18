@@ -6,7 +6,6 @@
 //! Set-Cookie, the same iptv calls and the same final DB state.
 //!
 //! Documented deltas, applied to the TS side before comparing:
-//!   - GET /api/auth/methods has no `plex` key (Plex is dropped).
 //!   - A synthesized ADMIN_SUBS member's auth_mode is its sub's provider; TS
 //!     said `plex` for any sub not starting with `apple:`.
 
@@ -62,7 +61,7 @@ fn normalize(text: &str, volatile: &[&str]) -> String {
 
 /// The TS body with the documented deltas applied.
 fn expected(ts: &str) -> String {
-    ts.replace(r#"{"plex":false,"#, "{").replace(
+    ts.replace(
         &format!(r#""sub":"{OWNER}","display_name":null,"role":"admin","auth_mode":"plex""#),
         &format!(r#""sub":"{OWNER}","display_name":null,"role":"admin","auth_mode":"workos""#),
     )

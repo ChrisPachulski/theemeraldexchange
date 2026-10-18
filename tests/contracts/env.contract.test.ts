@@ -43,7 +43,7 @@ describe('backend env contract (compose -> Rust gateway config)', () => {
   const known = rustConfigKeys()
 
   it('reads the Rust config (scan is not vacuous)', () => {
-    for (const k of ['SESSION_SECRET', 'SONARR_URL', 'SERVER_DB_PATH', 'NODE_ENV']) {
+    for (const k of ['SESSION_SECRET', 'SONARR_URL', 'SERVER_DB_PATH', 'NODE_ENV', 'PLEX_CLIENT_ID', 'PLEX_SERVER_URL']) {
       expect(known.has(k), k).toBe(true)
     }
   })

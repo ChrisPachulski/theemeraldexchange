@@ -583,6 +583,7 @@ fn session(sub: &str, role: auth::Role) -> auth::session::Session {
         username: "u".into(),
         role,
         auth_mode: auth::AuthMode::Apple,
+        plex_auth_token: None,
     }
 }
 

@@ -4,7 +4,8 @@
 //! same body text, the same edge headers and the same request log lines.
 //!
 //! Documented deltas, applied to the TS side before comparing:
-//!   - /api/version: no `plex` in auth_modes (Plex is dropped).
+//!   - /api/version lists plex only when PLEX_CLIENT_ID is set (TS listed it
+//!     always), so the replay sets one.
 //!   - An unknown /api path is a JSON 404 `{"error":"not_found"}`; Hono
 //!     answered `404 Not Found` as text/plain.
 //!   - The 413: Hono's bodyLimit ran before its header, logger and CORS
@@ -78,6 +79,7 @@ async fn golden_state(dir: &tempfile::TempDir) -> AppState {
         .collect();
     env.push(("RECOMMENDER_DB_PATH", &exchange));
     env.push(("MEDIA_DB_PATH", &media));
+    env.push(("PLEX_CLIENT_ID", "edge-golden-plex-client"));
     let mut st = state_in(dir, &env).await;
     st.spa_dir = Some(dir.path().join("dist"));
     st
@@ -98,6 +100,7 @@ fn member_cookie(st: &AppState) -> String {
         username: "Mom".into(),
         role: auth::Role::User,
         auth_mode: auth::AuthMode::Apple,
+        plex_auth_token: None,
     };
     let token = auth::session::mint(
         &st.auth.session_key,
@@ -205,7 +208,7 @@ async fn replays_the_ts_edge_goldens() {
         let expected_body = if not_found {
             r#"{"error":"not_found"}"#.to_string()
         } else {
-            ts_body.replace(r#""auth_modes":["plex","#, r#""auth_modes":["#)
+            ts_body.to_string()
         };
         assert_eq!(scrub(&r.body), expected_body, "{name}: body");
 

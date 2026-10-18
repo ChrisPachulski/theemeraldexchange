@@ -502,6 +502,7 @@ async fn version(State(st): State<AppState>) -> Result<Response, auth::Error> {
     }
     let c = &st.config;
     let auth_modes = [
+        ("plex", c.auth.plex_configured()),
         ("apple", c.auth.apple_configured()),
         ("google", c.auth.google_configured()),
         ("workos", c.auth.workos_configured()),

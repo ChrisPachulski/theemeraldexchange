@@ -15,6 +15,7 @@ fn sample(sub: &str, auth_mode: AuthMode, role: Role) -> Session {
         username: "someone".into(),
         role,
         auth_mode,
+        plex_auth_token: None,
     }
 }
 
@@ -22,9 +23,27 @@ const APPLE: &str = "apple:000001.0123456789abcdef0123456789abcdef.0001";
 const WORKOS: &str = "workos:user_01E4ZCR3C56J083X43JQXF3JK5";
 const NOW: i64 = 1_790_000_000;
 
-/// TS accepts these and Rust deliberately does not: Plex is dropped
-/// (decisions.md), and Rust requires the exp every minted cookie carries.
-const REJECTED_ON_PURPOSE: &[&str] = &["ts plex session", "no exp"];
+/// TS accepts these and Rust deliberately does not: Rust requires the exp
+/// every minted cookie carries.
+const REJECTED_ON_PURPOSE: &[&str] = &["no exp"];
+
+fn plex(token: &str) -> Session {
+    Session {
+        plex_auth_token: Some(token.into()),
+        ..sample("plex:42", AuthMode::Plex, Role::User)
+    }
+}
+
+/// verifySession's object: the session plus `plexAuthToken` when present
+/// (the Serialize impl is /api/me's, which never shows the token).
+fn ts_view(s: Option<Session>) -> Value {
+    let Some(s) = s else { return Value::Null };
+    let mut v = json!(s);
+    if let Some(t) = &s.plex_auth_token {
+        v["plexAuthToken"] = t.as_str().into();
+    }
+    v
+}
 
 #[test]
 fn cookies_minted_by_ts_verify_in_rust() {
@@ -34,35 +53,40 @@ fn cookies_minted_by_ts_verify_in_rust() {
     assert!(cookies.len() > 20);
     for c in cookies {
         let name = c["name"].as_str().unwrap();
-        let expected = if REJECTED_ON_PURPOSE.contains(&name) {
+        let mut expected = if REJECTED_ON_PURPOSE.contains(&name) {
             assert!(!c["ts"].is_null(), "{name}: TS accepted it");
             json!(null)
         } else {
             c["ts"].clone()
         };
+        // Minted by TS and never read, so not ported: ignored on read.
+        if let Some(m) = expected.as_object_mut() {
+            m.remove("verifiedPlexServerId");
+        }
         let got = verify(&key(), c["token"].as_str().unwrap(), at);
-        assert_eq!(json!(got), expected, "{name}");
+        assert_eq!(ts_view(got), expected, "{name}");
     }
 }
 
 #[test]
 fn cookies_minted_by_rust_verify_in_jose() {
-    let fresh = mint(&key(), &sample(APPLE, AuthMode::Apple, Role::User), NOW);
-    let fresh_claims = jwe::decrypt_with_key(&key().0, &fresh).unwrap();
     let keys_of = |b: &[u8]| -> Vec<String> {
         let m: Map<String, Value> = serde_json::from_slice(b).unwrap();
         m.keys().cloned().collect()
     };
     let rust = goldens()["rust_minted"].as_array().unwrap();
-    assert_eq!(rust.len(), 4);
+    assert_eq!(rust.len(), 5);
     for r in rust {
         let name = r["name"].as_str().unwrap();
         let token = r["token"].as_str().unwrap();
         // jose's verdict, recorded by the generator.
         assert_eq!(r["ts"], r["session"], "{name}: jose verdict");
         let at = r["minted_at"].as_i64().unwrap();
-        assert_eq!(json!(verify(&key(), token, at)), r["session"], "{name}");
+        let got = verify(&key(), token, at);
+        assert_eq!(ts_view(got.clone()), r["session"], "{name}");
         // Today's mint still has the shape jose accepted: same header, same claims.
+        let fresh = mint(&key(), &got.unwrap(), NOW);
+        let fresh_claims = jwe::decrypt_with_key(&key().0, &fresh).unwrap();
         assert_eq!(token.split('.').next(), fresh.split('.').next(), "{name}");
         let claims = jwe::decrypt_with_key(&key().0, token).unwrap();
         assert_eq!(keys_of(&claims), keys_of(&fresh_claims), "{name}");
@@ -106,8 +130,37 @@ fn round_trips_every_auth_mode() {
             AuthMode::Local,
             Role::User,
         ),
+        sample("plex:42", AuthMode::Plex, Role::User),
+        plex("plex-token"),
     ] {
         assert_eq!(verify(&key(), &mint(&key(), &s, NOW), NOW), Some(s));
+    }
+}
+
+#[test]
+fn the_plex_token_rides_in_the_cookie_but_not_in_the_api_me_shape() {
+    let token = mint(&key(), &plex("plex-token"), NOW);
+    let claims: Map<String, Value> =
+        serde_json::from_slice(&jwe::decrypt_with_key(&key().0, &token).unwrap()).unwrap();
+    assert_eq!(claims["plexAuthToken"], "plex-token");
+    // Without a token the claim is absent, not null.
+    let bare = mint(&key(), &sample("plex:42", AuthMode::Plex, Role::User), NOW);
+    let claims: Map<String, Value> =
+        serde_json::from_slice(&jwe::decrypt_with_key(&key().0, &bare).unwrap()).unwrap();
+    assert!(!claims.contains_key("plexAuthToken"));
+    // /api/me's user object omits the token.
+    let me = serde_json::to_string(&plex("plex-token")).unwrap();
+    assert!(
+        !me.contains("plex-token") && !me.contains("plexAuthToken"),
+        "{me}"
+    );
+    // A non-string or empty token reads as none, as verifySession does.
+    for bad in [json!(42), json!(""), json!(null)] {
+        let claims = json!({ "sub": "plex:42", "username": "x", "role": "user",
+                             "auth_mode": "plex", "plexAuthToken": bad, "exp": NOW + 60 })
+        .to_string();
+        let s = verify(&key(), &jwe::encrypt(&key().0, KID, claims.as_bytes()), NOW).unwrap();
+        assert_eq!(s.plex_auth_token, None, "{bad}");
     }
 }
 
@@ -209,11 +262,16 @@ fn write_rust_minted_cookies() {
                 Role::User,
             ),
         ),
+        (
+            "rust plex user with a plex token",
+            plex("plex-golden-token"),
+        ),
     ];
     let out: Vec<_> = cases
         .iter()
         .map(|(name, s)| {
-            json!({ "name": name, "minted_at": now, "session": s, "token": mint(&key(), s, now) })
+            json!({ "name": name, "minted_at": now, "session": ts_view(Some(s.clone())),
+                    "token": mint(&key(), s, now) })
         })
         .collect();
     let path = concat!(

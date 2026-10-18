@@ -104,14 +104,23 @@ impl Nonces {
     }
 }
 
-/// GET /api/auth/methods: which providers this install offers. There is no
-/// plex key; the Apple app decodes a missing key as false.
-async fn methods(State(st): State<AuthState>) -> Json<Value> {
-    Json(json!({
-        "apple": st.config.apple_configured(),
-        "google": st.config.google_configured(),
-        "workos": st.config.workos_configured(),
-    }))
+/// GET /api/auth/methods: which providers this install offers.
+async fn methods(State(st): State<AuthState>) -> impl IntoResponse {
+    // A struct, not `json!`, so the keys keep the TS order.
+    #[derive(serde::Serialize)]
+    struct Methods {
+        plex: bool,
+        apple: bool,
+        google: bool,
+        workos: bool,
+    }
+    let c = &st.config;
+    Json(Methods {
+        plex: c.plex_configured(),
+        apple: c.apple_configured(),
+        google: c.google_configured(),
+        workos: c.workos_configured(),
+    })
 }
 
 pub(crate) fn error(status: StatusCode, body: Value) -> Response {
@@ -404,6 +413,7 @@ async fn admit(
             username: display_name.clone(),
             role,
             auth_mode: mode,
+            plex_auth_token: None,
         },
         st.now(),
     );

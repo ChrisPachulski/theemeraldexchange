@@ -1,6 +1,6 @@
 [
   {
-    "minted_at": 1792288067,
+    "minted_at": 1792341601,
     "name": "rust apple user",
     "session": {
       "auth_mode": "apple",
@@ -8,10 +8,10 @@
       "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
       "username": "someone"
     },
-    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..IgmuQkXSDsY0gBgn.muIx0CVBFgXOainFVYEss36N-OSu3V7sS70NP5g_vbkixox3cgxT1OVQ_SftnSm10n60JdJVESlsFiCh4hHMryYDOp1kO-JEcuU67-HLEh4YxWoD-w8LF4ORkYGiVqqMYuAARkjUeupbVv9Mf1N53xwTxMzhlGvF9Pcuk0XXH-lykjQXbaIoTA-BeGMC0l7dpyihNKQ.-dYEcJMScLvuTTHYe1KU6Q"
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..j7GIL-xi9eBe2hTF.oAuIHCs4DP0FwLqgju-VehMBXZf2A3-ZzwVs6B4vEcmEWqq6I_AacXktqjRBxAAN7kIuLVTEwMIUYOjdgf4o9ddqc1UJoKgHvLA2xDehwDbgH023RnvyfKrLn_jYttrW5yBhGHz1pMxXSTwH5JDK71Z6ZRdbejwCOtzuiSrjHUaCTHcssxzf0T1MOEkDiJoMxyYpkLU.WJtkG7Nu-sKDB_64-jDxfQ"
   },
   {
-    "minted_at": 1792288067,
+    "minted_at": 1792341601,
     "name": "rust workos admin",
     "session": {
       "auth_mode": "workos",
@@ -19,10 +19,10 @@
       "sub": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
       "username": "someone"
     },
-    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..IsYjjJmoSzgfT1pF.4TRCMyCPk9obBJGgkPV-2fTPeHGWBj8CNlc0V0oE9aa80TliirHuWUFtVItjgosdl7Dme97XS_d2BClJ4FUeHNBmH75Oxxz3HyQ5vWVmJOM0WxaSXQGSxO0wPBgLlGhsOEKh6CZ3PYbRRstYEOicqj8nR_dz3jJXnK9jayKNGv9_TTV210aLV_nJzw.SZYooXl5trF9HD1Mu20-jA"
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..1vvps8AJuBv1l5bw.-xgXSL73HSEl8Wxuuc10_m49r36RxkdoIjA60NlAuufRMrp6EvGSCBgeYeypA6VAbUgRXAMXQW-_yZn_I9gEnuF_ZLELrFwtDmebg_1CzpUTF3fn49UPbm7jbQkUR9K_1wLYsrJKgrbS3IJBez2kEJxDXHAwC72yfvpWBMTZUr8dZ1IhBLWZ-zyDYQ._tYhk5PEC9DyZRi2mBxjQw"
   },
   {
-    "minted_at": 1792288067,
+    "minted_at": 1792341601,
     "name": "rust google user",
     "session": {
       "auth_mode": "google",
@@ -30,10 +30,10 @@
       "sub": "google:1234567890",
       "username": "someone"
     },
-    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..IzGuEBHWvB98V_HW.FQZX13oN-9fIf6AdFPL8uiOpF51dwXKbJZiNzj41rma-GKZ1IW-jmVqW-jS7_c85aUj6NLzYtviMFE00eB0zMJxvgaIXTWdYjP8FuMfD6DdCr4dYePvWtuwurAoFb2vxC71KUJtmE54Hh338Sg0dXYd5FWyp.TXAqygWO6jnK5QJlD4yT9w"
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..E9Fx5D9AxLKvHoFu.ByYAPUzMmR-sykfVSEKMbt1PMo2Fgtye9eA6BsA0b9DClY_WTsIzYdtWOJbDUtogQsAL3a6kPkUA2y4dpIUmwFjb5dBV7R7P0wGKKrMOhUMLp0h9EQuZf9KWuqi89wox1U558wzybkaMyICZ1ANtqfP6wiaC.hVOgtg0pBMau-XZuMFUDcg"
   },
   {
-    "minted_at": 1792288067,
+    "minted_at": 1792341601,
     "name": "rust local user",
     "session": {
       "auth_mode": "local",
@@ -41,6 +41,18 @@
       "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
       "username": "someone"
     },
-    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..sJcb4_zePEk0G13Z.-ZHL8uYrah7dr5b33pSyFvz-_2Wj-t3kqiSRA-VnwvBpCUIj4pVYlhrw7P7XKhtqLAX4O8VyLdrC8kkDr4_9V5VqOeR3HuzkUpOXwvSLoZrlRwQDytJWFsVxt3WUKXD5lxKDl15Fd1-YwwRApPa8M7CvJ4cR53Jf-1widvAMqaJfRfI.cBGqm_Wrqw6p-OAeN2o4Og"
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..1c8pNH_loZNw13xO.fm-xeK8AmU9gtGiBG4lrIxwZI0IijYpz9PBUJ9gclN10yFZjwe1-0A8s2lgy-NmZW9x8_fCAlBsKN-9NRwgsvaLOLnQ_FM3T2-lqvoP0tLyajxuymZc4bYWndQvIf5ZigmHLWoQ6QOduf-yrYfwmHbTGwPG_pCsf5RGRvt7NZzdbJ5Q.REyxLDz7jFll5u6GJtnHow"
+  },
+  {
+    "minted_at": 1792341601,
+    "name": "rust plex user with a plex token",
+    "session": {
+      "auth_mode": "plex",
+      "plexAuthToken": "plex-golden-token",
+      "role": "user",
+      "sub": "plex:42",
+      "username": "someone"
+    },
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..JUARCgoqhcu-TDpK.RQON5h8c4YSlJYdfINvTncL9jJh3glxNVzVSVuTkCsLp9GFmzmv1cQSMFsqT78m9gPN-pl0Ob3LMp7CheuIiHmWB1mJkmCHqubv000agn_UwTjVIQllJbZAtetp_-iZcIv9pyTWvc8jdQ7zSN2umCrk3q5RII2Nw00tTuHObM2vg5LpyxLWnkbo9l6X1.GJa9sd7pWbY3Q18w2g-UJA"
   }
 ]

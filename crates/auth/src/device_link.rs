@@ -328,8 +328,8 @@ async fn poll_inner(
         .and_then(Role::parse)
         .unwrap_or(Role::User);
     let username = row.claimed_username.as_deref().unwrap_or(sub);
-    // A claim always records the mode; one that no longer verifies (plex) is
-    // refused rather than reinterpreted.
+    // A claim always records the mode (TS's `?? 'plex'` default had no row to
+    // serve), so a row without one is refused rather than guessed.
     let Some(auth_mode) = row.claimed_auth_mode.as_deref().and_then(AuthMode::parse) else {
         return Ok(denied("unknown_code"));
     };

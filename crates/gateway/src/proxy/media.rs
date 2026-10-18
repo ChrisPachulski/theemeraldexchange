@@ -141,6 +141,7 @@ async fn gate(
                     username: String::new(),
                     role: auth::Role::User,
                     sub,
+                    plex_auth_token: None,
                 },
                 device_id: None,
             });

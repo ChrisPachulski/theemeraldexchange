@@ -65,10 +65,13 @@ describe('auth deployment configuration contract', () => {
     'WORKOS_API_KEY',
     'WORKOS_REDIRECT_URI',
     'ENABLE_WORKOS_SIGN_IN',
+    'PLEX_CLIENT_ID',
+    'PLEX_SERVER_ID',
+    'ALLOW_UNSCOPED_PLEX_LOGIN',
   ]
-  // Plex sign-in and the legacy ADMINS allowlist are gone; passing them on
-  // would suggest they still do something.
-  const retiredKeys = ['ADMINS', 'PLEX_CLIENT_ID', 'PLEX_SERVER_ID', 'ALLOW_UNSCOPED_PLEX_LOGIN', 'PLEX_SERVER_URL']
+  // The legacy ADMINS username allowlist is gone (the owner is a namespaced
+  // sub in ADMIN_SUBS); passing it on would suggest it still does something.
+  const retiredKeys = ['ADMINS']
 
   it('does not mistake a sibling service variable for a backend input', () => {
     expect(
@@ -131,7 +134,7 @@ describe('auth deployment configuration contract', () => {
     ).toEqual([])
   })
 
-  it.each(surfaces)('$name no longer carries retired Plex/ADMINS inputs', ({ compose, example }) => {
+  it.each(surfaces)('$name no longer carries the retired ADMINS input', ({ compose, example }) => {
     expect(retiredKeys.filter((key) => composeHas(compose, key))).toEqual([])
     expect(retiredKeys.filter((key) => exampleHas(example, key))).toEqual([])
   })

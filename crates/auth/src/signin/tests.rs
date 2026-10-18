@@ -202,14 +202,17 @@ fn sha256_hex(s: &str) -> String {
 // ── GET /api/auth/methods ──
 
 #[tokio::test]
-async fn methods_lists_the_configured_providers_without_a_plex_key() {
+async fn methods_lists_the_configured_providers() {
     let h = harness(&[]).await;
     let r = send(&h.app(), "GET", "/api/auth/methods", &[], None).await;
     assert_eq!(r.status, 200);
     assert_eq!(
         r.body,
-        json!({ "apple": false, "google": false, "workos": false })
+        json!({ "plex": false, "apple": false, "google": false, "workos": false })
     );
+    let h = harness(&[("PLEX_CLIENT_ID", "plex-client")]).await;
+    let r = send(&h.app(), "GET", "/api/auth/methods", &[], None).await;
+    assert_eq!(r.body["plex"], true);
     let r = send(
         &configured().await.app(),
         "GET",
@@ -220,7 +223,7 @@ async fn methods_lists_the_configured_providers_without_a_plex_key() {
     .await;
     assert_eq!(
         r.body,
-        json!({ "apple": true, "google": true, "workos": false })
+        json!({ "plex": false, "apple": true, "google": true, "workos": false })
     );
 }
 

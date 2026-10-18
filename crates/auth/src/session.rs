@@ -4,6 +4,8 @@
 //! verifies on the other (tests/fixtures/auth-goldens.json proves both ways).
 //! TS cookies carry no `kid`; Rust mints `kid: session-v1` so a later rotation
 //! can dispatch by kid, and jose ignores the kid when given the key directly.
+//! A Plex sign-in carries the user's plex.tv token as the `plexAuthToken`
+//! claim (encrypted, never readable from the cookie, never in `/api/me`).
 
 use axum::http::{HeaderMap, HeaderValue, header};
 use base64::Engine;
@@ -19,13 +21,18 @@ pub const COOKIE_NAME: &str = "eex.session";
 pub const TTL_SECS: i64 = 30 * 24 * 60 * 60;
 pub const KID: &str = "session-v1";
 
-/// A verified session. Serializes as the `/api/me` `user` object.
+/// A verified session. Serializes as the `/api/me` `user` object, which never
+/// shows the Plex token.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Session {
     pub sub: String,
     pub username: String,
     pub role: Role,
     pub auth_mode: AuthMode,
+    /// The user's plex.tv token (Plex sign-in only), so Plex-backed routes
+    /// call plex.tv as the user. Cookie claim `plexAuthToken`.
+    #[serde(skip)]
+    pub plex_auth_token: Option<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -41,6 +48,8 @@ impl SessionKey {
 struct Claims<'a> {
     #[serde(flatten)]
     session: &'a Session,
+    #[serde(rename = "plexAuthToken", skip_serializing_if = "Option::is_none")]
+    plex_auth_token: Option<&'a str>,
     iat: i64,
     exp: i64,
 }
@@ -49,6 +58,7 @@ struct Claims<'a> {
 pub fn mint(key: &SessionKey, session: &Session, now: i64) -> String {
     let claims = Claims {
         session,
+        plex_auth_token: session.plex_auth_token.as_deref(),
         iat: now,
         exp: now + TTL_SECS,
     };
@@ -58,8 +68,9 @@ pub fn mint(key: &SessionKey, session: &Session, now: i64) -> String {
 
 /// Verify a cookie value at unix time `now`. Strict, like `verifySession`:
 /// string `sub` that passes the contract grammar, string `username`, role
-/// admin|user, auth_mode one of [`AuthMode`] (no `plex`), and jose's time
-/// rules (numeric iat/nbf/exp; exp <= now or nbf > now rejects).
+/// admin|user, auth_mode one of [`AuthMode`], and jose's time rules (numeric
+/// iat/nbf/exp; exp <= now or nbf > now rejects). A non-string or empty
+/// `plexAuthToken` reads as none, as in TS.
 pub fn verify(key: &SessionKey, token: &str, now: i64) -> Option<Session> {
     let header: Map<String, Value> =
         serde_json::from_slice(&URL_SAFE_NO_PAD.decode(token.split('.').next()?).ok()?).ok()?;
@@ -95,11 +106,15 @@ pub fn verify(key: &SessionKey, token: &str, now: i64) -> Option<Session> {
     let username = text("username")?.to_string();
     let role = Role::parse(text("role")?)?;
     let auth_mode = AuthMode::parse(text("auth_mode")?)?;
+    let plex_auth_token = text("plexAuthToken")
+        .filter(|t| !t.is_empty())
+        .map(String::from);
     Some(Session {
         sub,
         username,
         role,
         auth_mode,
+        plex_auth_token,
     })
 }
 

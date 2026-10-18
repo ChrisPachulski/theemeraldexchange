@@ -271,6 +271,7 @@ async fn limits_body(extra: &[(&str, &str)], cookie: bool) -> Value {
             username: "G".into(),
             role: auth::Role::User,
             auth_mode: auth::AuthMode::Google,
+            plex_auth_token: None,
         };
         let token = auth::session::mint(&st.auth.session_key, &s, chrono::Utc::now().timestamp());
         req = req.header("cookie", format!("eex.session={token}"));
@@ -401,6 +402,13 @@ async fn version_advertises_configured_sign_ins() {
     assert_eq!(b["accepting_device_pairs"], false);
     assert_eq!(b["release"], "dev");
     assert_eq!(b["schemas"]["exchange"], json!({"present": false}));
+
+    // Plex is listed first, and only when PLEX_CLIENT_ID is set.
+    let dir = tempfile::tempdir().unwrap();
+    let st = state_in(&dir, &[("PLEX_CLIENT_ID", "plex-client")]).await;
+    let r = send(&router(st), get_req("/api/version")).await;
+    let b: Value = serde_json::from_str(&r.body).unwrap();
+    assert_eq!(b["auth_modes"], json!(["plex"]));
 }
 
 /// The path is normalized before a route is picked: otherwise a backslash or

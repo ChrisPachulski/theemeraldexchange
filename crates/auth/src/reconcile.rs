@@ -152,6 +152,7 @@ pub async fn reconcile_bearer(
         username: device_name,
         role,
         auth_mode,
+        plex_auth_token: None,
     }))
 }
 

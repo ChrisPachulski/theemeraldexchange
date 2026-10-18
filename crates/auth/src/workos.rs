@@ -393,6 +393,7 @@ async fn callback_inner(
             username: name,
             role,
             auth_mode: AuthMode::Workos,
+            plex_auth_token: None,
         },
         st.now(),
     );

@@ -188,11 +188,11 @@ async fn another_secret_garbage_or_an_unknown_kid_fails() {
 }
 
 #[tokio::test]
-async fn a_bad_role_or_a_plex_auth_mode_fails() {
+async fn a_bad_role_or_an_unknown_auth_mode_fails() {
     let db = pool().await;
     let (keys, _, c) = minted(&db).await;
     let key = keys.keys[DEFAULT_KID];
-    for (role, mode) in [("owner", "apple"), ("user", "plex"), ("user", "guest")] {
+    for (role, mode) in [("owner", "apple"), ("user", "guest"), ("user", "")] {
         let forged = DeviceClaims {
             role: role.into(),
             auth_mode: mode.into(),

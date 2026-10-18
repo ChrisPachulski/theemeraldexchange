@@ -257,6 +257,7 @@ fn cookie_session(sub: &str, auth_mode: AuthMode, role: Role) -> Session {
         username: "Owner".into(),
         role,
         auth_mode,
+        plex_auth_token: None,
     }
 }
 
@@ -423,4 +424,34 @@ async fn api_me_over_a_bearer_reports_the_device_name() {
         json!({ "user": { "sub": OWNER, "username": "Living Room Apple TV",
                           "role": "admin", "auth_mode": "workos" } })
     );
+}
+
+#[tokio::test]
+async fn a_plex_cookie_keeps_its_token_through_reconcile_but_api_me_never_shows_it() {
+    let (db, st) = state().await;
+    const PLEX: &str = "plex:12345";
+    add_member(&db, PLEX, "user", "plex").await;
+    let session = Session {
+        plex_auth_token: Some("plex-token-secret".into()),
+        ..cookie_session(PLEX, AuthMode::Plex, Role::User)
+    };
+    let s = reconcile_cookie(&db, subs(&st), session.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        s.unwrap().plex_auth_token.as_deref(),
+        Some("plex-token-secret")
+    );
+
+    let cookie = format!(
+        "eex.session={}",
+        session::mint(&st.session_key, &session, chrono::Utc::now().timestamp())
+    );
+    let (status, body, _) = send(&app(st), "/api/me", &[("Cookie", &cookie)]).await;
+    assert_eq!(status, 200);
+    assert_eq!(
+        body,
+        json!({ "user": { "sub": PLEX, "username": "Owner", "role": "user", "auth_mode": "plex" } })
+    );
+    assert!(!body.to_string().contains("plex-token-secret"));
 }

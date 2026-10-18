@@ -163,6 +163,7 @@ pub fn cookie(st: &AppState, sub: &str, username: &str) -> String {
         username: username.into(),
         role: auth::Role::User,
         auth_mode: auth::AuthMode::parse(sub.split(':').next().unwrap()).unwrap(),
+        plex_auth_token: None,
     };
     let token = auth::session::mint(
         &st.auth.session_key,

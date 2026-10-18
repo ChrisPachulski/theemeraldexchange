@@ -84,6 +84,9 @@ services:
       # serving OFF (plan 006 Phase 2; the self-host compose leaves this
       # unset so the bundled dist auto-enables it).
       SERVE_SPA: "${SERVE_SPA:-0}"
+      # Optional: unset means Plex sign-in is not configured (the Plex auth
+      # routes 503 plex_not_configured).
+      PLEX_CLIENT_ID: "${PLEX_CLIENT_ID:-}"
       SESSION_SECRET: "${SESSION_SECRET}"
       # Token-signing IKMs — each HKDF'd to a distinct AES-256-GCM key.
       # The gateway requires all three in production and asserts they are
@@ -105,7 +108,7 @@ services:
       # network (http://<key>@exchange-glitchtip:8000/<project>).
       EEX_TELEMETRY_DSN_INTERNAL: "${EEX_TELEMETRY_DSN_INTERNAL:-}"
       TELEMETRY_ENABLED: "${TELEMETRY_ENABLED:-}"
-      # Owner-bootstrap + admin namespaced subs (local:/apple:/google:/workos:).
+      # Owner-bootstrap + admin namespaced subs (plex:/local:/apple:/google:/workos:).
       # Without this passthrough the value lives in .env yet never reaches the
       # container, which silently locks the owner out.
       ADMIN_SUBS: "${ADMIN_SUBS:-}"
@@ -123,6 +126,13 @@ services:
       WORKOS_API_KEY: "${WORKOS_API_KEY:-}"
       WORKOS_REDIRECT_URI: "${WORKOS_REDIRECT_URI:-}"
       ENABLE_WORKOS_SIGN_IN: "${ENABLE_WORKOS_SIGN_IN:-}"
+      PLEX_SERVER_ID: "${PLEX_SERVER_ID:-}"
+      # Bootstrap escape hatch for the brief first-deploy window before
+      # PLEX_SERVER_ID is known. Without this passthrough the gateway's
+      # production gate sees an unset value inside the container and exits
+      # at boot. Default 0 keeps the gate locked.
+      ALLOW_UNSCOPED_PLEX_LOGIN: "${ALLOW_UNSCOPED_PLEX_LOGIN:-0}"
+      PLEX_SERVER_URL: "${PLEX_SERVER_URL:-}"
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS}"
       # Trust CF-Connecting-IP/True-Client-IP for per-client auth buckets
       # only in this compose topology:

@@ -1,6 +1,6 @@
 //! Env config for auth. Names, defaults and boot checks are `server/env.ts`'s
-//! (and `services/secrets.ts`'s), so the same `.env` carries over. Plex and the
-//! legacy ADMINS username list are not read.
+//! (and `services/secrets.ts`'s), so the same `.env` carries over. The legacy
+//! ADMINS username list is not read.
 
 /// Secrets shorter than this, or a known placeholder, refuse a production boot.
 const SECRET_MIN_LEN: usize = 32;
@@ -40,6 +40,13 @@ pub struct Config {
     pub workos_api_key: Option<String>,
     pub workos_redirect_uri: Option<String>,
     pub workos_native_redirect_uri: String,
+    /// Identifies this app to plex.tv. None = Plex sign-in not configured.
+    /// Trimmed: plex.tv matches it as an exact string.
+    pub plex_client_id: Option<String>,
+    /// machineIdentifier of the home Plex server; a share on it admits.
+    pub plex_server_id: Option<String>,
+    /// The local Plex Media Server (account list, library links).
+    pub plex_server_url: String,
     pub server_db_path: String,
     /// The iptv service (crates/iptv): a member revoke calls its
     /// /internal/members/:sub/revoke-playlist-tokens.
@@ -141,7 +148,7 @@ impl Config {
                 emerald_contracts::parse_sub(&s).map(|p| p.raw).map_err(|_| {
                     format!(
                         "Invalid entry in ADMIN_SUBS: {s:?}. Each entry must be a namespaced sub \
-                         like \"apple:000000.<32 hex>.0000\", \"google:<sub>\", \
+                         like \"plex:12345\", \"apple:000000.<32 hex>.0000\", \"google:<sub>\", \
                          \"workos:user_<ulid>\" or \"local:<ulid>\"."
                     )
                 })
@@ -161,6 +168,22 @@ impl Config {
             return Err(
                 "Missing required env var in production when ENABLE_GOOGLE_SIGN_IN=1: \
                         GOOGLE_CLIENT_ID"
+                    .into(),
+            );
+        }
+        let plex_client_id = opt("PLEX_CLIENT_ID");
+        let plex_server_id = opt("PLEX_SERVER_ID");
+        if is_prod
+            && plex_client_id.is_some()
+            && plex_server_id.is_none()
+            && !flag("ALLOW_UNSCOPED_PLEX_LOGIN")
+        {
+            return Err(
+                "Missing required env var in production: PLEX_SERVER_ID (your home Plex \
+                 server's machineIdentifier, required to scope sign-ins to your household). \
+                 Set it now, or set ALLOW_UNSCOPED_PLEX_LOGIN=1 explicitly to permit \
+                 emergency boot without a server id (it does not bypass membership/provider \
+                 gates)."
                     .into(),
             );
         }
@@ -197,6 +220,10 @@ impl Config {
             workos_redirect_uri,
             workos_native_redirect_uri: opt("WORKOS_NATIVE_REDIRECT_URI")
                 .unwrap_or_else(|| "emerald://auth/workos".into()),
+            plex_client_id,
+            plex_server_id,
+            plex_server_url: opt("PLEX_SERVER_URL")
+                .unwrap_or_else(|| "http://theemeraldexchange.local:32400".into()),
             server_db_path: get("SERVER_DB_PATH").unwrap_or_else(|| "./data/server.db".into()),
             iptv_service_url: opt("IPTV_SERVICE_URL").unwrap_or_else(|| {
                 if is_prod {
@@ -209,6 +236,10 @@ impl Config {
             iptv_disabled: matches!(get("IPTV_DISABLED").as_deref(), Some("1" | "true")),
             token_sweep_cron: get("TOKEN_SWEEP_CRON").unwrap_or_else(|| "15 3 * * *".into()),
         })
+    }
+
+    pub fn plex_configured(&self) -> bool {
+        self.plex_client_id.is_some()
     }
 
     pub fn apple_configured(&self) -> bool {
@@ -418,6 +449,49 @@ mod tests {
                 .err()
                 .unwrap()
                 .contains("ADMIN_SUBS")
+        );
+    }
+
+    #[test]
+    fn plex_is_optional_and_trimmed() {
+        let c = dev(&[]).unwrap();
+        assert!(!c.plex_configured());
+        assert_eq!(c.plex_server_id, None);
+        assert_eq!(c.plex_server_url, "http://theemeraldexchange.local:32400");
+        // A bare production install boots with no Plex at all.
+        assert!(!prod(&[]).unwrap().plex_configured());
+        let c = dev(&[
+            ("PLEX_CLIENT_ID", " client-uuid\n"),
+            ("PLEX_SERVER_ID", ""),
+            ("PLEX_SERVER_URL", "http://nas:32400"),
+        ])
+        .unwrap();
+        assert_eq!(c.plex_client_id.as_deref(), Some("client-uuid"));
+        assert!(c.plex_configured());
+        // Blank (compose's ${VAR:-}) is unset.
+        assert_eq!(c.plex_server_id, None);
+        assert_eq!(c.plex_server_url, "http://nas:32400");
+        let c = dev(&[("PLEX_SERVER_ID", "abc123machineid")]).unwrap();
+        assert_eq!(c.plex_server_id.as_deref(), Some("abc123machineid"));
+    }
+
+    #[test]
+    fn production_plex_needs_a_server_id_unless_explicitly_unscoped() {
+        let client = ("PLEX_CLIENT_ID", "test-client");
+        let err = prod(&[client]).err().unwrap();
+        assert!(err.contains("PLEX_SERVER_ID"), "{err}");
+        // Only exactly 1 opens the escape hatch.
+        assert!(prod(&[client, ("ALLOW_UNSCOPED_PLEX_LOGIN", "true")]).is_err());
+        let c = prod(&[client, ("ALLOW_UNSCOPED_PLEX_LOGIN", "1")]).unwrap();
+        assert!(c.is_prod && c.plex_server_id.is_none());
+        let c = prod(&[client, ("PLEX_SERVER_ID", "home-server-machine-id")]).unwrap();
+        assert_eq!(c.plex_server_id.as_deref(), Some("home-server-machine-id"));
+        // Outside production an unscoped Plex install boots.
+        assert!(dev(&[client]).unwrap().plex_server_id.is_none());
+        // A plex: owner is a valid ADMIN_SUBS entry.
+        assert_eq!(
+            dev(&[("ADMIN_SUBS", "plex:12345")]).unwrap().admin_subs,
+            ["plex:12345"]
         );
     }
 

@@ -357,6 +357,7 @@ pub fn cookie(st: &crate::AuthState, sub: &str, username: &str, role: crate::Rol
         username: username.into(),
         role,
         auth_mode: crate::AuthMode::parse(crate::sub_namespace(sub)).unwrap(),
+        plex_auth_token: None,
     };
     format!(
         "eex.session={}",

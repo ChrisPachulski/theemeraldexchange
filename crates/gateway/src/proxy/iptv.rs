@@ -88,6 +88,7 @@ impl Actor {
                 username: String::new(),
                 role,
                 sub,
+                plex_auth_token: None,
             },
             device_id: None,
         }

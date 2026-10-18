@@ -1,7 +1,7 @@
 //! Env config for the gateway. Names, defaults and boot rules are
 //! `server/env.ts`'s, so the same `.env` carries over. The auth half (secrets,
 //! origins, SERVE_SPA, providers, SERVER_DB_PATH, IPTV_SERVICE_URL,
-//! IPTV_DISABLED, TOKEN_SWEEP_CRON) is [`auth::config::Config`]; no PLEX_*,
+//! IPTV_DISABLED, TOKEN_SWEEP_CRON, PLEX_*) is [`auth::config::Config`]; no
 //! ADMINS or IPTV_* provider keys are read.
 
 use serde::Serialize;
@@ -319,6 +319,7 @@ pub struct AuthPosture {
 
 #[derive(Debug, Serialize, PartialEq)]
 pub struct Providers {
+    pub plex: bool,
     pub apple: bool,
     pub google: bool,
     pub workos: bool,
@@ -328,6 +329,7 @@ pub fn auth_posture(c: &auth::config::Config) -> AuthPosture {
     AuthPosture {
         event: "auth_posture",
         providers: Providers {
+            plex: c.plex_configured(),
             apple: c.apple_client_id.is_some(),
             google: !c.google_client_ids.is_empty(),
             workos: c.workos_client_id.is_some(),

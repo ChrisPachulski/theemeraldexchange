@@ -177,12 +177,11 @@ impl Role {
     }
 }
 
-/// The provider an identity signed in with. Plex is gone (decisions.md), so a
-/// stored `plex` row reads as a plain string on [`members::Member`] and a
-/// `plex` device token or session cookie no longer verifies.
+/// The provider an identity signed in with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
+    Plex,
     Local,
     Apple,
     Google,
@@ -192,6 +191,7 @@ pub enum AuthMode {
 impl AuthMode {
     pub fn as_str(self) -> &'static str {
         match self {
+            AuthMode::Plex => "plex",
             AuthMode::Local => "local",
             AuthMode::Apple => "apple",
             AuthMode::Google => "google",
@@ -201,6 +201,7 @@ impl AuthMode {
 
     pub fn parse(s: &str) -> Option<AuthMode> {
         match s {
+            "plex" => Some(AuthMode::Plex),
             "local" => Some(AuthMode::Local),
             "apple" => Some(AuthMode::Apple),
             "google" => Some(AuthMode::Google),

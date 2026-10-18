@@ -140,6 +140,7 @@ fn session(sub: &str, role: auth::Role) -> auth::session::Session {
         username: String::new(),
         role,
         auth_mode: auth::AuthMode::parse(sub.split(':').next().unwrap()).unwrap(),
+        plex_auth_token: None,
     }
 }
 
