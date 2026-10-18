@@ -1,4 +1,5 @@
 use super::*;
+use sqlx::sqlite::SqlitePoolOptions;
 
 /// The ledger of the prod exchange.db (2026-10-08 snapshot, read with
 /// immutable=1): 0005 carries the post-amnesty hash.
@@ -302,4 +303,49 @@ fn iso_timestamp_matches_python_isoformat() {
     let t = t + chrono::Duration::microseconds(12);
     assert_eq!(iso_micros(t), "2026-10-18T04:05:06.000012+00:00");
     assert_eq!(utc_now_iso().len(), 32);
+}
+
+// recommender/tests/test_watched_feedback.py: 0008 widens the signal CHECK to
+// 'watched' and keeps the rows it rebuilds.
+#[tokio::test]
+async fn migration_0008_allows_watched_and_preserves_rows() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .unwrap();
+    sqlx::raw_sql(
+        "CREATE TABLE user_feedback (
+          sub     TEXT    NOT NULL,
+          kind    TEXT    NOT NULL,
+          tmdb_id INTEGER NOT NULL,
+          signal  TEXT    NOT NULL CHECK (signal IN ('like','dislike','reject','shown','clicked','added')),
+          ts      TEXT    NOT NULL,
+          PRIMARY KEY (sub, kind, tmdb_id, signal)
+        );",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let insert = |tmdb_id: i64, signal: &'static str| {
+        sqlx::query("INSERT INTO user_feedback(sub, kind, tmdb_id, signal, ts) VALUES ('plex:494190801', 'movie', ?, ?, '2026-06-06T00:00:00Z')")
+            .bind(tmdb_id)
+            .bind(signal)
+            .execute(&pool)
+    };
+    insert(42, "like").await.unwrap();
+    assert!(
+        insert(7, "watched").await.is_err(),
+        "pre-0008 CHECK rejects watched"
+    );
+    let (version, _, sql) = MIGRATIONS[7];
+    assert_eq!(version, 8);
+    sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+    let likes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_feedback WHERE signal='like'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(likes, 1);
+    insert(7, "watched").await.unwrap();
+    assert!(insert(8, "nope").await.is_err());
 }

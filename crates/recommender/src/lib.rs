@@ -3,6 +3,9 @@
 
 pub mod config;
 pub mod db;
+pub mod holdout;
+pub mod http;
+pub mod metrics;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

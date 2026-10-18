@@ -38,6 +38,8 @@ pub struct Config {
     pub optimizer_max_drift_pct: f64,
     pub optimizer_max_tokens: i64,
     pub rec_log_retention_days: i64,
+    /// RECOMMENDER_HOLDOUT_PATH; when unset or missing the embedded seed is used.
+    pub holdout_path: Option<PathBuf>,
 }
 
 impl Config {
@@ -121,6 +123,7 @@ impl Config {
             },
             optimizer_max_tokens: int("RECOMMENDER_OPTIMIZER_MAX_TOKENS", 8000)?,
             rec_log_retention_days: int("RECOMMENDER_REC_LOG_RETENTION_DAYS", 90)?,
+            holdout_path: opt("RECOMMENDER_HOLDOUT_PATH").map(PathBuf::from),
         })
     }
 }

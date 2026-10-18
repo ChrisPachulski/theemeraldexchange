@@ -17,14 +17,23 @@ name = "recommender"
 path = "src/lib.rs"
 
 [dependencies]
-# The schema_migrations migrator and PrincipalMode.
+# The schema_migrations migrator, PrincipalMode and verify_principal.
 media-core = { path = "../media-core" }
+# parse_sub and internal-principal claims.
+emerald-contracts = { path = "../emerald-contracts" }
+axum = { version = "0.8", features = ["json"] }
+serde_json.workspace = true
+subtle.workspace = true
+# /metrics/funnel reads its query by hand (FastAPI semantics: last value wins).
+form_urlencoded = "1"
+sentry = { version = "0.49", default-features = false, features = ["backtrace", "contexts", "panic", "rustls", "reqwest", "tracing"] }
+sentry-tracing = "0.49"
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 # The sqlite sqlx links; sqlite-vec registers on it through sqlite3_auto_extension.
 libsqlite3-sys = "0.37"
 # Pinned to the Python lock's sqlite-vec so the vec0 shadow tables match.
 sqlite-vec = "=0.1.9"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time"] }
 chrono = "0.4"
 thiserror = "2"
 tracing = "0.1"
@@ -32,4 +41,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]
 tempfile = "3"
-serde_json.workspace = true
+tower = { version = "0.5", features = ["util"] }

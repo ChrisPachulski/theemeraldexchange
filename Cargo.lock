@@ -2101,15 +2101,22 @@ dependencies = [
 name = "recommender"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "chrono",
+ "emerald-contracts",
+ "form_urlencoded",
  "libsqlite3-sys",
  "media-core",
+ "sentry",
+ "sentry-tracing",
  "serde_json",
  "sqlite-vec",
  "sqlx",
+ "subtle",
  "tempfile",
  "thiserror",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]
