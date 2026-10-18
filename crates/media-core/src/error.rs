@@ -30,6 +30,9 @@ pub enum AppError {
     FeatureDisabled(String),
     #[error(transparent)]
     Db(#[from] sqlx::Error),
+    /// A source file that exists but cannot be decoded (HEIC, corrupt).
+    #[error("unsupported media: {0}")]
+    Unsupported(String),
     #[error("{0}")]
     Internal(String),
 }
@@ -56,6 +59,7 @@ impl IntoResponse for AppError {
                 "stream_slots_exhausted".to_string(),
             ),
             AppError::FeatureDisabled(_) => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
+            AppError::Unsupported(_) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, self.to_string()),
             AppError::Db(e) => {
                 tracing::error!("db error: {e}");
                 (

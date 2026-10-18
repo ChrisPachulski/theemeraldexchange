@@ -32,6 +32,7 @@ mod catalog;
 mod chapters;
 mod collections;
 mod health;
+mod images;
 mod library;
 mod markers;
 mod music;
@@ -60,11 +61,12 @@ use self::collections::{
     get_collection, list_collections, rename_collection,
 };
 use self::health::{health, version};
+use self::images::get_image;
 use self::library::{
     get_episode, get_movie, get_show, list_episodes, list_episodes_all, list_movies, list_shows,
 };
 use self::markers::{delete_marker, get_markers, put_marker};
-use self::music::{album_art, list_albums, list_artists, list_tracks};
+use self::music::{list_albums, list_artists, list_tracks};
 use self::photos::{list_photos, photo_file};
 use self::playlists::{
     add_playlist_item, create_playlist, delete_playlist, delete_playlist_item, get_playlist,
@@ -104,7 +106,6 @@ pub fn router(state: AppState) -> Router {
         .route("/episodes/{id}", get(get_episode))
         .route("/music/artists", get(list_artists))
         .route("/music/albums", get(list_albums))
-        .route("/music/albums/{id}/art", get(album_art))
         .route("/music/tracks", get(list_tracks))
         .route("/play/{kind}/{id}/grant", post(play_grant))
         .route(
@@ -140,6 +141,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/photos", get(list_photos))
         .route("/photos/{id}/file", get(photo_file))
+        .route("/images/{kind}/{id}", get(get_image))
         .route("/audiobooks", get(list_audiobooks))
         .route("/audiobooks/{id}", get(get_audiobook))
         .route("/youtube/channels", get(list_youtube_channels))
@@ -235,7 +237,7 @@ pub struct PageQuery {
     pub offset: Option<i64>,
 }
 
-/// Content type by extension for the photo and album-art file endpoints.
+/// Content type by extension for the photo and YouTube file endpoints.
 pub(super) fn image_content_type(path: &str) -> &'static str {
     match path.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()) {
         Some(ext) => match ext.as_str() {

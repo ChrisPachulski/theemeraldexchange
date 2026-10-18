@@ -263,27 +263,26 @@ fn walk_files(dir: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
         .collect()
 }
 
+/// Fixture images built in-test, shared with the route tests.
 #[cfg(test)]
-mod tests {
+pub(crate) mod fixtures {
     use super::*;
-    use image::{ImageFormat, Rgb, RgbImage, Rgba, RgbaImage};
-    use std::sync::atomic::AtomicUsize;
-    use std::time::Duration;
+    use image::{ImageFormat, Rgb, RgbImage};
 
-    fn gradient(w: u32, h: u32) -> RgbImage {
+    pub(crate) fn gradient(w: u32, h: u32) -> RgbImage {
         RgbImage::from_fn(w, h, |x, y| {
             Rgb([(x * 255 / w) as u8, (y * 255 / h) as u8, 90])
         })
     }
 
-    fn encode(img: &DynamicImage, format: ImageFormat) -> Vec<u8> {
+    pub(crate) fn encode(img: &DynamicImage, format: ImageFormat) -> Vec<u8> {
         let mut out = Cursor::new(Vec::new());
         img.write_to(&mut out, format).unwrap();
         out.into_inner()
     }
 
     /// A JPEG with an APP1 EXIF segment carrying orientation 6 (rotate 90 CW).
-    fn jpeg_with_orientation_6(w: u32, h: u32) -> Vec<u8> {
+    pub(crate) fn jpeg_with_orientation_6(w: u32, h: u32) -> Vec<u8> {
         let jpeg = encode(&DynamicImage::ImageRgb8(gradient(w, h)), ImageFormat::Jpeg);
         // Big-endian TIFF header with IFD0 at offset 8, one entry (Orientation
         // 0x0112, SHORT, count 1, value 6), then no next IFD.
@@ -299,6 +298,15 @@ mod tests {
         out.extend_from_slice(&jpeg[2..]);
         out
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixtures::*;
+    use super::*;
+    use image::{ImageFormat, Rgba, RgbaImage};
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
 
     fn webp_dims(bytes: &[u8]) -> (u32, u32) {
         let img = image::load_from_memory_with_format(bytes, ImageFormat::WebP).unwrap();

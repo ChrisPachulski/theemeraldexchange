@@ -33,6 +33,7 @@ pub(super) async fn list_photos(
                 "taken_at": taken_at,
                 "mtime": mtime,
                 "url": format!("/api/media/photos/{id}/file"),
+                "thumb_url": format!("/api/media/images/photo/{id}"),
             })
         })
         .collect();
@@ -53,8 +54,8 @@ pub(super) async fn photo_file(
         tracing::warn!(path = %path, "refusing to serve photo outside photo roots");
         return Err(AppError::NotFound);
     }
-    // ponytail: originals only, read fully (photos are MBs, not GBs). Add an
-    // ffmpeg-scaled thumbnail cache when the grid UI needs one.
+    // Full-size original, read fully (photos are MBs, not GBs); the grid uses
+    // the resized /images/photo/{id}.
     let bytes = tokio::fs::read(&path)
         .await
         .map_err(|_| AppError::NotFound)?;
@@ -107,6 +108,10 @@ mod tests {
         assert_eq!(list["total"], 1);
         let id = list["items"][0]["id"].as_i64().unwrap();
         assert_eq!(list["items"][0]["taken_at"], "2025-12-25T10:00:00");
+        assert_eq!(
+            list["items"][0]["thumb_url"],
+            format!("/api/media/images/photo/{id}")
+        );
 
         // photo_roots is empty in tests → containment skipped → file serves.
         let file = app
