@@ -5,7 +5,6 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use axum::http::header;
 use serde_json::{Value, json};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -64,45 +63,15 @@ pub async fn tag_iptv(st: &AppState, items: Vec<Item>, sub: &str) -> Vec<Item> {
 }
 
 async fn linked_ids(st: &AppState, sub: &str, ids: &[i64]) -> Result<HashSet<i64>, String> {
-    let mut req = st
-        .upstream
-        .client()
-        .post(format!(
-            "{}/internal/availability",
-            st.config.auth.iptv_service_url
-        ))
-        .header(header::CONTENT_TYPE, "application/json")
-        .body(json!({ "tmdb_ids": ids }).to_string());
-    let secret = st.config.auth.internal_principal_secret.as_deref();
-    if secret.is_some()
-        && let Some(server_id) = crate::recommender::server_id(st).await
-    {
-        let caller = crate::principal::Caller {
-            sub,
-            role: "admin",
-            auth_mode: sub.split(':').next().unwrap_or_default(),
-            device_id: None,
-        };
-        let token =
-            crate::principal::mint(secret, &caller, &server_id, None).map_err(|e| e.to_string())?;
-        req = req.bearer_auth(token);
-    }
-    let call = async {
-        let res = req.send().await.map_err(|e| e.without_url().to_string())?;
-        // No path in the message: logs never carry the member sub.
-        if !res.status().is_success() {
-            return Err(format!(
-                "iptv internal POST answered {}",
-                res.status().as_u16()
-            ));
-        }
-        res.json::<Value>()
-            .await
-            .map_err(|e| e.without_url().to_string())
-    };
-    let body = tokio::time::timeout(IPTV_TIMEOUT, call)
-        .await
-        .map_err(|_| "The operation was aborted due to timeout".to_string())??;
+    let body = crate::proxy::iptv_internal(
+        st,
+        axum::http::Method::POST,
+        "/internal/availability",
+        sub,
+        Some(json!({ "tmdb_ids": ids })),
+        IPTV_TIMEOUT,
+    )
+    .await?;
     Ok(body["tmdb_ids"]
         .as_array()
         .map(|a| {

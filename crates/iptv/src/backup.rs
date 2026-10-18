@@ -1,7 +1,7 @@
-//! Nightly iptv.db snapshot, the iptv.db half of server/services/dbBackup.ts
-//! (the backend can no longer open this file): `VACUUM INTO
-//! <DB_BACKUP_DIR>/iptv-<stamp>.db`, `PRAGMA integrity_check` on the copy
-//! before anything is pruned, then keep the newest DB_BACKUP_KEEP.
+//! Nightly iptv.db snapshot, the iptv.db half of the DB backups (the gateway
+//! snapshots server.db and media.db): media_core::backup's `VACUUM INTO
+//! <DB_BACKUP_DIR>/iptv-<stamp>.db`, integrity check, keep the newest
+//! DB_BACKUP_KEEP.
 //!
 //! Restore: stop the iptv container, copy the snapshot over iptv.db, delete
 //! its -wal/-shm, start it again.
@@ -9,90 +9,28 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use chrono::{DateTime, SecondsFormat, Utc};
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::{ConnectOptions, SqlitePool};
+use chrono::{DateTime, Utc};
+use media_core::cron::{cron_or_default, every};
+use sqlx::SqlitePool;
 use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::scheduler::{every, parse_cron};
 
-/// `toISOString()` with ':' and '.' made filesystem-safe, so names sort by time.
-fn stamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(SecondsFormat::Millis, true)
-        .replace([':', '.'], "-")
-}
-
-/// One snapshot pass. Returns the snapshot path.
+/// One snapshot pass (media_core::backup with the `iptv` prefix). Returns the
+/// snapshot path.
 pub async fn run(
     pool: &SqlitePool,
     dir: &Path,
     keep: usize,
     now: DateTime<Utc>,
 ) -> Result<PathBuf, String> {
-    tokio::fs::create_dir_all(dir)
-        .await
-        .map_err(|e| format!("create {}: {e}", dir.display()))?;
-    let dest = dir.join(format!("iptv-{}.db", stamp(now)));
-    // VACUUM INTO refuses to overwrite; only a same-millisecond rerun hits this.
-    let _ = tokio::fs::remove_file(&dest).await;
-    sqlx::query("VACUUM INTO ?")
-        .bind(dest.to_string_lossy().into_owned())
-        .execute(pool)
-        .await
-        .map_err(|e| format!("VACUUM INTO: {e}"))?;
-
-    let mut snap = SqliteConnectOptions::new()
-        .filename(&dest)
-        .read_only(true)
-        .connect()
-        .await
-        .map_err(|e| format!("open snapshot: {e}"))?;
-    let rows: Vec<String> = sqlx::query_scalar("PRAGMA integrity_check")
-        .fetch_all(&mut snap)
-        .await
-        .map_err(|e| format!("integrity_check: {e}"))?;
-    drop(snap);
-    if rows != ["ok"] {
-        return Err(format!(
-            "integrity_check failed for {}: {}",
-            dest.display(),
-            rows.join("; ")
-        ));
-    }
-
-    prune(dir, keep).await;
-    Ok(dest)
-}
-
-/// Delete all but the newest `keep` iptv-*.db snapshots (best effort).
-async fn prune(dir: &Path, keep: usize) {
-    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
-        return;
-    };
-    let mut snaps = Vec::new();
-    while let Ok(Some(e)) = entries.next_entry().await {
-        let name = e.file_name().to_string_lossy().into_owned();
-        if name.starts_with("iptv-") && name.ends_with(".db") {
-            snaps.push(name);
-        }
-    }
-    snaps.sort();
-    let excess = snaps.len().saturating_sub(keep);
-    for name in &snaps[..excess] {
-        let _ = tokio::fs::remove_file(dir.join(name)).await;
-    }
+    let mut conn = pool.acquire().await.map_err(|e| format!("acquire: {e}"))?;
+    media_core::backup::snapshot(&mut conn, dir, "iptv", keep, now).await
 }
 
 /// Run a snapshot on DB_BACKUP_CRON (03:30 local by default).
 pub fn spawn(pool: SqlitePool, config: Arc<Config>) -> JoinHandle<()> {
-    let cron = parse_cron(&config.db_backup_cron).unwrap_or_else(|| {
-        tracing::error!(
-            "invalid DB_BACKUP_CRON {:?}; using 30 3 * * *",
-            config.db_backup_cron
-        );
-        parse_cron("30 3 * * *").expect("default cron parses")
-    });
+    let cron = cron_or_default("DB_BACKUP_CRON", &config.db_backup_cron, "30 3 * * *");
     tokio::spawn(every(cron, move || {
         let (pool, config) = (pool.clone(), config.clone());
         async move {

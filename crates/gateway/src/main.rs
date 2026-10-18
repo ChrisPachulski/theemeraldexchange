@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use gateway::config::{Config, auth_posture};
-use gateway::{AppState, telemetry, trailer};
+use gateway::{AppState, backup, telemetry, trailer};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -55,6 +55,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "authentication posture"
     );
     let sweep = auth::spawn_sweep(pool.clone(), &config.auth.token_sweep_cron);
+    let snapshots = backup::spawn(pool.clone(), std::sync::Arc::new(config.clone()));
+    {
+        // A DSN host the docker network cannot resolve would drop every event
+        // silently; say so loudly at boot, without holding the boot up.
+        let (config, upstream) = (config.clone(), gateway::upstream::Upstream::default());
+        tokio::spawn(async move { telemetry::self_check(&config, &upstream).await });
+    }
 
     let port = config.port;
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
@@ -66,6 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_graceful_shutdown(shutdown_signal())
     .await?;
     sweep.abort();
+    snapshots.abort();
     pool.close().await;
     Ok(())
 }

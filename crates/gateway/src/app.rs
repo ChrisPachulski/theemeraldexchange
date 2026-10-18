@@ -1,10 +1,10 @@
 //! The edge (server/app.ts): the layers every request crosses, the edge
 //! routes (/api/health, /api/limits, /api/version) and the fallback.
 //!
-//! Layers, outermost first: X-Request-Id, the redacting request logger, the
-//! anti-framing headers, CORS, CSRF, the 1 MiB control-body limit on the
-//! sidecar proxies, the panic catcher; then the routes, the JSON 404 for
-//! /api/* and the SPA.
+//! Layers, outermost first: dot-segment normalization, X-Request-Id, the
+//! redacting request logger, the anti-framing headers, CORS, CSRF, the 1 MiB
+//! control-body limit on the sidecar proxies, the panic catcher; then the
+//! routes, the JSON 404 for /api/* and the SPA.
 
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
@@ -49,9 +49,22 @@ pub fn router(state: AppState) -> Router {
         .merge(crate::tmdb::router())
         .merge(crate::suggestions::router(&state))
         .merge(crate::usage::router())
+        .merge(crate::account::router())
+        .merge(crate::telemetry::router())
+        .merge(crate::proxy::iptv::router(&state))
+        .merge(media_routes(&state))
         .with_state(state.clone())
         .merge(auth::router(state.auth.clone()));
     edge(routes, &state)
+}
+
+/// /api/media and /api/transcode only with USE_MEDIA_CORE: without
+/// media-core there is nothing to hand off to.
+fn media_routes(state: &AppState) -> Router<AppState> {
+    if !state.config.use_media_core {
+        return Router::new();
+    }
+    crate::proxy::media::router().merge(crate::proxy::transcode::router())
 }
 
 /// Fallbacks and layers around `routes`.
@@ -74,6 +87,59 @@ pub(crate) fn edge(routes: Router, state: &AppState) -> Router {
         .layer(middleware::from_fn(frame_headers))
         .layer(middleware::from_fn(request_log))
         .layer(middleware::from_fn(request_id))
+        .layer(middleware::from_fn(normalize_path))
+}
+
+/// Dot segments resolved as the WHATWG URL parser does (`.`, `..` and their
+/// `%2e` spellings), before anything routes or logs: Hono only ever saw the
+/// parsed URL. Without it `/api/transcode/session/x/../../grant` would pass
+/// the control-path block, then collapse to `/grant` in the forward URL.
+async fn normalize_path(mut req: Request, next: Next) -> Response {
+    if let Some(path) = remove_dot_segments(req.uri().path()) {
+        let pq = match req.uri().query() {
+            Some(q) => format!("{path}?{q}"),
+            None => path,
+        };
+        let mut parts = req.uri().clone().into_parts();
+        match pq.parse() {
+            Ok(pq) => parts.path_and_query = Some(pq),
+            Err(_) => return not_found().await,
+        }
+        match axum::http::Uri::from_parts(parts) {
+            Ok(uri) => *req.uri_mut() = uri,
+            Err(_) => return not_found().await,
+        }
+    }
+    next.run(req).await
+}
+
+/// The path without dot segments, or None when it has none.
+pub(crate) fn remove_dot_segments(path: &str) -> Option<String> {
+    let single = |s: &str| s == "." || s.eq_ignore_ascii_case("%2e");
+    let double = |s: &str| {
+        matches!(
+            s.to_ascii_lowercase().as_str(),
+            ".." | ".%2e" | "%2e." | "%2e%2e"
+        )
+    };
+    let segs: Vec<&str> = path.strip_prefix('/')?.split('/').collect();
+    if !segs.iter().any(|s| single(s) || double(s)) {
+        return None;
+    }
+    let mut out: Vec<&str> = vec![];
+    for (i, s) in segs.iter().enumerate() {
+        let last = i + 1 == segs.len();
+        if double(s) {
+            out.pop();
+        } else if !single(s) {
+            out.push(s);
+            continue;
+        }
+        if last {
+            out.push("");
+        }
+    }
+    Some(format!("/{}", out.join("/")))
 }
 
 /// Honour an inbound X-Request-Id that passes Hono's rule (word characters,

@@ -7,8 +7,10 @@
 //! `tokio::process::Command` — no FFI bindings.
 
 pub mod auth;
+pub mod backup;
 pub mod capability;
 pub mod config;
+pub mod cron;
 pub mod db;
 pub mod error;
 pub mod filename;

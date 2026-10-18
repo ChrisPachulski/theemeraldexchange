@@ -3,12 +3,16 @@
 //! pool) and reaches the internal services (recommender, media-core,
 //! transcoder, iptv) and the *arr/SAB/TMDB/OMDb upstreams through one client.
 
+pub mod account;
 pub mod app;
 pub mod arr;
+pub mod backup;
 pub mod config;
 pub mod jsonl;
 pub mod media_token;
+pub mod parental;
 pub mod principal;
+pub mod proxy;
 pub mod ratings;
 pub mod recommender;
 pub mod routes;
@@ -64,6 +68,12 @@ pub struct AppState {
     pub suggestions: Arc<suggestions::Suggestions>,
     /// data/usage.jsonl: one line per Claude call.
     pub usage: Arc<jsonl::JsonlLog>,
+    /// The streaming proxies' client and the grant's readiness timings.
+    pub proxy: Arc<proxy::Proxy>,
+    /// Radarr/Sonarr certification caches for the rating gate.
+    pub certs: Arc<parental::Certs>,
+    /// POST /api/telemetry/tunnel's bucket.
+    pub tunnel: Arc<media_core::rate_limit::RateLimiter>,
 }
 
 impl AppState {
@@ -81,6 +91,9 @@ impl AppState {
             trailers: Arc::default(),
             suggestions: Arc::default(),
             usage: Arc::new(jsonl::JsonlLog::new(&config.usage_log_path)),
+            proxy: Arc::default(),
+            certs: Arc::default(),
+            tunnel: Arc::new(telemetry::tunnel_limiter()),
             config: Arc::new(config),
         }
     }

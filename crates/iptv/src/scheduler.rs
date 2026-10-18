@@ -5,12 +5,11 @@
 //! Failures go out as `tracing::error!`, which the sentry layer in main turns
 //! into Glitchtip issues.
 
-use std::future::Future;
 use std::sync::Arc;
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Utc};
 use croner::Cron;
-use croner::parser::{CronParser, Seconds};
+pub(crate) use media_core::cron::{every, parse_cron};
 use sqlx::SqlitePool;
 use tokio::task::JoinHandle;
 
@@ -19,20 +18,8 @@ use crate::sync::{CatalogSync, get_state};
 pub const DEFAULT_SYNC_CRON: &str = "0 */6 * * *";
 const TOMBSTONE_SWEEP_CRON: &str = "0 3 * * *";
 
-/// node-cron syntax: five fields, or six with leading seconds.
-pub fn parse_cron(expr: &str) -> Option<Cron> {
-    CronParser::builder()
-        .seconds(Seconds::Optional)
-        .build()
-        .parse(expr)
-        .ok()
-}
-
 fn cron_or_default(expr: &str) -> Cron {
-    parse_cron(expr).unwrap_or_else(|| {
-        tracing::error!("invalid IPTV_SYNC_CRON {expr:?}; using {DEFAULT_SYNC_CRON}");
-        parse_cron(DEFAULT_SYNC_CRON).expect("default cron parses")
-    })
+    media_core::cron::cron_or_default("IPTV_SYNC_CRON", expr, DEFAULT_SYNC_CRON)
 }
 
 /// Bootstrap when there is no `last_sync` row or it is older than 7 days. An
@@ -98,33 +85,13 @@ pub fn spawn(sync: Arc<CatalogSync>, sync_cron: &str) -> Vec<JoinHandle<()>> {
     vec![bootstrap, sync_loop, sweep]
 }
 
-/// Run `job` at every occurrence of `cron`, one at a time. A run that overlaps
-/// the next occurrence skips it, like the single-flight sync does.
-pub(crate) async fn every<F, Fut>(cron: Cron, mut job: F)
-where
-    F: FnMut() -> Fut,
-    Fut: Future<Output = ()>,
-{
-    let mut last = Local::now();
-    loop {
-        // From the later of now and the last fire, so a wake a hair early never
-        // fires the same occurrence twice.
-        let from = Local::now().max(last);
-        let Ok(next) = cron.find_next_occurrence(&from, false) else {
-            return tracing::error!("cron has no next occurrence; job stopped");
-        };
-        tokio::time::sleep((next - Local::now()).to_std().unwrap_or_default()).await;
-        last = next;
-        job().await;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sync::put_state;
     use crate::testpanel::Panel;
     use crate::xtream::iso;
+    use chrono::Local;
 
     #[test]
     fn cron_accepts_node_cron_syntax_and_falls_back_on_garbage() {
