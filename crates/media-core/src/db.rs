@@ -202,6 +202,22 @@ pub async fn migrate(
             continue;
         };
         let expected = checksum(sql);
+        // A row written before the ledger kept checksums (prod server.db
+        // v1-4) carries '' and so nothing to compare: record the embedded
+        // checksum, as the Node migrator went on past it.
+        if stored.is_empty() {
+            sqlx::query("UPDATE schema_migrations SET checksum = ? WHERE version = ?")
+                .bind(&expected)
+                .bind(version)
+                .execute(pool)
+                .await?;
+            tracing::info!(
+                version,
+                name,
+                "recorded the checksum of a pre-ledger migration row"
+            );
+            continue;
+        }
         if *stored != expected {
             if allow_checksum_mismatch {
                 tracing::warn!(
@@ -292,6 +308,41 @@ mod tests {
                 i + 1
             );
         }
+    }
+
+    /// A ledger row written before checksums existed (prod server.db v1-4
+    /// carry '') has nothing to compare: it is filled in, not a boot failure.
+    /// A recorded checksum that differs still stops the boot.
+    #[tokio::test]
+    async fn an_empty_legacy_checksum_is_backfilled_and_a_real_mismatch_still_fails() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let migs: &[(i64, &str, &str)] = &[
+            (1, "0001_a.sql", "CREATE TABLE a (x INTEGER);"),
+            (2, "0002_b.sql", "CREATE TABLE b (x INTEGER);"),
+        ];
+        migrate(&pool, migs, false).await.unwrap();
+        sqlx::query("UPDATE schema_migrations SET checksum = '' WHERE version = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        migrate(&pool, migs, false).await.unwrap();
+        let stored: String =
+            sqlx::query_scalar("SELECT checksum FROM schema_migrations WHERE version = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stored, checksum(migs[0].2));
+
+        sqlx::query("UPDATE schema_migrations SET checksum = 'deadbeef' WHERE version = 2")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(migrate(&pool, migs, false).await.is_err());
     }
 
     #[tokio::test]
