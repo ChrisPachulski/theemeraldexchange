@@ -22,11 +22,11 @@
       "https": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; Secure; SameSite=Lax"
     }
   },
-  "minted_at": 1792341606,
+  "minted_at": 1792342977,
   "cookies": [
     {
       "name": "ts apple user, auth_mode backfilled",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..TJ7FgEE3PhyHImyN.yatN4QZUG4jV4JUbxzUkKK4nrWsX0uvQ4lUf89GiHySeqEHqwAJ8HY463fLyTeze-46_ZcA-vYNRnCvQ9BudGKE0ETK0XR5c4b6bKECj9Nq-nTDrdjM07nWjUOJLcKzseQqWrOUDvzerFmnxNoOEhsqWYgCGX-xgozyeuKl4r8HUJIhXiEjLNb-xEqedg95WMw.6kDxYNu5ghY7XEyF7vkr9A",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..lT5JueHRLF7bHP8R.bIt_QQSK7qIMc1uyL76q4pYBNgGXYmNFld9_37-WT3x2LwQkZv7hXvfUyBq6tcCqEnP12eV-G85XBaSSEyN0A0A49czDxopZS4FkxTmzgqYu-hp9_yxCF6ypsqLWKaFxihOxizs8S2RWGGQXKr5yUg8muyXhh6MOpLG8_JyFNnBQszWWbRidfHOPG2866w20JA.zoWuetXxmgSvipgi2pZw3w",
       "ts": {
         "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
         "username": "Mom",
@@ -36,7 +36,7 @@
     },
     {
       "name": "ts workos admin",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..79MpodJ9voRwLmb8.p2wa_w6RHYfB0IxWjJa03nWfpdde60pHSvbwpibiOE41LNFF3F0aHl5AXQnnU0W9ady_NtzgWtGhl7Hn3GIelvAfUVoPA5zC2xK7g4EjnRyrSxB1D-noSn_KBdlzCC5djw72huwp2e-gpU_MOO8nesS-OFuUOSXbd8o_3qwKsvWp-_K2-DhA7FI.46iluAzAVmnQetmQu39V1A",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..v3ZSJ5KUYiy7Meex.ivvY2LA_naBh41h6LEsBc5SpycM0dS0ZeQE1V0H1hQykbjsW_3fRQeP7-viEu8uXkWabyubo9_5ULcNqY3qKwcPuGesZw0rg_otkPeWjaE0GlTnmtvZoYEn638FoAKBcVp7TtvKAIRNUb2h6VuEuhs3E2AjB-MKiLrwVYj-J6sul6a8J6z6MoLc.ROQbxzmuBRQYAOHjodyPQA",
       "ts": {
         "sub": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
         "username": "Owner",
@@ -46,7 +46,7 @@
     },
     {
       "name": "ts google user",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..dJlsy2XQ-ZJUGSNe.3bNtZodyYBTi5n94gHAwmjixTGBPftvKhxNXYsITiBrN5QPhI0Em6GAUzcDh-n1gFw-kOEa9WSUyA2fRSQAaY3opT9ORTHynrGYje7jy3lnpV9aEGUNLXWQwUlT-asnpedbGKOjjxppxuHOuRatQ.FwZkEBrp50D6gMfvR1eBlw",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..DJE0wGmScOWQ2Vwc.vrI9Vk4b3isrk0VEZWLH2S5vajp2rON6buT2H6JpaE0PgnnHFsJtVO0ya4Z9M0iC8lymgVqhVsU6yEOjsgDL3TBkc_m_1QwzI7gIXv6WYvjBh8lL-t1HeTYWEV5SmX5bHrRsP5IbDLm4C32Qq0y2.HPTiEGd2BmuAnPH68blBoQ",
       "ts": {
         "sub": "google:1234567890",
         "username": "G",
@@ -56,7 +56,7 @@
     },
     {
       "name": "ts local user",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..K0T53J0AnEN5AQb6.Ju1xcPDvmHposrJguq81kS4V_-ic48hXiDScgoreLsPmV4ZagOMt7qO8-d3VFL1ERJkGteCPBU8VIt-BfnLcN-s7UGslY76VM9doZg7t18OGCvUgNeMcKXFT05wQUW3P0rtymykX0rjsFyP3JtjI3MNFOYpozp1QGLgFwmg.qW_p6_CHs_W6zBsTj3haxw",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Kbi-0giMoEwo58j_.06d3HK1-qogXTaUPhJymoS3GJByg7mEghYOOwETcSStU4J8f207hb3tMqhMqCGI8KDeiG8u0xNgCnKHe9RidEEwx5jdX1TKcvmqka8C-YK-i4hHxEd300ClZ7UzW3cM5PDusGyiKnw1vwHFKxcEY1fnALoWA9GxybQj7azo.llttgBWO5f2Zu01sJXTfFg",
       "ts": {
         "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
         "username": "L",
@@ -66,7 +66,7 @@
     },
     {
       "name": "ts plex session",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..YCE_N3m47FJshisC._dzZtkAPjCHm0uHZa2aOKKUZJVltZPLztF2jNympch5zbGMOwoMKObgZnEmraRjYm2IP8mdkk80tT7PuC_dT4dJOwoo388IPb_0KpMVGvgq-EL_kiw-PT6yDHJEOBPQgI_OS.m-K45pxvcV_oaO1Tq7amPg",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..yoVCCbkAFlBhwCtz.mf0p6z9XDq25ABVtGasLxoUq1tL0DMo3xwtunUJycOGxkNTqaHq3dA4xBpeTEEX0jKsb6oxU1wiCLfAZbWT1HFdekf3_-Dsop5rq9qGsu2TW0k0KXa1_PiRcgKU_TvtBeWQd.8FL9Bx_wmqoIoitD_-kBSQ",
       "ts": {
         "sub": "plex:42",
         "username": "P",
@@ -76,7 +76,7 @@
     },
     {
       "name": "ts plex sign-in with a plex token",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..6QWKRtscLOqWUme3.czoM-1bXJlJwiBf9fKubMjE3pEWm5r6MOi3plyUKhsOBcUtq1aY9e0sauqabOQzEz2cJtzoZ1pFFkXyq9YwQqfA3LTb28WUGlsZP17ZAygHts4RyQlqxkdCbe9TL4GV4UNW34WvoUwpgRrLYyFKQOm--FTCX7BNj_zaRXxYCPw3XixWVEwNw.gxwX0FdLaqkDSd-Jmmkyvw",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..dnjtmSUheGA19FaI.0om76L3yvNo-6e87hQAhlGkvRiyaSuF1wbekdwVulQwqci4e5oPFz7TybKLx65iECyksZX8uiyDEFgTEt4DKHOijL6BhH_-YXtrG1DAqjlKhQ9OUXHAPjgOcjW9Kewd91a5Aspc0owXwdU-FBcLI5Plj8ouzl_Fv3P3qCOvtLDpIIE_ps1sb.mKRI4RrSR__XO_P2VJvQWQ",
       "ts": {
         "sub": "plex:42",
         "username": "P",
@@ -87,7 +87,7 @@
     },
     {
       "name": "ts plex sign-in with a verified server id",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..johgJgH8V_augKHx.Y6bJLve-ccHdER1BDpfVP_4sV4IWUpmY4jeZb_RusG5aRNS357uuwWbK_ch7uAh_AchaELYnI0mQkhyoeIAL94uOTbPK9TjstdkaEmk2upg2xO3x5cDSeT6dQ0XTzagjLGOeBiIKuVZxl1Jx2ThQNLEgFzplra7um7palvNhQxDOtDs7rkHWVpGfj5wPpR4zjaNdbkAzdOTynv3_NSzcbhkcSFW0DxAIfTTAl6aNX_oei5I.8dtPNuXvbi5jtbxlyUBoFg",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..2zOegkWo73aQq1kr.BmAdqL3TkPJo8QrwS0ogS8_qehzeHa8ISwgXDI2A93En4HPbAv2ve40bujDK0A5-sR0gHY08HRirs0IGkSww8QTJkTKLyH9OpbpKKuohIPWcXMN3RP9_oDvDBjsUP6rCcLVJM6HDWZCAmuFcBNOsZtjpc8_1QOj8vifj-_iF-bJgkjiTorj6AAaOFysvYmpbGQ3waJYum8v7RiriFmJ6qEySsvsoQmw0YYomEXVExR9_AeY.eWe4WoP1EP7U24eC6uJYYA",
       "ts": {
         "sub": "plex:42",
         "username": "P",
@@ -99,7 +99,7 @@
     },
     {
       "name": "non-string plexAuthToken",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0.._TsExYEwibvu3VYF.MK8L8RGltHo8j-5bE7POdHFBI4YTUb2JJOjiHIvLKytS9yM49WbvtWFczlE8GlM9CAQuhXyBobrMO9AtjCFPZvfxPP2EmD7gZg-Fve7DNCPQcFxr-8foOcyPVGAIb82n_3WpMzTcYktLDWKBChae4GuKRtZZpmIl.pzut0alKSZZgV6jCR-LWlA",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Cp7GoDR45iDjZ4d4.dAwy_V07ge6Dl5oSTsIJFsc_iDHKT6cwQjii-KMZUYiITlYF6oqI2IRKgou9RTPjW4KRMbDDdtsbgt758OeDQxfJzpY4LXy5SeS01RTUi6LMwRR0gHFE5GVBik88z16yfIpJ0JZB6k5yF7i3CUQ6O6Fnoj5o7aH2.EezI4PsJDBBXakloO7dBfA",
       "ts": {
         "sub": "plex:42",
         "username": "Mom",
@@ -109,7 +109,7 @@
     },
     {
       "name": "empty plexAuthToken",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..EkKDrYr04txv3QBp.Fkf6QOC1Rg-zpCghQSG__CtbisYngfOY0zPYfmdJXNPhaxwYe6zwmWHHRlrRHKjJxQ_zKxSId8xjU0TPxbv3lA1B96KrlYNX6ccOTvoVIlq_lf70A2ZKz3rD2Q31V8gEDZKrD9xuG9PyEIqWTYL200YGisC4H5Hf.-bGdSQ2gC6tnkcmNPhnOFg",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0.._6ePhgAyfX3yfM6M.p2KTP1cyohoCLPRDC2Guw55x-uMGkJRbCry9V9JErtX0p36qnGDvuhNaFHvvtd2i9Lbng-WqBLqYzRy_zY_U0lD84LF2Gkm4Z4x7nsXMHCjYbRdfaiPVBGVaFrQbLvBf-ZaxVYTfpVHh7gq8IqmmCp9rfmNTCE_J.jv560rjI6lvuPtmv6MtxUg",
       "ts": {
         "sub": "plex:42",
         "username": "Mom",
@@ -119,7 +119,7 @@
     },
     {
       "name": "header with kid session-v1",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..otSMzvOb0Cp0xMxS.OLdKvV73llpg0GXbm_3eie9LfBwWW7XI2hLFOTnZKRZP7MOc3yFsasVGTMZMa_viFCOYoG66wyHXgC5MQCqf5WzoE1rxdE0zf7m75bycFWMUi11siLdDkGXVtCPLipN8rPLbs6jQ4xreJVPrmPP7yZVUU9IcdsPbtBddBsIkJYNr2y9DynrzV2GB8BfxQWObdw.HDor3c6IGyruBexewXgdww",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..uTFxFcYbvlDW-Qbg.ZNHtWcpZCSExlMdO-8nfOJGQpubtfrP4q5_VRTCbjGrYTPDPnfVrkgfFJQvQrlqWHtkIgIbedJBkaZS3jPoVLl7QPAZZu44D8o5Kom4rcn51TQs8lYeGLvb2vcgEZPLjp2PVvQ8w7klnQTRq45K1JTPDFrM8_HlGC6XU0v4dvkq206C7yG34S4Z0dENtbDxmmw.Fd_k2eCJKNMrllHFdC189Q",
       "ts": {
         "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
         "username": "Mom",
@@ -129,72 +129,72 @@
     },
     {
       "name": "no auth_mode",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Wpw7CSJLtRQYc8Ks.P40Sfk9Zwr77Amjwdxsbqvdj8EAZrF0-TR1-PjKkEc-bcgpIZzs6d91jO5kC3uAAimQMsi-0yPyDiuhoHtHapSL1GTfuH3uXQwq9AhYrGK9tAMXBq3SuJRpptZ1GcT5gbB7W-K0OkWYyY9pyCUmkKzIgIrxZav10ysF2icw.E7dWOKubFidFNcl1S-Sdxw",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..xUu6Xrxqg63-bXE2.wHtN5r8TJreWH0mKTGx2eF_p9udapLEdC5xoNgLZH0GsER7BOvoW3J_jnCCm4ozNVinI8BI39xL3eOlyREHFmUY7NA3oQ5yfBTrFo3s8ci_O0ChXJfNOs-RwrAs0iEJBa34-0v4ze8ZcqZJk1Nb4rjPnu9QNlDmre5qZSss.fJmhEYeqFMmuQZcb-93Lrw",
       "ts": null
     },
     {
       "name": "unknown auth_mode",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..frqGrSgGkG13B922.A0WLWsRDw-e_StSUMCjP2eSTx2yAbeQ51wnVdaf_2dkmB5toTZu_Vdz8ShUXsbfxcH1vgG3HgxgPfHxIan4UZ3qWemuTNQ7wq-0Zm2sRs7V9Jr0z85JBG9ZMZKLMF78vShEmH-wTZrriPwOjkeEPnUbmS3hKKVb5glWCtvwvkU-fPO4fr1wrnjyMUUkny0awCA.3LbPV7-Odcncn8Nu0JcDXQ",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..n2kHLST8r0eUcLkt.gBSdSRMYD9ik9iL70aXPgQjUj84cImk7FFYdYvpur2JSV-OHLLvZ-NGfd03zKtWRUxE4_XS2M61n1SLnPKjK1EYvhmHFLFsn2lXqhTXhirku8T3R4uJbg4UcZcCTzJR9YlPWT0mms7iCDj4AjyFuFcM5E86mPKi5oVXtMbAx_InFhEHk8IKR972-ZSy1OPwo5g.Dz85lSsbI9hdXlkobc5mVQ",
       "ts": null
     },
     {
       "name": "bare sub",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..J43w8bXuA6-VPrPq.70xTGB7FEppZH7KtgDMRscKSkLCWJYrAYC4TLt6MAihAJgVA4vbbU-c4yf4S5GADa0mhsrROn79BokcFgJGn7jWa7XsLLRgFQEIY4ILp7MrrjzOvQ3gwVkaSpVQCOiULIQ.Zy8BnIim6b1uPi_fH_lLtA",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-3Ujka0wWdDn8WXv.jwyLeTHsAwmsvd7ZuDP8kmPWTRmc6_nPiCJGwkRIGObcLJs1hfw0468zC1ZSF05y2VhLJnbd_MA9kf4mPN5qpORjiQEz6oV7EUYJnT0d8NQuM-aj791quPf_i8A5r7cYNQ.3g8JumuF2j8vV7bDvHaQ_g",
       "ts": null
     },
     {
       "name": "malformed apple sub",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..BOEWbJP1vdwI97yL.JDBgWgNoojduVaN2cn93DtrxqrxuBKbqg4hCRUBt9UPSRKnrLx5A7C7G7XzW7KspG2QuYTCRCd5jL-_93wgZwo3tYxZ1T0G2oWTNpT61R3BQEOZ_ieNcFKUkvgWnePGJTodBsRsFors.yIss69bQFjY3aRuLXvFsTw",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..T3qvz-fALgElG2-k.HYWkwZOw688cYMhIrVtHpWLSOwJafAVygDwl5eg5t9mRMHegqzV0PDzuCbitEhUoAuEiJRTg8stPBqT0XCxDEWojmRaCx78gLV8_CpweFT1P4leDzMB6RVO8AdqqtLs4MKakxk7mJ28.C2gQRR-S6gqc_hsoIjN-fw",
       "ts": null
     },
     {
       "name": "unknown role",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..sF8S-YkcWS-Nkl-j.t5jlM7V-oBD7zirMLsFziRbqmyLQncGXfauu02iG5E4LMo1YzQNQJd75ij-CKBhnhN8uNI3oeUYWFn60h1k65EhKCCA2PFWszfwlKoa7JOA9PArKeZVTMhFr1VqSlGj4R6RMxCz_c1wzMHkoqzEOf1fKxejZkIuTW6rrO8lg1xbCozkkKHsGcOamCUzpU4PW7CtR5BTNEg.sU3-iZXxFBZrwiNXk5SMwQ",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..RiKuunVtb2MJn8kZ._ZVqZDldO8ZItM5KDwPlBzj7QFKzVEZL10wX6dp4UYql1gVUdK_kxBEqfBtmuBOow-bHyspBZkNfQ8Zb9eEAe0zbg5QmILbI474E5WoaLmjRdz__derC-QBXxNJ4tQUFTZKeyD0j9I_QxpkAUP-cBzhxm5LLTMDx7IH_Uy_rDytUTkl9TtnxaBY4K-6v8xr7XANGZ4buGg.-_e1MUFz6RSDiUQgZ8tmtQ",
       "ts": null
     },
     {
       "name": "missing username",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..3_2j04qCqKXjsP98.YxOiYL0zHKAGFmNF8fT9JgSnHJWDJjXFDiuuzudjKzUiF1-JX2OgXo7PTGwrKi1pWc1tsUuRr5a_6Z4nX66liRzIcnbhVTmEusayibdCXbj8sQyitTF7GDUEgY4uxGi8Jt3cFxZ_6IpCJjep49cLFJL2ANlMPl18qZuhE-eI4eA.YApqx5DlteLblTMc3RUx_A",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..N_T92DRK_biVp1V7.AMPFmeQQStLL_ZpseDwkwvc5qfJ5CrtrwmKoOSdI1d8sYWvYqHG7sLblbqh5QikjZrq_eJKsWRlLmMn9MNCTMsjqju4eJSx5lw9Vo4erFwCNAW24zQBVT7vnvmqrZdtkFsOWzzGt8JMsvVgMG8Z0MkPO1qopINMefGGDSS1hH90.5vBLOrCEruIMOtTEpBQ8pA",
       "ts": null
     },
     {
       "name": "null username",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..YwMwNjBF73HDyGnP.5EMMwmJlv6vaDsGSMrhWXmI4S2s6ZzXXbShiRdYGzuEf7MTKg4sRZtVl8FcnIeFLD5MGc6KYVdvqyfCGLBY2iUielhmtx8uqPkmM0JhA0RicqIilTbJ4Dsvgunh90DqFvl6ZxD4gP4kuBw1y48H_gvqwisPirx0R9PJzcvXN8Jq9NDGGACosIleUyz8_Dm0_.mumZ8eIsp44bZ9JOFdhluA",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..N6ZgtGqmycLzNRQc.3kEGS9qyg704xa-CAY9dbe5JtaxJycMTFYept4ABgWAFvee75K-3yXV27a-1aV3CWwG1AwtWRmN1NWht5rtoiRdP1amDn-rBT0VL-c9_4MnKdRIeZcwS4Xz-rF1bplGFmkP_yhxzyvCP0XPnTM1oUPbKCiOThe96iak60ka4Wqy01beQEpijki6gb-2v53ho.y-DJaPdnXxfIm8lnqObuPA",
       "ts": null
     },
     {
       "name": "missing sub",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..T0SCH5xlht9V2vOy.RwrLjMRTMvBCoifARTJqsmZlaqllP7VEk8l4Do0g8KQN0TR_yrGS_9mg0oY-HrPMcEYUs3gmKilx2m0HDtYGLg6PCeQ19lN3DEQ6dtPqg7d7FcfPQJ4.j6CGPM04hatXWFmL0hfLFw",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..kuBnPycfo-ta4AQ8.LGUqNSudywqVAvGyV0fQO0Sbbj5zecdTcypaLiht17YYgJ27LU792AwRvC3ckCw24Yfbdbx94gV77EGmQ04-zBOR2Lqm3VIS9JdaLHpfQ8SBGxecr_0.aEGTqFxLZ-efIH9bQiZmNA",
       "ts": null
     },
     {
       "name": "non-string sub",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..7WCnxLrG50Pgf5ot.1vATYaB_rsFqLvJDRlnl-9prZ5n45tbjvjVHsjlepeeYBOtLysx4ni70n2gMVD_n1SRcPuw_oXRtkk0dhdlhz6BUQz3DejV_igZyYXaEdIQKQ4v7ubzUoz5JO0AFb3o.gtMFrkA3XJrFALEOwPifpw",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..JFyvpRWpGyAblQwR.qQ-qbPwYyacEWOPd_YFobDQB5WSmCNYN-T-9sWyaVo7LMOmcDwTID55QUC31EUXgxtF-8k5KmYiIJxIQoxgcuVX4aPRTwIkI6Lugn0lKVOrzUWnm3p4vaWfB5rSHZ3U.ZhTxLlnDR2bjPjUwZncFSA",
       "ts": null
     },
     {
       "name": "expired",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Mj5lcHSJK1rf9GAB.qIpLGv_BH6VZcVLpD905s0a0ZbpC4ee1tvYSzH7Pvk_XnGGg1blwSQXleuqiorg8htYmVtS0RqSA8_rfcEOVuwKXlK1zkg0JpYyejipB01wFPnRZmrRQSy4utFWR4PPtBE2CDXpLS9BXChLszdV-zOZ6k_KSmu7aSzccoiyf1l6o1MwE8ZDjeoMTvremRWfOKw.55sT0sxV7ywbsRi6UgEFSA",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..aY3CpY4XBeGrWGXs.Vhan4ufL6csOfluGeDQ-N2PUuKIt41O_loqU49HxB-z5xL5Tu8Zl9y3tZRVTV7PT6lo2tdlDlQZUm0WwqJxbMtx7wOXxoqy_VY5mdA5Gq_IzvYr4SGbyxe58JHhO8oEn1gwoHhKmNd2qE1DUjylg4r8NecUiu0IBNDg8Ms9Qywg8Ec9O5Pc9xLcJLgD9qptqFQ.kYFvwwJP4dJARfOAnoRJQQ",
       "ts": null
     },
     {
       "name": "exp equals now",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..PfweFiF_eo1YBk1v.9o8HsuEEm-_3ip-U7HwzcCsdprb9yB02XCqoNhmsL4TyXX_gh364KBz71Wmn-aHqxFpfPgw5JtMoHomHZqBM1ZBwTYYALAOFVOWwPGAtvDMwsrFGM5SkqFcuj8HLcJ-vR6h4qtLPu60Zv1luj7p40NjBqS1ghmKFGesAMiQM7DZF1XjC5XKUCipJEnGuWrEg3g.8B3GYZ-D3IjdoDf9_F3PwA",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..WBmv8ftkcXYTTJGo._Nqf06u3NB0-6a3tSE4AcsnqQw4fetp0Yec82cZY3Jquobtn7lKz11tpVuIOjKR64EgeWBoU2jq2keYbRxxY3kIiFGIa97usJkNG-ZhEEJUgTyeY7VUS0hqOmCS37l43Se5vm1iQxUEEamQTXI72RuHASBvWRBOv_xl_fEOxN4RusJA1nhIEe2545kZhiX58Jw.GPOZhFLuYGzkxSGCvkScbA",
       "ts": null
     },
     {
       "name": "nbf in the future",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..ykkzu_qju0jLhIR7.YfTzFEDC9UKu7gJG-808L88WctrRN7m2XvhD9mbEkJ3IXpNpTCNRYTvLdFezWXYan1cOuQQphyiAgzKZmxleIkPDgypVGESPneZuhZ4dVWWpiNMEso2MZZiIbvgBz4fh-cyXe6kcZdbnah-yh2y_PB2rgV63N3J0YmpEF-JhNURx1tafq8kPXphILe_E3S-fhojUiqTELXaHa53pnFYDtiIa.9SYz0LBN0R1UdZmnKIGjMA",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..cKqExn-ZDeZzYHvP.5kpGMGSo6WezccAFoey1MWQcccjYEK4n3VjtXT2_Om6_hL2ncv-7wMFA8nEF1PW_CnfKht3osJkYYzfZ_s8hoSu-5gxcfL3d33G5db4foMjYLsdJjypMuTj5hkMtfRuiR-urKyjfan-G1OkZTgpKE_3soA0qwA-xLDXMY3TXnl8JF5E8ouyWxsssI41CeGjHcNtSo_RE4CaXIX74gvdBdIEz.aj9CiIxSK7LdP8vQsYSXJQ",
       "ts": null
     },
     {
       "name": "non-numeric exp",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..6Ak4yoEPBOEhJAI_.blpnIKHO2Qf_e5sAIe8kX1KD9D4_OgjYCsg_DfWy5VsGEqEc2H4gkzEOKsZa8HR5PKuX9uNChgbzc75iYpjdI43ooI9tAmHy2Qq8kCNlDQ498iLc-3mvZ4tDfzPvBSqMUQGY1mT129kdRFYnjxYb4aX-vvd4l56aJxGfhCYELFqhfeIC4wFBYy5jQTpd.FQGMT8OIe45qT_AauVfZHg",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..c4n9FhuLnV0gCWYm.FrnQGwrK95brDGRQznwOXbkISKxC5vh7VIyBxwH00196eT1OTILUvOC5m20gf8BIMHl0oRaji7mWNx2BHWIG3qHdgKk1AvgVWJBTWiL5XdBGDvJky7PtxpJMEhec7jsfD-ZBJIr7orkU9Zv3hmPglT83Wr73EJCzAKMw9dJKBdMEdXMaaLKRIOkFC_Rf.RpqsA2z8ikRTEcPNxTBYLw",
       "ts": null
     },
     {
       "name": "no exp",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..MUMa-eu4pHQwNC88.kteh1i_dPzme2R1Pm1T-UItP2eI4cUEG9p3l0K91NHxCHK1UoIDWaOym0RnPEPtxyzjjbHaooN5nVEFhZDRgFfzQ0RaW6p2XGF_qsCmgZT8DmYv04CaV7uAFdtdoxAVgmsQXuAkETgDjuTLQ5fZjazVHf7sY5Z6gpr2wkx8YYqM.WeSQ3ml7ujYrnfDbf0Xkig",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..6xvXAzu72sRHj2cN.32O3evHwCfqkr2lCKKyMvDqLKO2upUgCco68rDAwlLQKQYYb9w63wgTRlyMq0g7bTys3eGELhai67m09UA1pIA8SOrboEE_bqEsNOdYd-nqSHj3qD_2DQXoZqMG4IzznZgIIDxblpyB-75tWXqvyzWLDboDHj0azTUS2rGCQTSI.6DK_G55ffmBGRDYCFWdoPQ",
       "ts": {
         "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
         "username": "Mom",
@@ -204,7 +204,7 @@
     },
     {
       "name": "wrong key",
-      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..6aQjMTyO5Y7XFiqK.WIDO7il7MedDoDLTqBC-OIS1Q14dwywzKEzQS4uyOTXdxtJ80peGCu35lrP4p6cjtFLGjfhJXMh74A0Aa90eMMV5NSWW8oNbYATTMhmSQuOs0ckPV4Q-SxUdCUB6jVzs07OwKjkFO4RESLSHkGX1TGKpYzVeWibG4dwxqUoj-Y5F1eXOjde5lIAZBCXo1Bu12Q.4dg8JRKBpHTIbgehiEGqPg",
+      "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..qKVXn8jiWIzrBgBX.41X7fAlTgVBECBXMdm_G70vjNX0NxPCBHigqtfj7tfFL9gwjoQGnEY43TpAFk1_1qp1OCJfgMbnLOU5Bqii44Gc4TF_Vpzt3Cd-j1V7J67Hy7sjBw9xmlWGzfSB5JokTX7Ilq37nfQFFchBwaZhdcFxdO01Xkj27f012SqUHZmchE5BA-D2I5MPx76E5gPfNSQ.cPNFWmPAs_6SPrxKL2DyAg",
       "ts": null
     },
     {
@@ -343,85 +343,85 @@
     ],
     "device_tokens": [
       {
-        "jti": "06GMZRM0040D4R11R1WJM2YP7R",
-        "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
-        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ0",
-        "device_name": "Living Room Apple TV",
-        "platform": "tvos",
-        "server_id": "0a858aa9-29c7-4708-9fd5-678f8b983aea",
-        "kid": "device-v1",
-        "issued_at": "2026-10-18T16:40:06.000Z",
-        "expires_at": "2027-04-16T16:40:06.000Z",
-        "last_seen_at": null,
-        "last_seen_version": null,
-        "username": null
-      },
-      {
-        "jti": "06GMZRM008191D4RQDXFGA6Q8X",
-        "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
-        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ5",
-        "device_name": "Kids iPad",
-        "platform": "tvos",
-        "server_id": "0a858aa9-29c7-4708-9fd5-678f8b983aea",
-        "kid": "device-v1",
-        "issued_at": "2026-10-18T16:40:06.000Z",
-        "expires_at": "2027-04-16T16:40:06.000Z",
-        "last_seen_at": null,
-        "last_seen_version": null,
-        "username": null
-      },
-      {
-        "jti": "06GMZRM0088KVSV0B7PRE02H0A",
-        "sub": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
-        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ1",
-        "device_name": "Owner iPad",
-        "platform": "tvos",
-        "server_id": "0a858aa9-29c7-4708-9fd5-678f8b983aea",
-        "kid": "device-v1",
-        "issued_at": "2026-10-18T16:40:06.000Z",
-        "expires_at": "2027-04-16T16:40:06.000Z",
-        "last_seen_at": null,
-        "last_seen_version": null,
-        "username": null
-      },
-      {
-        "jti": "06GMZRM008CZ8BW5V5H5Y4PD15",
-        "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
-        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ4",
-        "device_name": "Stranger TV",
-        "platform": "tvos",
-        "server_id": "0a858aa9-29c7-4708-9fd5-678f8b983aea",
-        "kid": "device-v1",
-        "issued_at": "2026-10-18T16:40:06.000Z",
-        "expires_at": "2027-04-16T16:40:06.000Z",
-        "last_seen_at": null,
-        "last_seen_version": null,
-        "username": null
-      },
-      {
-        "jti": "06GMZRM008KGMN0HQRZ8GDR3D6",
-        "sub": "apple:000002.0123456789abcdef0123456789abcdef.0002",
-        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ2",
-        "device_name": "Revoked TV",
-        "platform": "tvos",
-        "server_id": "0a858aa9-29c7-4708-9fd5-678f8b983aea",
-        "kid": "device-v1",
-        "issued_at": "2026-10-18T16:40:06.000Z",
-        "expires_at": "2027-04-16T16:40:06.000Z",
-        "last_seen_at": null,
-        "last_seen_version": null,
-        "username": null
-      },
-      {
-        "jti": "06GMZRM008ZQWM61GGEEKAQDKA",
+        "jti": "06GMZXVB8C2DW8ASXBR0ZNTBVK",
         "sub": "apple:000002.0123456789abcdef0123456789abcdef.0002",
         "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ3",
         "device_name": "Revoked Phone",
         "platform": "tvos",
-        "server_id": "0a858aa9-29c7-4708-9fd5-678f8b983aea",
+        "server_id": "71b50505-0fe2-4217-9572-9eb89e44b68d",
         "kid": "device-v1",
-        "issued_at": "2026-10-18T16:40:06.000Z",
-        "expires_at": "2027-04-16T16:40:06.000Z",
+        "issued_at": "2026-10-18T17:02:57.000Z",
+        "expires_at": "2027-04-16T17:02:57.000Z",
+        "last_seen_at": null,
+        "last_seen_version": null,
+        "username": null
+      },
+      {
+        "jti": "06GMZXVB8C3ZEVSFB4Q2P6ZEVJ",
+        "sub": "apple:000002.0123456789abcdef0123456789abcdef.0002",
+        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ2",
+        "device_name": "Revoked TV",
+        "platform": "tvos",
+        "server_id": "71b50505-0fe2-4217-9572-9eb89e44b68d",
+        "kid": "device-v1",
+        "issued_at": "2026-10-18T17:02:57.000Z",
+        "expires_at": "2027-04-16T17:02:57.000Z",
+        "last_seen_at": null,
+        "last_seen_version": null,
+        "username": null
+      },
+      {
+        "jti": "06GMZXVB8CA33P8KH880TXRVEW",
+        "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ0",
+        "device_name": "Living Room Apple TV",
+        "platform": "tvos",
+        "server_id": "71b50505-0fe2-4217-9572-9eb89e44b68d",
+        "kid": "device-v1",
+        "issued_at": "2026-10-18T17:02:57.000Z",
+        "expires_at": "2027-04-16T17:02:57.000Z",
+        "last_seen_at": null,
+        "last_seen_version": null,
+        "username": null
+      },
+      {
+        "jti": "06GMZXVB8CGTM1MK3T5CM6YD0G",
+        "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ5",
+        "device_name": "Kids iPad",
+        "platform": "tvos",
+        "server_id": "71b50505-0fe2-4217-9572-9eb89e44b68d",
+        "kid": "device-v1",
+        "issued_at": "2026-10-18T17:02:57.000Z",
+        "expires_at": "2027-04-16T17:02:57.000Z",
+        "last_seen_at": null,
+        "last_seen_version": null,
+        "username": null
+      },
+      {
+        "jti": "06GMZXVB8CPMZTX57PVH5V11ET",
+        "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ4",
+        "device_name": "Stranger TV",
+        "platform": "tvos",
+        "server_id": "71b50505-0fe2-4217-9572-9eb89e44b68d",
+        "kid": "device-v1",
+        "issued_at": "2026-10-18T17:02:57.000Z",
+        "expires_at": "2027-04-16T17:02:57.000Z",
+        "last_seen_at": null,
+        "last_seen_version": null,
+        "username": null
+      },
+      {
+        "jti": "06GMZXVB8CX086TEC8W9EG9H4G",
+        "sub": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+        "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ1",
+        "device_name": "Owner iPad",
+        "platform": "tvos",
+        "server_id": "71b50505-0fe2-4217-9572-9eb89e44b68d",
+        "kid": "device-v1",
+        "issued_at": "2026-10-18T17:02:57.000Z",
+        "expires_at": "2027-04-16T17:02:57.000Z",
         "last_seen_at": null,
         "last_seen_version": null,
         "username": null
@@ -465,7 +465,7 @@
       "name": "member cookie",
       "path": "/needs-auth",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..h12kDpq2BoQqjghY.jC15ShvSdAMbnyJbjWLZ5szBZM5IAi1I_ycW8v0Z5pi60MJHgQqVlDvFUDkHaRFzkpq_TaZ3vj2KOgJpNm2_c_8IVZbSsEWHAefxJTJce-JrNHWbr6GY7lTjaO3gzhTYco316lMHAJQiXdNOATEpc8MSSZS6fGWMTBTlBTm2RA_nTpEQUpDMNmIy5ZWzu-Rsxg6NhY0lSd7yaA._Hp-4LH_GzTuBeMY7y4F6Q"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..t9S-Bx3mXtFc_ZOB.j0xjalZDY_9R9FTZh7kccJytJVZUKzI65V3Z5fZpnGyFnn6mSIBIpCgGY-hDgEX3WyoibN_O7OV32QHElUTqBvvqRpZ0hsDqBlJGsg1DwCYZTgkbLO4JmoRSmq6T0z905kG57gShaEPOS9Ox-8Is5YfPu1cIojR4RQkb_Y4oSHwNcKjDZE-NQuuFuA_cNZbqrDajxozWTRcnNw.YXw2UwENfPlsIKAA_yTb6w"
       },
       "status": 200,
       "body": {
@@ -482,7 +482,7 @@
       "name": "member cookie among other cookies",
       "path": "/needs-auth",
       "headers": {
-        "Cookie": "theme=dark; eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..h12kDpq2BoQqjghY.jC15ShvSdAMbnyJbjWLZ5szBZM5IAi1I_ycW8v0Z5pi60MJHgQqVlDvFUDkHaRFzkpq_TaZ3vj2KOgJpNm2_c_8IVZbSsEWHAefxJTJce-JrNHWbr6GY7lTjaO3gzhTYco316lMHAJQiXdNOATEpc8MSSZS6fGWMTBTlBTm2RA_nTpEQUpDMNmIy5ZWzu-Rsxg6NhY0lSd7yaA._Hp-4LH_GzTuBeMY7y4F6Q; x=1"
+        "Cookie": "theme=dark; eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..t9S-Bx3mXtFc_ZOB.j0xjalZDY_9R9FTZh7kccJytJVZUKzI65V3Z5fZpnGyFnn6mSIBIpCgGY-hDgEX3WyoibN_O7OV32QHElUTqBvvqRpZ0hsDqBlJGsg1DwCYZTgkbLO4JmoRSmq6T0z905kG57gShaEPOS9Ox-8Is5YfPu1cIojR4RQkb_Y4oSHwNcKjDZE-NQuuFuA_cNZbqrDajxozWTRcnNw.YXw2UwENfPlsIKAA_yTb6w; x=1"
       },
       "status": 200,
       "body": {
@@ -499,7 +499,7 @@
       "name": "member cookie on an admin route",
       "path": "/needs-admin",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..h12kDpq2BoQqjghY.jC15ShvSdAMbnyJbjWLZ5szBZM5IAi1I_ycW8v0Z5pi60MJHgQqVlDvFUDkHaRFzkpq_TaZ3vj2KOgJpNm2_c_8IVZbSsEWHAefxJTJce-JrNHWbr6GY7lTjaO3gzhTYco316lMHAJQiXdNOATEpc8MSSZS6fGWMTBTlBTm2RA_nTpEQUpDMNmIy5ZWzu-Rsxg6NhY0lSd7yaA._Hp-4LH_GzTuBeMY7y4F6Q"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..t9S-Bx3mXtFc_ZOB.j0xjalZDY_9R9FTZh7kccJytJVZUKzI65V3Z5fZpnGyFnn6mSIBIpCgGY-hDgEX3WyoibN_O7OV32QHElUTqBvvqRpZ0hsDqBlJGsg1DwCYZTgkbLO4JmoRSmq6T0z905kG57gShaEPOS9Ox-8Is5YfPu1cIojR4RQkb_Y4oSHwNcKjDZE-NQuuFuA_cNZbqrDajxozWTRcnNw.YXw2UwENfPlsIKAA_yTb6w"
       },
       "status": 403,
       "body": {
@@ -512,7 +512,7 @@
       "name": "owner cookie (ADMIN_SUBS) on an admin route",
       "path": "/needs-admin",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..qdr5xG17P9v6lHCa.Nal3CS378hUrv6D-B2kHkUDiPN2-_y3kIJH0nptR92XTWhl24C42XLKLSlj7YablpVoA8DmFQImXMVTjVTnMxiNqoyieoz2CUhC3Gr--QFPIs07dQvqAEyZJPXBt_kCxBfKQj_NzQBDSNEyGUGhXYlgUchmat1ozDrZNQ_Gaqb689JGtC1bgGjR_pHjaCp8s.1ZQByE00bVAcXbKOqhTD9g"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..3VFJJMppdkz50-u5.6VRahG7Dsp4Zga4bLbnCxcY3EeXgXXRWjgryvZSMU72A2k6Hl7WuzbclXFO59rDDdT4ZkL19z4GwNnA2Gq6w9WMQkBUYQZ4SUJ3BmR4PhGHEiCL7ijRUj6kcxayMGdOOCQZSBmWJrmndmAmNIcEeVL00n-xw9koWwtnccmTjLEwt-2tfvZgbSdcrWccSIkmO.auF447vKjzEHb8NzbC1sMA"
       },
       "status": 200,
       "body": {
@@ -529,7 +529,7 @@
       "name": "DB-admin cookie on an admin route",
       "path": "/needs-admin",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..1WeKml_lhyhXtNfK.IH58j8b9Q9Ib7BeFBPfN63n2JqZyn1foGtbbZj5w7r0q8hy6140zDBfMU4eDPhTS9XdRHlscSrmbTM6KwslfidlBjoMboxP7CQYIkT9cb8giAVGycMRV2bdFQ_NwmImPgI0vAMdvYJhuxIhzfjc3NH4NqPflJi7VrsZX.YeHlVgMasyILAb7Uy45RMw"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..3g3-ECLIl7dnM1EU.twmMiLC4BCLHIVGCja-18lCI_Psp-thR_iROCzQ-Oh6aon_O3sntLY-kF6eNO2JdqYcuUtfUYtwSNV5fBZZczWDICIqxEc55hCwxxo1uqDC8D_tse3coSjjoIplQxZn6sYtNxMezr0Mu-84oTqH8ujKj3w46ng2zKLO_.Tx1JSYcaoYlxaaVIJ9bizw"
       },
       "status": 200,
       "body": {
@@ -546,7 +546,7 @@
       "name": "demoted admin cookie on /api/me",
       "path": "/api/me",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..nl24l9vGLrl-huhO.8chD1V2F-d0ikf9k0Ax8pSQ4zxaB8QhrekVH-KiNYH9jfvkVIgZSyz7FLublKXjJSAHgRNrdgB4ulNI601EcxyjBAlFH4DFARnDGcbmalyVJ8D8t74lIdDrCIQBhYixvE8b0uwG-otPdT3BTilaz-PEs3-Df.auZYXzXmf9D_9Az2kvb3MQ"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..BbN4ocjG9ThEssw0.LYb29NHoiq_LbUayMsCGTHfq-rt_dsBg9_dM7v7gXRpXoVzxrQ--o4nqgRdBpmdpxS1C6oqpGvHGj7ZxAvck-PJJEuJf-l_tUdCvkThxESEvhN0_blMBpsxqFObuQwam_P0a1qr6QcskN3FltSDIduARzjRY.ry7az_XUFoXTtbQlbi-kUQ"
       },
       "status": 200,
       "body": {
@@ -563,7 +563,7 @@
       "name": "member /api/me",
       "path": "/api/me",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..h12kDpq2BoQqjghY.jC15ShvSdAMbnyJbjWLZ5szBZM5IAi1I_ycW8v0Z5pi60MJHgQqVlDvFUDkHaRFzkpq_TaZ3vj2KOgJpNm2_c_8IVZbSsEWHAefxJTJce-JrNHWbr6GY7lTjaO3gzhTYco316lMHAJQiXdNOATEpc8MSSZS6fGWMTBTlBTm2RA_nTpEQUpDMNmIy5ZWzu-Rsxg6NhY0lSd7yaA._Hp-4LH_GzTuBeMY7y4F6Q"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..t9S-Bx3mXtFc_ZOB.j0xjalZDY_9R9FTZh7kccJytJVZUKzI65V3Z5fZpnGyFnn6mSIBIpCgGY-hDgEX3WyoibN_O7OV32QHElUTqBvvqRpZ0hsDqBlJGsg1DwCYZTgkbLO4JmoRSmq6T0z905kG57gShaEPOS9Ox-8Is5YfPu1cIojR4RQkb_Y4oSHwNcKjDZE-NQuuFuA_cNZbqrDajxozWTRcnNw.YXw2UwENfPlsIKAA_yTb6w"
       },
       "status": 200,
       "body": {
@@ -590,7 +590,7 @@
       "name": "revoked member bearer cascades",
       "path": "/needs-auth",
       "headers": {
-        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..XinqnWrLtFeD0mWi._ubklzssQOXDgFlsQo4ISAnOWpi1OFSBYcJEYpz3d5KDAYCMCEfGEkAFfpsgkZY21IT4-mWKy9e_HAgLwxpWKRjPB3ghZfNq2JzKeTBScibqMqJNXcb64dogcZGZEUxXw3EjwaQSqx7MB0AcTw-afVJCS2nl3yJKaoObWslcGwI3PYKtwbAbBQqZwon3fIqa9EuxuUYPrrMQSg0O32cf6k8Sj6yNvAkKQYuksM44nbCHa-7INB6bbUGYjGvBBCRO-iiVRQccHSGfHpvpWTkENq56axEJSUD9Co9qZJOUV2AZqih2HPqDKDkfuaXUadizt3U8_hanPFkiQnfcwM_k6U5OYYTlZOL6nREbCmXs-ouD160IGQoGAzaOry687F1O8AZ8TD6RYE2N0Etu98uTGDlII8sKCrrpRHDVqxms14jpjWCC.zEVQlGCfqEv1InwkZP1N0w"
+        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..slGHZ1dtWdQ6KOsz.B3MHlS3VKb7Z9tJ0HP1OfMrtjLbDx-NNguuwHQjsi26Vs6uvKhaYv9FODzk9-3I6l9lDtJtIlwresXPHSHnqvyh0inaiivKe0TgIaAqS1o2WNp6xWdzcckGyEIM1q9MTB2D04kn3eYiZlRLPFgROH0kNchN-WTKhk1IVkV_uF1fCAbVMV_fhkTm3c3XAMK7fK_UT86OIGZSC2KF4YWbxYxdaP1vhlmnpbxE_boWxCt19ZLbcQDBMIR-D_xMhN1hB2GovJgRR2_Utyn789PjZkqsfyoVlAUJd6ESmyr01dbXUIpV4WmakmaZ7R2WPYoRGzsB4Jw5EXgbpKtCnJ_ADCNVROBvwkQcAQqzWti7KasETOK2SPrW3GFV2jibbxztPP_S0L8CWGC6Ng97liXM9Ml22VoMmXZiR7HJdlnQKx8dzK_c-.qcMsUr7-p9xxRmYofi2W_g"
       },
       "status": 401,
       "body": {
@@ -603,7 +603,7 @@
       "name": "revoked member cookie on /api/me",
       "path": "/api/me",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..IfTJV7ttxVWTNkzu.lcrN927mGJx0yCSVEdfFyorebUujQihHpLJ2AvyjR2w8mqzlBbhF2gExKdyKYlMKzXU1YXGsL-BkCIdsGJoReJz2TKGY7OEGpmpZdbP0S9MfgvPgFnryAMosenQMJGOa70h5WVlcPOVdS1kpWhvgPi8h7jRxfi-GozC_eDrgEz-nNPr7-E0lLLwCh2uAC2Cm0kfD-dlK_NeZDw.LMJmZKrVbGWc130WGh6yZQ"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..M09qFLvwDH2Gk5vs.0RLoiZ2Mo9CkWk2rXOAE67v48qVrmdh__2t3I3roc-dTrQS6uF5A9MSVRZQRTaSPLqm20Pdbt0ZqRsIsCAI0nIlxNWkc85W5gseEf1T0g0dLhJn5fF7HzhhsRnC3qmr_dD55SOKIIG9tNDkBjP5Pg53vfSviGy0IvnG-5SIGjhxXFc5QnQEc9WZfAn8ot0J7bj0Q0Ckb0L_ONA.5eyKUqaOysVNdcVElxvYcg"
       },
       "status": 401,
       "body": {
@@ -616,7 +616,7 @@
       "name": "non-member bearer cascades",
       "path": "/needs-auth",
       "headers": {
-        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..s8LtbFQg_LqUIg2G.nWwJb-qi40t7wK0PAmdiloU1mMWkB1htuHsutEDF8zadh3X-C2RrZXzoaIuxmaMmCU_fk8VW2gx_MRer2WWJRpsxOfTO0Q7wMzd6u-skePIGnpIFKrRiivtI1YtdLZbgATxKX5Xa29J0xKpLLu_bjPH7kcXUi_xeMezCh6zq96EI_PiINKdon85QjHEfNXVp4g0XsCBj4iGcxycWwq9X9Yi7LJiXzPEQWo1Z1xqEMugCYVtPp9CQWvP-jtCxOyEuqc0B8YMVJkg9n2zMwzbq3h6tTkW0LFVvChisonBKFVnaML6WTbtZl_ENU7lNuL30_9Ym0b8JtycajhL8EQ66HABpSc9vWfZLYWo-BWlpAcWhmJLuQg0uhzV_igEIdq-s6Gh5iAmwvVc7HzANZcr-fYwG.L2zbipQF0ybfE4LGTuwk4g"
+        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..Koh8vZTJidYfENkm.ZC967Hg7R7z2WJKXfA6IIhmHjBIwOiiW_7j-g7COX6MMeJrP4zLGHyFKij8K3KKQee1eFQRcK7JVPiRkqsxOz3uhcLuTShw-Hb6Y3-RqOiwfqRA8gZOD_2z-S5uNQYusKq62_zlc7iD14AUWijRO_hrr9e6D9IFoNqe6iRSYYHlYYIeLKU1VC3DBFvarzdAST2jfq08Sr0vOLZeCGb_X2UHbgqGzasZU2861y9G5uGw_d_LES0i90bSQbg8CTbb8jct_B8QxXK__77VpRgBAk_0e_g1by1LSeKkLljW9wRwe8aNB32snYP3hQ05L5dHSCO8birAjDrD0N_nwdVFxP367fOGdafV8wysrEFbB9q6INMgzZcVc2yNP8LmJbbcNpmYYxwNh1LMIw13XgX4_hIUA.KRn3Q5xAYbchtlTNwJJtyg"
       },
       "status": 401,
       "body": {
@@ -629,7 +629,7 @@
       "name": "non-member cookie",
       "path": "/needs-auth",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..woOeOqRRmpn8p471.oQYTdSf8UKdbXH6DONZxiGqs7KiYH2qbdbussLTjVxz9zPoHfagrqR80LrQIeXF8ki89FGpIYtjJi3MHLH2B1q8W-sUB_d3-xwlp1AJn_55gxtfT-L9tLfebLawRnX65q1FLd7fHNLuZzlyoXI_6YIhGsBOTj-GcLOIe1NNw-sJ0GbpXGCJd1u8.PYYk-UXVg3ba_Gf6202VnQ"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..jgQ20wdnBbHUuhI9.KyfULAIgTNnH2h5eDDqOeRi-ygijMLfNQTgI518_rU2RWofGraNRkzShAMMc1Aw03j-fBz-tmEqHEe9jVU0H4sRQYDnzNM6YkbZnEQbmy702ojyKLaoVxmL0IH-6K859iJRZicKr1keDCqw4ph7uqrpZpnRWXQkLA4eQwStM8xYr62TeaJAgG4k.1Q5rdWfcJmuTrX72bBq4JA"
       },
       "status": 401,
       "body": {
@@ -642,7 +642,7 @@
       "name": "member bearer with X-App-Version",
       "path": "/needs-auth",
       "headers": {
-        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..Ye9Hb0kjAROyBkdx.LAXUUKweN-dHjwlbrt4b0vyhnSczrOiSZhBh-cuZh4kOu9PGJhgpF3KylNpfqiE95nDhE_UYY6LPMqqF9VfWmCR2ZvBswZTTj_7LwHSgBDZ89TqxcryC3RNG3imzMklKXbysEpjnWhShpzPRFt70j1jW3cEO3noW79dyxEJowPmp97oP0UW1gulCrFCA-BC06ZWjeYYBTYOGgc3vMl7yXWIYsNUjkPq0To79eqlRuhdp8yQV2yFLGnhBxyb7VL98QBHFqV2CffKVW5jWsCI55hOrtEsnVaa1sjeotif8UE5QwL3vs-ZpjzNHRa2JBIsvnFg0tOCJosrbdOUbx7i3tD6LC6GHjvMO2PZfOGj6euM0TJXyp3KX_Asaf8h4NIzFAcr1okWjmK6FmkYHevZzMZ4E9DpFRAJBbqEKY7VJJXSlVr9j.k-Dc_r3TNAfW_ft2xP_OjA",
+        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..JYwJiJbNPgX8gWk1.Wtk-Z-GIvHkyY-jOsABMqz-I4u6XpweTDlsFSpZcRFDO7QbjtTRzaLXKHuaREOJdCSzXf6kFmvc_0QUi1nLN6BhquznJS72nz9fTLblAwFcYr4zi6Vnyr41llkLm7EbP8pBdIvbhitW7E7f_uTv-pyI2uzL0J20_xdC8auJYLt8QltTnRzb_uQQ7tJEQXn7MUzWdOluIhPnp9IlIgJGz9B8H6gH3XH-zm6QRbce9S1PcILX9saIfJf39n9UzeCsfwU2jN8QnoB9B57iANXGfPdJ9otn6hjEZXLidti10lYTBULJS-u4zK75JNvcKwAFEMJE4Z6sVk7s_Y1giAl_nppn9RiPvngumE2z4lFVaTTZqrjv98F8KQ503P8OkHjO9hhHoBwEf128beK7UqgaGy8WjJBv4rjO6vqwTa31MtQcepcUV.c60fajxihFIPes6PJVAUqA",
         "X-App-Version": "1.2.3"
       },
       "status": 200,
@@ -660,7 +660,7 @@
       "name": "member bearer on an admin route",
       "path": "/needs-admin",
       "headers": {
-        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..Ye9Hb0kjAROyBkdx.LAXUUKweN-dHjwlbrt4b0vyhnSczrOiSZhBh-cuZh4kOu9PGJhgpF3KylNpfqiE95nDhE_UYY6LPMqqF9VfWmCR2ZvBswZTTj_7LwHSgBDZ89TqxcryC3RNG3imzMklKXbysEpjnWhShpzPRFt70j1jW3cEO3noW79dyxEJowPmp97oP0UW1gulCrFCA-BC06ZWjeYYBTYOGgc3vMl7yXWIYsNUjkPq0To79eqlRuhdp8yQV2yFLGnhBxyb7VL98QBHFqV2CffKVW5jWsCI55hOrtEsnVaa1sjeotif8UE5QwL3vs-ZpjzNHRa2JBIsvnFg0tOCJosrbdOUbx7i3tD6LC6GHjvMO2PZfOGj6euM0TJXyp3KX_Asaf8h4NIzFAcr1okWjmK6FmkYHevZzMZ4E9DpFRAJBbqEKY7VJJXSlVr9j.k-Dc_r3TNAfW_ft2xP_OjA"
+        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..JYwJiJbNPgX8gWk1.Wtk-Z-GIvHkyY-jOsABMqz-I4u6XpweTDlsFSpZcRFDO7QbjtTRzaLXKHuaREOJdCSzXf6kFmvc_0QUi1nLN6BhquznJS72nz9fTLblAwFcYr4zi6Vnyr41llkLm7EbP8pBdIvbhitW7E7f_uTv-pyI2uzL0J20_xdC8auJYLt8QltTnRzb_uQQ7tJEQXn7MUzWdOluIhPnp9IlIgJGz9B8H6gH3XH-zm6QRbce9S1PcILX9saIfJf39n9UzeCsfwU2jN8QnoB9B57iANXGfPdJ9otn6hjEZXLidti10lYTBULJS-u4zK75JNvcKwAFEMJE4Z6sVk7s_Y1giAl_nppn9RiPvngumE2z4lFVaTTZqrjv98F8KQ503P8OkHjO9hhHoBwEf128beK7UqgaGy8WjJBv4rjO6vqwTa31MtQcepcUV.c60fajxihFIPes6PJVAUqA"
       },
       "status": 403,
       "body": {
@@ -673,7 +673,7 @@
       "name": "admin-claim member bearer on an admin route",
       "path": "/needs-admin",
       "headers": {
-        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..EIiW6BQsNZTrsCQr.3ONHsOeOLpw4QLesRLc1ndbUTGXGlVwjzBCiToG8_4EKAXWeRKju-D0wy2EpviLkWyDlhXIQ9bey125naMk0fsVE7FmiY8MSvVfUmUlJ8ZDvHDt45yTz5vPtJltbfHGbuYTDc089_5v6bofE0QxgFSJY9LoXUjc-KRDpz9T4M7Y8Zt_YWhcOOQ5WIeSA07owjT5m6XZxwY2NNj4lvDBu32v0uxwQJvowh6hgv8kX76BRzo3urR_YnGAgaPMXzIkZzwxYwL_nHlwPDMHXOIcD-ckKlVHXVjQWXWcGAdo4mEojHFr7IwIau9Nw4zI3dq3Jgry0iN8kn_VZ-GOzlKqKZjIxMm60CGhLEokXJeqeF95JicECyRAGOuCisJMeyGiFpBRGJrRuOkVXjyUUMZppitX3I8R7qGTddxNi9Pha3rmIV2TlSA.9U7hnJszo4g1z22syOxTLg"
+        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..6vAomIyOnS2TQrA0.gIGYENWxTRF4eltXA-hySLzU4cGZAYEVBnaXczZ6XnEU8s0CB3wec-XsW_ofLH0kWEP9XjkwCd4keL7PVnDmvVL2gRuvhj0fcPOzapy4uxqY4UzE2a4Uv09pI0uknX5fKfUONYyZGBOi1MR4WtW3H7FtyLJbAC3p2yQLiuHeMAY_SSVXS14lLg4WGdhsaD5b6_n6SWEO2Z42cRirEHAe2lnj0Oy_alY0sKvrq2WCeZcvVxWOnUhWfP2odyddmwblzABvBzhCIkl-kyrLn9eAJdDJNyZN6ybjhTtEuzBiAdGbhpIeR4YHokbNzmbdeCv6Uq2Hn7uuq0XWHoCvSLGcuky1IVdFLj7RN_s1ElAiD07Pj5LvQqaVl-b2Cep2IST99uD55r-HEktxdZDRRRYeVuB5g3Zsuz227I_hUkOFlmfGDsPW8Q.53xw2ePCbVA_ICFgBUbLKg"
       },
       "status": 403,
       "body": {
@@ -686,7 +686,7 @@
       "name": "owner bearer on an admin route",
       "path": "/needs-admin",
       "headers": {
-        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..KxqKGAvGoS2LN71o.LJwS8Kp9FxIsnTvwt9VP1WANMPgqZEppRKXIYJr9I6YdzM5RtsiE4eMvKn90ThJj44mO0Q0fOkguI1cIu0JxUNqfIF10AnlJ-ZITXQM0pV1oyfiKgYy8eRIGIhPf-eXLoNrOlJw37vh9yMtYIJf6341lc192gaDgsWCotHK71mbta1EvZrqm6lI2-Qofx03JM40HOjZmBEKpCssHlngyO68KSQoCT2d-WIZhacUHNeziGL5DwcBkJMhL3yJ9dtGEx2UGe0Ks5lyd8S0b38TdqfQYzbpqLKXHw2IqbB_EUD_zS-sx0yqrM_1A4_ZtFKrj8FV7CkqDA0FtEvZ1u5qjEISL0TmaJHjJIXbt8jz2Cyifo8JuUnKn-xUKCC6TOdnHSyPW-b3fJyIskN21HxOmIHZJ2J5BE2jfmLk.JU-wNk37eIToY4Wlc6P6AA"
+        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..ZZAY0OVAObW3wZKn.wIDvX4iVQDi28tI0QvqHTki_5VHNMCBgdR-qgXmppi6AygZU0PSuUfcp88ajFoLBKvPRJYDRH98hROFPS1PayIm74gH11A0ISqq42F8I7UmrJkDV1S2SCsye1b3kDd-j_ArD1oWLNvEOUhWBvmSr_uje4gRwu21AHGd-f4uyByopb2R8f9LvX_JPswv7n5v9_FpswLGCIF2QLhGSc6ibbCNyLJ6YyJIqrDGZa6mzgSZAYFjlPU3ukTloiTbk7Opc4yGQACMHdxDTKUXPSFjpzvqE3_9WfwRe2vDDNVZib76To4EiaHnjygsB0cwblMGumMlbELmPDHRY5ANZnT74BuFs-qANdStzJmhjCq5Jyw3KAy22mdOu6K-FxyuKI5hlXLenCfhcCDbKImPpwAyPVo2RB7fz82R4kfY.bhcxX7OfrUoGVyRgt-YO_A"
       },
       "status": 200,
       "body": {
@@ -704,7 +704,7 @@
       "path": "/needs-auth",
       "headers": {
         "Authorization": "Bearer garbage.not.a.jwe",
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..h12kDpq2BoQqjghY.jC15ShvSdAMbnyJbjWLZ5szBZM5IAi1I_ycW8v0Z5pi60MJHgQqVlDvFUDkHaRFzkpq_TaZ3vj2KOgJpNm2_c_8IVZbSsEWHAefxJTJce-JrNHWbr6GY7lTjaO3gzhTYco316lMHAJQiXdNOATEpc8MSSZS6fGWMTBTlBTm2RA_nTpEQUpDMNmIy5ZWzu-Rsxg6NhY0lSd7yaA._Hp-4LH_GzTuBeMY7y4F6Q"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..t9S-Bx3mXtFc_ZOB.j0xjalZDY_9R9FTZh7kccJytJVZUKzI65V3Z5fZpnGyFnn6mSIBIpCgGY-hDgEX3WyoibN_O7OV32QHElUTqBvvqRpZ0hsDqBlJGsg1DwCYZTgkbLO4JmoRSmq6T0z905kG57gShaEPOS9Ox-8Is5YfPu1cIojR4RQkb_Y4oSHwNcKjDZE-NQuuFuA_cNZbqrDajxozWTRcnNw.YXw2UwENfPlsIKAA_yTb6w"
       },
       "status": 401,
       "body": {
@@ -718,7 +718,7 @@
       "path": "/needs-auth",
       "headers": {
         "Authorization": "Bearer    ",
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..h12kDpq2BoQqjghY.jC15ShvSdAMbnyJbjWLZ5szBZM5IAi1I_ycW8v0Z5pi60MJHgQqVlDvFUDkHaRFzkpq_TaZ3vj2KOgJpNm2_c_8IVZbSsEWHAefxJTJce-JrNHWbr6GY7lTjaO3gzhTYco316lMHAJQiXdNOATEpc8MSSZS6fGWMTBTlBTm2RA_nTpEQUpDMNmIy5ZWzu-Rsxg6NhY0lSd7yaA._Hp-4LH_GzTuBeMY7y4F6Q"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..t9S-Bx3mXtFc_ZOB.j0xjalZDY_9R9FTZh7kccJytJVZUKzI65V3Z5fZpnGyFnn6mSIBIpCgGY-hDgEX3WyoibN_O7OV32QHElUTqBvvqRpZ0hsDqBlJGsg1DwCYZTgkbLO4JmoRSmq6T0z905kG57gShaEPOS9Ox-8Is5YfPu1cIojR4RQkb_Y4oSHwNcKjDZE-NQuuFuA_cNZbqrDajxozWTRcnNw.YXw2UwENfPlsIKAA_yTb6w"
       },
       "status": 200,
       "body": {
@@ -736,7 +736,7 @@
       "path": "/needs-auth",
       "headers": {
         "Authorization": "Basic abc",
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..h12kDpq2BoQqjghY.jC15ShvSdAMbnyJbjWLZ5szBZM5IAi1I_ycW8v0Z5pi60MJHgQqVlDvFUDkHaRFzkpq_TaZ3vj2KOgJpNm2_c_8IVZbSsEWHAefxJTJce-JrNHWbr6GY7lTjaO3gzhTYco316lMHAJQiXdNOATEpc8MSSZS6fGWMTBTlBTm2RA_nTpEQUpDMNmIy5ZWzu-Rsxg6NhY0lSd7yaA._Hp-4LH_GzTuBeMY7y4F6Q"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..t9S-Bx3mXtFc_ZOB.j0xjalZDY_9R9FTZh7kccJytJVZUKzI65V3Z5fZpnGyFnn6mSIBIpCgGY-hDgEX3WyoibN_O7OV32QHElUTqBvvqRpZ0hsDqBlJGsg1DwCYZTgkbLO4JmoRSmq6T0z905kG57gShaEPOS9Ox-8Is5YfPu1cIojR4RQkb_Y4oSHwNcKjDZE-NQuuFuA_cNZbqrDajxozWTRcnNw.YXw2UwENfPlsIKAA_yTb6w"
       },
       "status": 200,
       "body": {
@@ -753,7 +753,7 @@
       "name": "revoked device token stays rejected",
       "path": "/needs-auth",
       "headers": {
-        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..XinqnWrLtFeD0mWi._ubklzssQOXDgFlsQo4ISAnOWpi1OFSBYcJEYpz3d5KDAYCMCEfGEkAFfpsgkZY21IT4-mWKy9e_HAgLwxpWKRjPB3ghZfNq2JzKeTBScibqMqJNXcb64dogcZGZEUxXw3EjwaQSqx7MB0AcTw-afVJCS2nl3yJKaoObWslcGwI3PYKtwbAbBQqZwon3fIqa9EuxuUYPrrMQSg0O32cf6k8Sj6yNvAkKQYuksM44nbCHa-7INB6bbUGYjGvBBCRO-iiVRQccHSGfHpvpWTkENq56axEJSUD9Co9qZJOUV2AZqih2HPqDKDkfuaXUadizt3U8_hanPFkiQnfcwM_k6U5OYYTlZOL6nREbCmXs-ouD160IGQoGAzaOry687F1O8AZ8TD6RYE2N0Etu98uTGDlII8sKCrrpRHDVqxms14jpjWCC.zEVQlGCfqEv1InwkZP1N0w"
+        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..slGHZ1dtWdQ6KOsz.B3MHlS3VKb7Z9tJ0HP1OfMrtjLbDx-NNguuwHQjsi26Vs6uvKhaYv9FODzk9-3I6l9lDtJtIlwresXPHSHnqvyh0inaiivKe0TgIaAqS1o2WNp6xWdzcckGyEIM1q9MTB2D04kn3eYiZlRLPFgROH0kNchN-WTKhk1IVkV_uF1fCAbVMV_fhkTm3c3XAMK7fK_UT86OIGZSC2KF4YWbxYxdaP1vhlmnpbxE_boWxCt19ZLbcQDBMIR-D_xMhN1hB2GovJgRR2_Utyn789PjZkqsfyoVlAUJd6ESmyr01dbXUIpV4WmakmaZ7R2WPYoRGzsB4Jw5EXgbpKtCnJ_ADCNVROBvwkQcAQqzWti7KasETOK2SPrW3GFV2jibbxztPP_S0L8CWGC6Ng97liXM9Ml22VoMmXZiR7HJdlnQKx8dzK_c-.qcMsUr7-p9xxRmYofi2W_g"
       },
       "status": 401,
       "body": {
@@ -766,48 +766,48 @@
   "final": {
     "revocations": [
       {
-        "jti": "06GMZRM008CZ8BW5V5H5Y4PD15",
+        "jti": "06GMZXVB8C2DW8ASXBR0ZNTBVK",
+        "reason": "member_revoked"
+      },
+      {
+        "jti": "06GMZXVB8C3ZEVSFB4Q2P6ZEVJ",
+        "reason": "member_revoked"
+      },
+      {
+        "jti": "06GMZXVB8CPMZTX57PVH5V11ET",
         "reason": "not_member"
-      },
-      {
-        "jti": "06GMZRM008KGMN0HQRZ8GDR3D6",
-        "reason": "member_revoked"
-      },
-      {
-        "jti": "06GMZRM008ZQWM61GGEEKAQDKA",
-        "reason": "member_revoked"
       }
     ],
     "device_tokens": [
       {
-        "jti": "06GMZRM0040D4R11R1WJM2YP7R",
+        "jti": "06GMZXVB8C2DW8ASXBR0ZNTBVK",
+        "last_seen_version": null,
+        "seen": 0
+      },
+      {
+        "jti": "06GMZXVB8C3ZEVSFB4Q2P6ZEVJ",
+        "last_seen_version": null,
+        "seen": 0
+      },
+      {
+        "jti": "06GMZXVB8CA33P8KH880TXRVEW",
         "last_seen_version": "1.2.3",
         "seen": 1
       },
       {
-        "jti": "06GMZRM008191D4RQDXFGA6Q8X",
+        "jti": "06GMZXVB8CGTM1MK3T5CM6YD0G",
         "last_seen_version": null,
         "seen": 1
       },
       {
-        "jti": "06GMZRM0088KVSV0B7PRE02H0A",
+        "jti": "06GMZXVB8CPMZTX57PVH5V11ET",
+        "last_seen_version": null,
+        "seen": 0
+      },
+      {
+        "jti": "06GMZXVB8CX086TEC8W9EG9H4G",
         "last_seen_version": null,
         "seen": 1
-      },
-      {
-        "jti": "06GMZRM008CZ8BW5V5H5Y4PD15",
-        "last_seen_version": null,
-        "seen": 0
-      },
-      {
-        "jti": "06GMZRM008KGMN0HQRZ8GDR3D6",
-        "last_seen_version": null,
-        "seen": 0
-      },
-      {
-        "jti": "06GMZRM008ZQWM61GGEEKAQDKA",
-        "last_seen_version": null,
-        "seen": 0
       }
     ]
   }

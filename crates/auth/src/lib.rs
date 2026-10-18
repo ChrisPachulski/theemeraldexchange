@@ -36,7 +36,8 @@ pub use signin::json_body;
 
 use std::sync::Arc;
 
-use axum::http::header;
+use axum::extract::State;
+use axum::http::{HeaderMap, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -60,6 +61,8 @@ pub struct AuthState {
     apple_nonces: Arc<signin::Nonces>,
     /// The WorkOS endpoints and native states (tests point it at a fake).
     pub workos: Arc<workos::Workos>,
+    /// The plex.tv client (tests point it at a fake).
+    pub plex: Arc<plex::Plex>,
     /// Pins the clock in tests so committed goldens never expire.
     #[cfg(test)]
     pub(crate) fixed_now: Option<i64>,
@@ -78,6 +81,7 @@ impl AuthState {
             google_jwks: Arc::new(jwks::Jwks::google()),
             apple_nonces: Arc::default(),
             workos: Arc::default(),
+            plex: Arc::default(),
             config: Arc::new(config),
             pool,
             #[cfg(test)]
@@ -102,6 +106,7 @@ pub fn router(state: AuthState) -> Router {
         .route("/api/me", get(me))
         .route("/api/auth/logout", post(logout))
         .merge(signin::routes())
+        .merge(plex::routes())
         .merge(workos::routes())
         .merge(device_link::routes())
         .merge(devices::routes())
@@ -120,9 +125,18 @@ async fn me(RequireAuth(p): RequireAuth) -> impl IntoResponse {
     Json(Me { user: p.session })
 }
 
-/// POST /api/auth/logout: clears the session cookie, nothing else. The
-/// session is stateless and Plex is gone, so there is nothing to revoke.
-async fn logout() -> impl IntoResponse {
+/// POST /api/auth/logout: clears the session cookie. The session is
+/// stateless; a Plex sign-in's plex.tv token is signed out first, best effort
+/// (a failure is logged and the cookie still goes).
+async fn logout(State(st): State<AuthState>, headers: HeaderMap) -> impl IntoResponse {
+    let token = session::read_cookie(&headers)
+        .and_then(|c| session::verify(&st.session_key, c, st.now()))
+        .and_then(|s| s.plex_auth_token);
+    if let Some(token) = token
+        && let Err(e) = st.plex.sign_out(&st.config, &token).await
+    {
+        tracing::warn!(event = "auth_logout", error = %e, "plex signout failed");
+    }
     (
         [(header::SET_COOKIE, session::clear_cookie())],
         Json(serde_json::json!({ "ok": true })),
@@ -141,6 +155,10 @@ pub enum Error {
     /// refuses to boot without it).
     #[error("DEVICE_TOKEN_SECRET is not set")]
     NoDeviceSecret,
+    /// A plex.tv failure inside a sign-in (the Display names only the call
+    /// and the status, never a token or PIN).
+    #[error(transparent)]
+    Plex(#[from] plex::PlexError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

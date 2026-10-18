@@ -345,6 +345,17 @@ pub async fn json_body(body: Body, limit: usize) -> std::result::Result<Value, R
     }
 }
 
+/// 403 `{"status":"denied","reason":"no_invite"}`, in the TS key order.
+pub(crate) fn denied(outcome: &Reporter) -> Response {
+    outcome.record(Outcome::Denied, Reason::NoInvite);
+    (
+        StatusCode::FORBIDDEN,
+        [(header::CONTENT_TYPE, "application/json")],
+        r#"{"status":"denied","reason":"no_invite"}"#,
+    )
+        .into_response()
+}
+
 fn missing_token(outcome: &Reporter) -> Response {
     outcome.record(Outcome::Invalid, Reason::InvalidRequest);
     error(
@@ -383,11 +394,7 @@ async fn admit(
 ) -> Result<Response> {
     let sub = identity.sub;
     if !authorize_or_redeem(st, &sub, text(body, "inviteCode"), &display_name, mode).await? {
-        outcome.record(Outcome::Denied, Reason::NoInvite);
-        return Ok(error(
-            StatusCode::FORBIDDEN,
-            json!({ "status": "denied", "reason": "no_invite" }),
-        ));
+        return Ok(denied(outcome));
     }
     let role = members::effective_role(&st.pool, &st.config.admin_subs, &sub).await?;
 

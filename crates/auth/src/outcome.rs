@@ -9,6 +9,7 @@ use axum::http::HeaderMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
+    Plex,
     Apple,
     Google,
     Workos,
@@ -36,6 +37,8 @@ pub enum Reason {
     DevicePair,
     DeviceLink,
     LocalRateLimit,
+    /// plex.tv refused a PIN poll (429), kept apart from our own limits.
+    ProviderRateLimit,
     NotConfigured,
     InvalidRequest,
     IdentityTokenInvalid,
@@ -49,12 +52,17 @@ pub enum Reason {
 pub enum Scope {
     Global,
     TrustedClient,
+    /// One Plex PIN's polls.
+    Pin,
     Identity,
+    /// The provider's own backpressure (plex.tv), not one of our buckets.
+    Upstream,
 }
 
 impl Provider {
     pub fn as_str(self) -> &'static str {
         match self {
+            Provider::Plex => "plex",
             Provider::Apple => "apple",
             Provider::Google => "google",
             Provider::Workos => "workos",
@@ -91,6 +99,7 @@ impl Reason {
             Reason::DevicePair => "device_pair",
             Reason::DeviceLink => "device_link",
             Reason::LocalRateLimit => "local_rate_limit",
+            Reason::ProviderRateLimit => "provider_rate_limit",
             Reason::NotConfigured => "not_configured",
             Reason::InvalidRequest => "invalid_request",
             Reason::IdentityTokenInvalid => "identity_token_invalid",
@@ -106,7 +115,9 @@ impl Scope {
         match self {
             Scope::Global => "global",
             Scope::TrustedClient => "trusted_client",
+            Scope::Pin => "pin",
             Scope::Identity => "identity",
+            Scope::Upstream => "upstream",
         }
     }
 }
@@ -141,6 +152,16 @@ impl Reporter {
             Outcome::RateLimited,
             Reason::LocalRateLimit,
             Some(scope),
+            Some(retry_after_seconds),
+        )
+    }
+
+    /// plex.tv's 429 on a PIN poll: scope upstream, with the clamped seconds.
+    pub(crate) fn record_provider_rate_limited(&self, retry_after_seconds: u64) -> bool {
+        self.emit(
+            Outcome::RateLimited,
+            Reason::ProviderRateLimit,
+            Some(Scope::Upstream),
             Some(retry_after_seconds),
         )
     }
@@ -240,6 +261,7 @@ mod tests {
     #[test]
     fn uses_closed_low_cardinality_dimensions() {
         let providers = [
+            Provider::Plex,
             Provider::Apple,
             Provider::Google,
             Provider::Workos,
@@ -247,7 +269,7 @@ mod tests {
         ];
         assert_eq!(
             providers.map(Provider::as_str),
-            ["apple", "google", "workos", "link"]
+            ["plex", "apple", "google", "workos", "link"]
         );
         assert_eq!(
             [Phase::Check, Phase::IdentityVerify].map(Phase::as_str),
@@ -275,6 +297,7 @@ mod tests {
             Reason::DevicePair,
             Reason::DeviceLink,
             Reason::LocalRateLimit,
+            Reason::ProviderRateLimit,
             Reason::NotConfigured,
             Reason::InvalidRequest,
             Reason::IdentityTokenInvalid,
@@ -289,6 +312,7 @@ mod tests {
                 "device_pair",
                 "device_link",
                 "local_rate_limit",
+                "provider_rate_limit",
                 "not_configured",
                 "invalid_request",
                 "identity_token_invalid",
@@ -298,8 +322,15 @@ mod tests {
             ]
         );
         assert_eq!(
-            [Scope::Global, Scope::TrustedClient, Scope::Identity].map(Scope::as_str),
-            ["global", "trusted_client", "identity"]
+            [
+                Scope::Global,
+                Scope::TrustedClient,
+                Scope::Pin,
+                Scope::Identity,
+                Scope::Upstream
+            ]
+            .map(Scope::as_str),
+            ["global", "trusted_client", "pin", "identity", "upstream"]
         );
     }
 

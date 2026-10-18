@@ -8,6 +8,13 @@
 //! Documented deltas, applied to the TS side before comparing:
 //!   - A synthesized ADMIN_SUBS member's auth_mode is its sub's provider; TS
 //!     said `plex` for any sub not starting with `apple:`.
+//!
+//! The `plex` key holds the Plex sign-in scenarios: main's auth router with
+//! global fetch answering for plex.tv. Here a local fake answers the same per
+//! scenario, and each scenario must also make the same plex.tv calls. A
+//! session cookie's value differs per run, so Set-Cookie is compared with it
+//! replaced by `<token>`, and the cookie's decrypted session is compared with
+//! the one TS's verifySession read from its own cookie.
 
 use serde_json::{Map, Value};
 use sqlx::SqlitePool;
@@ -224,4 +231,149 @@ async fn replays_the_ts_route_goldens() {
                 .unwrap();
         assert_eq!(n, f[key].as_i64().unwrap(), "final {key}");
     }
+}
+
+/// Point the fake at one scenario's plex.tv answers (gen-auth-goldens.ts's
+/// fetch stub).
+fn serve(f: &crate::plex::tests::Fake, spec: &Value) {
+    f.reset();
+    if spec["pinStatus"] == 429 {
+        let retry: Vec<(&str, &str)> = spec["retryAfter"]
+            .as_str()
+            .map(|v| ("retry-after", v))
+            .into_iter()
+            .collect();
+        f.stub("/api/v2/pins/", 429, "slow down", &retry);
+    } else {
+        let token = spec.get("token").cloned().unwrap_or(Value::Null);
+        f.json(
+            "/api/v2/pins/",
+            serde_json::json!({ "id": 1, "code": "abc", "authToken": token }),
+        );
+    }
+    f.json("/api/v2/user", spec["user"].clone());
+    let resources = spec
+        .get("resources")
+        .cloned()
+        .unwrap_or(serde_json::json!([]));
+    let status = spec["resourcesStatus"].as_u64().unwrap_or(200) as u16;
+    f.stub(
+        "/api/v2/resources",
+        status,
+        &resources.to_string(),
+        &[("content-type", "application/json")],
+    );
+    let status = spec["signoutStatus"].as_u64().unwrap_or(204) as u16;
+    f.text("/api/v2/signout", "", status);
+}
+
+#[tokio::test]
+async fn replays_the_ts_plex_route_goldens() {
+    let g = &goldens()["plex"];
+    let f = crate::plex::tests::fake().await;
+    let db = pool().await;
+    for table in ["members", "invites"] {
+        insert_rows(&db, table, &g["seed"][table]).await;
+    }
+    let app = |scoped: bool| {
+        let mut env = vec![
+            ("ALLOWED_ORIGINS", "https://app.example"),
+            (
+                "ADMIN_SUBS",
+                "workos:user_01E4ZCR3C56J083X43JQXF3JK5,plex:4242",
+            ),
+            ("PLEX_CLIENT_ID", "golden-plex-client"),
+        ];
+        if scoped {
+            env.push(("PLEX_SERVER_ID", "golden-server"));
+        }
+        let mut st = AuthState::new((*db).clone(), config(&env));
+        st.plex = std::sync::Arc::new(f.plex());
+        st.fixed_now = Some(g["minted_at"].as_i64().unwrap());
+        let key = st.session_key;
+        (crate::router(st), key)
+    };
+    let (unscoped, key) = app(false);
+    let (scoped, _) = app(true);
+
+    let scenarios = g["scenarios"].as_array().unwrap();
+    assert!(scenarios.len() > 30);
+    for s in scenarios {
+        let name = s["name"].as_str().unwrap();
+        serve(&f, &s["plex"]);
+        let headers: Vec<(&str, &str)> = s["headers"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str().unwrap()))
+            .collect();
+        let target = if s["server_id"] == true {
+            &scoped
+        } else {
+            &unscoped
+        };
+        let r = call(
+            target,
+            s["method"].as_str().unwrap(),
+            s["path"].as_str().unwrap(),
+            &headers,
+            s["body"].as_str(),
+        )
+        .await;
+        assert_eq!(
+            r.status,
+            s["status"].as_u64().unwrap() as u16,
+            "{name}: {}",
+            r.text
+        );
+        assert_eq!(r.text, s["text"].as_str().unwrap(), "{name}");
+        let header = |h: axum::http::header::HeaderName| {
+            r.headers.get(h).map(|v| v.to_str().unwrap().to_string())
+        };
+        assert_eq!(
+            header(axum::http::header::RETRY_AFTER).as_deref(),
+            s["retry_after"].as_str(),
+            "{name}"
+        );
+
+        let set_cookie = header(axum::http::header::SET_COOKIE);
+        let token = set_cookie
+            .as_deref()
+            .and_then(|c| c.strip_prefix("eex.session="))
+            .and_then(|c| c.split(';').next())
+            .filter(|t| !t.is_empty());
+        let normalized = match (&set_cookie, token) {
+            (Some(c), Some(t)) => Some(c.replacen(t, "<token>", 1)),
+            (c, _) => c.clone(),
+        };
+        assert_eq!(normalized.as_deref(), s["set_cookie"].as_str(), "{name}");
+        let session = token.map(|t| {
+            let v = crate::session::verify(&key, t, g["minted_at"].as_i64().unwrap()).unwrap();
+            serde_json::json!({
+                "sub": v.sub, "username": v.username, "role": v.role,
+                "auth_mode": v.auth_mode, "plexAuthToken": v.plex_auth_token,
+            })
+        });
+        assert_eq!(session.unwrap_or(Value::Null), s["session"], "{name}");
+        assert_eq!(serde_json::json!(f.calls()), s["plex_calls"], "{name}");
+    }
+
+    let f_ = &g["final"];
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT sub, display_name, role, auth_mode, invited_by, revoked_at IS NOT NULL AS revoked \
+             FROM members ORDER BY sub"
+        )
+        .await,
+        f_["members"]
+    );
+    assert_eq!(
+        rows(
+            &db,
+            "SELECT issued_by, used_count FROM invites ORDER BY rowid"
+        )
+        .await,
+        f_["invites"]
+    );
 }

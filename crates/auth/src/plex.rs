@@ -24,6 +24,9 @@ use sha2::{Digest, Sha256};
 
 use crate::config::Config;
 
+mod signin;
+pub(crate) use signin::routes;
+
 pub const PLEX_TV: &str = "https://plex.tv";
 /// The product plex.tv names on its sign-in page; the clients create their
 /// PINs under the same label.
@@ -606,4 +609,4 @@ fn stable_hash(s: &str) -> i64 {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

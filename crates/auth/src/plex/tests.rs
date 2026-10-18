@@ -15,7 +15,7 @@ use crate::testutil::{capture_logs, config, logs};
 
 const TOKEN: &str = "plex-token-abc";
 
-struct Stub {
+pub(crate) struct Stub {
     needle: String,
     status: u16,
     body: String,
@@ -24,21 +24,21 @@ struct Stub {
 
 /// One request the fake saw: method, path and query, headers.
 #[derive(Clone)]
-struct Call {
-    method: Method,
-    url: String,
-    headers: HeaderMap,
+pub(crate) struct Call {
+    pub(crate) method: Method,
+    pub(crate) url: String,
+    pub(crate) headers: HeaderMap,
 }
 
 #[derive(Clone)]
-struct Fake {
-    url: String,
-    stubs: Arc<Mutex<Vec<Stub>>>,
-    calls: Arc<Mutex<Vec<Call>>>,
+pub(crate) struct Fake {
+    pub(crate) url: String,
+    pub(crate) stubs: Arc<Mutex<Vec<Stub>>>,
+    pub(crate) calls: Arc<Mutex<Vec<Call>>>,
 }
 
 impl Fake {
-    fn stub(&self, needle: &str, status: u16, body: &str, headers: &[(&str, &str)]) {
+    pub(crate) fn stub(&self, needle: &str, status: u16, body: &str, headers: &[(&str, &str)]) {
         let mut stubs = self.stubs.lock().unwrap();
         stubs.retain(|s| s.needle != needle);
         stubs.push(Stub {
@@ -52,7 +52,7 @@ impl Fake {
         });
     }
 
-    fn json(&self, needle: &str, body: Value) {
+    pub(crate) fn json(&self, needle: &str, body: Value) {
         self.stub(
             needle,
             200,
@@ -61,7 +61,7 @@ impl Fake {
         );
     }
 
-    fn text(&self, needle: &str, body: &str, status: u16) {
+    pub(crate) fn text(&self, needle: &str, body: &str, status: u16) {
         self.stub(needle, status, body, &[]);
     }
 
@@ -69,20 +69,36 @@ impl Fake {
         self.stub(needle, 200, body, &[("content-type", "application/xml")]);
     }
 
-    fn call(&self, i: usize) -> Call {
+    /// Forget every stub and every recorded call.
+    pub(crate) fn reset(&self) {
+        self.stubs.lock().unwrap().clear();
+        self.calls.lock().unwrap().clear();
+    }
+
+    /// `METHOD path?query` of every call so far.
+    pub(crate) fn calls(&self) -> Vec<String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|c| format!("{} {}", c.method, c.url))
+            .collect()
+    }
+
+    pub(crate) fn call(&self, i: usize) -> Call {
         self.calls.lock().unwrap()[i].clone()
     }
 
-    fn call_count(&self) -> usize {
+    pub(crate) fn call_count(&self) -> usize {
         self.calls.lock().unwrap().len()
     }
 
     /// The fake as both plex.tv and the PMS.
-    fn plex(&self) -> Plex {
+    pub(crate) fn plex(&self) -> Plex {
         Plex::at(&self.url)
     }
 
-    fn config(&self, extra: &[(&str, &str)]) -> Config {
+    pub(crate) fn config(&self, extra: &[(&str, &str)]) -> Config {
         let mut env = vec![
             ("PLEX_CLIENT_ID", "test-client"),
             ("PLEX_SERVER_URL", self.url.as_str()),
@@ -92,7 +108,7 @@ impl Fake {
     }
 }
 
-async fn fake() -> Fake {
+pub(crate) async fn fake() -> Fake {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let fake = Fake {
         url: format!("http://{}", listener.local_addr().unwrap()),

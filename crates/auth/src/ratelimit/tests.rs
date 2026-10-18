@@ -285,10 +285,10 @@ fn windows_reset_and_the_sweep_drops_expired_buckets() {
     h.insert("cf-connecting-ip", "198.51.100.20".parse().unwrap());
     let t0 = Instant::now();
     for _ in 0..10 {
-        assert!(limiter.check_at(t0, &h, Kind::Pin, &r()).is_ok());
+        assert!(limiter.check_at(t0, &h, Kind::Pin, None, &r()).is_ok());
     }
     let refused = limiter
-        .check_at(t0 + Duration::from_secs(30), &h, Kind::Pin, &r())
+        .check_at(t0 + Duration::from_secs(30), &h, Kind::Pin, None, &r())
         .unwrap_err();
     assert_eq!(refused.headers()[header::RETRY_AFTER], "30");
     assert!(
@@ -299,7 +299,11 @@ fn windows_reset_and_the_sweep_drops_expired_buckets() {
     assert_eq!(limiter.bucket_count(), 3);
     // The window is over: the sweep (due a minute after the last) drops all
     // three expired buckets, and the request opens two fresh ones.
-    assert!(limiter.check_at(t0 + WINDOW, &h, Kind::Pin, &r()).is_ok());
+    assert!(
+        limiter
+            .check_at(t0 + WINDOW, &h, Kind::Pin, None, &r())
+            .is_ok()
+    );
     assert_eq!(limiter.bucket_count(), 2);
 }
 

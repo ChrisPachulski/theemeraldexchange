@@ -1410,5 +1410,1018 @@
       }
     ],
     "link_code_count": 4
+  },
+  "plex": {
+    "minted_at": 1792342977,
+    "seed": {
+      "members": [
+        {
+          "sub": "plex:101",
+          "display_name": "Member",
+          "role": "user",
+          "auth_mode": "plex",
+          "invited_by": null,
+          "joined_at": "2026-10-04T00:00:00.000Z",
+          "revoked_at": null
+        },
+        {
+          "sub": "plex:102",
+          "display_name": "Plex Admin Row",
+          "role": "admin",
+          "auth_mode": "plex",
+          "invited_by": null,
+          "joined_at": "2026-10-03T00:00:00.000Z",
+          "revoked_at": null
+        },
+        {
+          "sub": "plex:107",
+          "display_name": "Kicked",
+          "role": "user",
+          "auth_mode": "plex",
+          "invited_by": null,
+          "joined_at": "2026-10-02T00:00:00.000Z",
+          "revoked_at": "2026-10-05T00:00:00.000Z"
+        }
+      ],
+      "invites": [
+        {
+          "code_hash": "7083f0ed3e1d1e93c9e2bb4a533fd160a020bd2caa6b8055d061b2038df5e4fc",
+          "issued_by": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+          "label": "Plex friend",
+          "expires_at": null,
+          "max_uses": 1,
+          "used_count": 0,
+          "created_at": "2026-10-06T00:00:00.000Z",
+          "revoked_at": null,
+          "role": "user"
+        }
+      ]
+    },
+    "scenarios": [
+      {
+        "name": "plex config",
+        "method": "GET",
+        "path": "/api/auth/plex/config",
+        "headers": {},
+        "body": null,
+        "server_id": false,
+        "plex": {},
+        "status": 200,
+        "text": "{\"clientId\":\"golden-plex-client\",\"product\":\"The Emerald Exchange\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "methods with plex configured",
+        "method": "GET",
+        "path": "/api/auth/methods",
+        "headers": {},
+        "body": null,
+        "server_id": false,
+        "plex": {},
+        "status": 200,
+        "text": "{\"plex\":true,\"apple\":false,\"google\":false,\"workos\":false}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check pending",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":501}",
+        "server_id": false,
+        "plex": {
+          "token": null
+        },
+        "status": 200,
+        "text": "{\"status\":\"pending\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/501"
+        ]
+      },
+      {
+        "name": "check pending (string pinId)",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":\" 502 \"}",
+        "server_id": false,
+        "plex": {
+          "token": null
+        },
+        "status": 200,
+        "text": "{\"status\":\"pending\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/502"
+        ]
+      },
+      {
+        "name": "check empty token is pending",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":503}",
+        "server_id": false,
+        "plex": {
+          "token": ""
+        },
+        "status": 200,
+        "text": "{\"status\":\"pending\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/503"
+        ]
+      },
+      {
+        "name": "check no body",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {},
+        "body": null,
+        "server_id": false,
+        "plex": {},
+        "status": 400,
+        "text": "{\"error\":\"missing pinId\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check bad json",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{",
+        "server_id": false,
+        "plex": {},
+        "status": 400,
+        "text": "{\"error\":\"missing pinId\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check pinId foo",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":\"foo\"}",
+        "server_id": false,
+        "plex": {},
+        "status": 400,
+        "text": "{\"error\":\"bad pinId\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check pinId 1.5",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":1.5}",
+        "server_id": false,
+        "plex": {},
+        "status": 400,
+        "text": "{\"error\":\"bad pinId\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check pinId empty string",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":\"\"}",
+        "server_id": false,
+        "plex": {},
+        "status": 400,
+        "text": "{\"error\":\"missing pinId\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check oversized body",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":504,\"padding\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+        "server_id": false,
+        "plex": {},
+        "status": 413,
+        "text": "{\"error\":\"body_too_large\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "check plex.tv 429 numeric",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":505}",
+        "server_id": false,
+        "plex": {
+          "pinStatus": 429,
+          "retryAfter": "17"
+        },
+        "status": 429,
+        "text": "{\"error\":\"plex_rate_limited\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": "17",
+        "plex_calls": [
+          "GET /api/v2/pins/505"
+        ]
+      },
+      {
+        "name": "check plex.tv 429 date",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":506}",
+        "server_id": false,
+        "plex": {
+          "pinStatus": 429,
+          "retryAfter": "Sat, 18 Jul 2026 23:59:59 GMT"
+        },
+        "status": 429,
+        "text": "{\"error\":\"plex_rate_limited\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": "Sat, 18 Jul 2026 23:59:59 GMT",
+        "plex_calls": [
+          "GET /api/v2/pins/506"
+        ]
+      },
+      {
+        "name": "check plex.tv 429 malformed",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":507}",
+        "server_id": false,
+        "plex": {
+          "pinStatus": 429,
+          "retryAfter": "eventually"
+        },
+        "status": 429,
+        "text": "{\"error\":\"plex_rate_limited\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": "5",
+        "plex_calls": [
+          "GET /api/v2/pins/507"
+        ]
+      },
+      {
+        "name": "check plex.tv 429 absent",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":508}",
+        "server_id": false,
+        "plex": {
+          "pinStatus": 429
+        },
+        "status": 429,
+        "text": "{\"error\":\"plex_rate_limited\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": "5",
+        "plex_calls": [
+          "GET /api/v2/pins/508"
+        ]
+      },
+      {
+        "name": "member signs in, servers discovered",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":509}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-101",
+          "user": {
+            "id": 101,
+            "uuid": "uuid-101",
+            "username": "Member",
+            "email": "Member@example.com",
+            "thumb": null
+          },
+          "resources": [
+            {
+              "name": "Home",
+              "clientIdentifier": "golden-server",
+              "owned": false,
+              "home": false,
+              "provides": "server"
+            },
+            {
+              "name": "Elsewhere",
+              "clientIdentifier": "other-server",
+              "owned": true,
+              "home": false,
+              "provides": "server,client"
+            },
+            {
+              "name": "Some Player",
+              "clientIdentifier": "player-id",
+              "owned": false,
+              "home": false,
+              "provides": "player"
+            }
+          ]
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:101\",\"username\":\"Member\",\"email\":\"Member@example.com\",\"thumb\":null,\"role\":\"user\"},\"discoveredServers\":[{\"name\":\"Home\",\"id\":\"golden-server\",\"owned\":false},{\"name\":\"Elsewhere\",\"id\":\"other-server\",\"owned\":true}]}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:101",
+          "username": "Member",
+          "role": "user",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-101"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/509",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "member signs in, discovery fails",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":510}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-101",
+          "user": {
+            "id": 101,
+            "uuid": "uuid-101",
+            "username": "Member",
+            "email": "Member@example.com",
+            "thumb": null
+          },
+          "resourcesStatus": 503
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:101\",\"username\":\"Member\",\"email\":\"Member@example.com\",\"thumb\":null,\"role\":\"user\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:101",
+          "username": "Member",
+          "role": "user",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-101"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/510",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "ADMIN_SUBS plex owner signs in",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":511}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-4242",
+          "user": {
+            "id": 4242,
+            "uuid": "uuid-4242",
+            "username": "Owner",
+            "email": "Owner@example.com",
+            "thumb": null
+          }
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:4242\",\"username\":\"Owner\",\"email\":\"Owner@example.com\",\"thumb\":null,\"role\":\"admin\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:4242",
+          "username": "Owner",
+          "role": "admin",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-4242"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/511",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "admin member row signs in",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":512}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-102",
+          "user": {
+            "id": 102,
+            "uuid": "uuid-102",
+            "username": "Plex Admin Row",
+            "email": "Plex Admin Row@example.com",
+            "thumb": null
+          }
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:102\",\"username\":\"Plex Admin Row\",\"email\":\"Plex Admin Row@example.com\",\"thumb\":null,\"role\":\"admin\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:102",
+          "username": "Plex Admin Row",
+          "role": "admin",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-102"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/512",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "stranger without invite",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":513}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-103",
+          "user": {
+            "id": 103,
+            "uuid": "uuid-103",
+            "username": "Stranger",
+            "email": "Stranger@example.com",
+            "thumb": null
+          }
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/513",
+          "GET /api/v2/user"
+        ]
+      },
+      {
+        "name": "stranger with a bad invite",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":514,\"inviteCode\":\"WRONG\"}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-103",
+          "user": {
+            "id": 103,
+            "uuid": "uuid-103",
+            "username": "Stranger",
+            "email": "Stranger@example.com",
+            "thumb": null
+          }
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/514",
+          "GET /api/v2/user"
+        ]
+      },
+      {
+        "name": "stranger redeems an invite",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":515,\"inviteCode\":\"golden-plex-invite\"}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-103",
+          "user": {
+            "id": 103,
+            "uuid": "uuid-103",
+            "username": "Stranger",
+            "email": "Stranger@example.com",
+            "thumb": null
+          }
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:103\",\"username\":\"Stranger\",\"email\":\"Stranger@example.com\",\"thumb\":null,\"role\":\"user\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:103",
+          "username": "Stranger",
+          "role": "user",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-103"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/515",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "spent invite",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":516,\"inviteCode\":\"golden-plex-invite\"}",
+        "server_id": false,
+        "plex": {
+          "token": "plex-token-104",
+          "user": {
+            "id": 104,
+            "uuid": "uuid-104",
+            "username": "Late",
+            "email": "Late@example.com",
+            "thumb": null
+          }
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/516",
+          "GET /api/v2/user"
+        ]
+      },
+      {
+        "name": "shared on the home server is admitted",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":517}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-105",
+          "user": {
+            "id": 105,
+            "uuid": "uuid-105",
+            "username": "Friend",
+            "email": "Friend@example.com",
+            "thumb": null
+          },
+          "resources": [
+            {
+              "name": "Home",
+              "clientIdentifier": "golden-server",
+              "owned": false,
+              "home": false,
+              "provides": "server"
+            },
+            {
+              "name": "Some Player",
+              "clientIdentifier": "player-id",
+              "owned": false,
+              "home": false,
+              "provides": "player"
+            }
+          ]
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:105\",\"username\":\"Friend\",\"email\":\"Friend@example.com\",\"thumb\":null,\"role\":\"user\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:105",
+          "username": "Friend",
+          "role": "user",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-105"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/517",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "shared friend signs in again",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":518}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-105",
+          "user": {
+            "id": 105,
+            "uuid": "uuid-105",
+            "username": "Friend",
+            "email": "Friend@example.com",
+            "thumb": null
+          },
+          "resources": []
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:105\",\"username\":\"Friend\",\"email\":\"Friend@example.com\",\"thumb\":null,\"role\":\"user\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:105",
+          "username": "Friend",
+          "role": "user",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-105"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/518",
+          "GET /api/v2/user"
+        ]
+      },
+      {
+        "name": "on another server only",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":519}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-106",
+          "user": {
+            "id": 106,
+            "uuid": "uuid-106",
+            "username": "Elsewhere",
+            "email": "Elsewhere@example.com",
+            "thumb": null
+          },
+          "resources": [
+            {
+              "name": "Elsewhere",
+              "clientIdentifier": "other-server",
+              "owned": true,
+              "home": false,
+              "provides": "server,client"
+            },
+            {
+              "name": "Some Player",
+              "clientIdentifier": "player-id",
+              "owned": false,
+              "home": false,
+              "provides": "player"
+            }
+          ]
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/519",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "share probe outage fails closed",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":520}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-108",
+          "user": {
+            "id": 108,
+            "uuid": "uuid-108",
+            "username": "Unlucky",
+            "email": "Unlucky@example.com",
+            "thumb": null
+          },
+          "resourcesStatus": 503
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/520",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "share probe 401 fails closed",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":521}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-108",
+          "user": {
+            "id": 108,
+            "uuid": "uuid-108",
+            "username": "Unlucky",
+            "email": "Unlucky@example.com",
+            "thumb": null
+          },
+          "resourcesStatus": 401
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/521",
+          "GET /api/v2/user",
+          "GET /api/v2/resources?includeHttps=1"
+        ]
+      },
+      {
+        "name": "revoked member still shared",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":522}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-107",
+          "user": {
+            "id": 107,
+            "uuid": "uuid-107",
+            "username": "Kicked",
+            "email": "Kicked@example.com",
+            "thumb": null
+          },
+          "resources": [
+            {
+              "name": "Home",
+              "clientIdentifier": "golden-server",
+              "owned": false,
+              "home": false,
+              "provides": "server"
+            }
+          ]
+        },
+        "status": 403,
+        "text": "{\"status\":\"denied\",\"reason\":\"no_invite\"}",
+        "set_cookie": null,
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/522",
+          "GET /api/v2/user"
+        ]
+      },
+      {
+        "name": "member with the server id set",
+        "method": "POST",
+        "path": "/api/auth/plex/check",
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"pinId\":523}",
+        "server_id": true,
+        "plex": {
+          "token": "plex-token-101",
+          "user": {
+            "id": 101,
+            "uuid": "uuid-101",
+            "username": "Member",
+            "email": "Member@example.com",
+            "thumb": null
+          }
+        },
+        "status": 200,
+        "text": "{\"status\":\"authorized\",\"user\":{\"sub\":\"plex:101\",\"username\":\"Member\",\"email\":\"Member@example.com\",\"thumb\":null,\"role\":\"user\"}}",
+        "set_cookie": "eex.session=<token>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Lax",
+        "session": {
+          "sub": "plex:101",
+          "username": "Member",
+          "role": "user",
+          "auth_mode": "plex",
+          "plexAuthToken": "plex-token-101"
+        },
+        "retry_after": null,
+        "plex_calls": [
+          "GET /api/v2/pins/523",
+          "GET /api/v2/user"
+        ]
+      },
+      {
+        "name": "logout with a plex token",
+        "method": "POST",
+        "path": "/api/auth/logout",
+        "headers": {
+          "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..2QFzZ7BrQbswWZL0.cSEQpt7RlOTizwqP4mBcxbh1W-zOAKp0MrEtvUwELybhjaW-6oONUFVLFW1io7IAhClckHW_TTTSXvZXYCDJEkRWAM8lnkrCwjQjj99cO6zYR51NRlPntQnQatntghnJ__KjSruORKpoaHq3-43SSaYHKCnRo4YLwpoNX2JShNsUf2PrN259TgZjbikwQEE.QucIl8hVarzoFvgZGhQJJw"
+        },
+        "body": null,
+        "server_id": false,
+        "plex": {},
+        "status": 200,
+        "text": "{\"ok\":true}",
+        "set_cookie": "eex.session=; Max-Age=0; Path=/",
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "POST /api/v2/signout"
+        ]
+      },
+      {
+        "name": "logout when plex signout fails",
+        "method": "POST",
+        "path": "/api/auth/logout",
+        "headers": {
+          "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..737sA6qBM61Ow19W.2yJuQNYyEakOgSk8hqDJ2o9xlsQghenQ5JMzEuEfc7-iM-B_qrvqOT-M2cMT9evdQ9Nr_iv-p1w4u3a_FCfna7VFuPmqcrd5CEbH1ezsMn_2b40VL7dqM3c7h1hD6erkSxRxeP9EynNo_1XpwKt6wXP9No9CxJz_qdVnuJc9bzil59PSOLvSOOvtSZF8NcM.1QPAJujVMfh-a-2tMw2sSQ"
+        },
+        "body": null,
+        "server_id": false,
+        "plex": {
+          "signoutStatus": 500
+        },
+        "status": 200,
+        "text": "{\"ok\":true}",
+        "set_cookie": "eex.session=; Max-Age=0; Path=/",
+        "session": null,
+        "retry_after": null,
+        "plex_calls": [
+          "POST /api/v2/signout"
+        ]
+      },
+      {
+        "name": "logout with a plex cookie and no token",
+        "method": "POST",
+        "path": "/api/auth/logout",
+        "headers": {
+          "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..c02_3nqJ5ujrZ0C5.78aQPAo0PMf9x_APtwwWpeKVA7gzOfpTk-2YC91jQ-2ogUGQa-LoCxVXRvitfgU-YYTz2XrKz9gnu9xGJoazcKhoF0Q0N8MRnkGtIyji42X_A6-rbcOm_uTulYhzgga-RoNMnLFvO_y6.z23HSNiXw1DdFd-hA7rjSA"
+        },
+        "body": null,
+        "server_id": false,
+        "plex": {},
+        "status": 200,
+        "text": "{\"ok\":true}",
+        "set_cookie": "eex.session=; Max-Age=0; Path=/",
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      },
+      {
+        "name": "logout with a garbage cookie",
+        "method": "POST",
+        "path": "/api/auth/logout",
+        "headers": {
+          "Cookie": "eex.session=garbage"
+        },
+        "body": null,
+        "server_id": false,
+        "plex": {},
+        "status": 200,
+        "text": "{\"ok\":true}",
+        "set_cookie": "eex.session=; Max-Age=0; Path=/",
+        "session": null,
+        "retry_after": null,
+        "plex_calls": []
+      }
+    ],
+    "final": {
+      "members": [
+        {
+          "sub": "plex:101",
+          "display_name": "Member",
+          "role": "user",
+          "auth_mode": "plex",
+          "invited_by": null,
+          "revoked": 0
+        },
+        {
+          "sub": "plex:102",
+          "display_name": "Plex Admin Row",
+          "role": "admin",
+          "auth_mode": "plex",
+          "invited_by": null,
+          "revoked": 0
+        },
+        {
+          "sub": "plex:103",
+          "display_name": "Stranger",
+          "role": "user",
+          "auth_mode": "plex",
+          "invited_by": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+          "revoked": 0
+        },
+        {
+          "sub": "plex:105",
+          "display_name": "Friend",
+          "role": "user",
+          "auth_mode": "plex",
+          "invited_by": "plex:server-share",
+          "revoked": 0
+        },
+        {
+          "sub": "plex:107",
+          "display_name": "Kicked",
+          "role": "user",
+          "auth_mode": "plex",
+          "invited_by": null,
+          "revoked": 1
+        }
+      ],
+      "invites": [
+        {
+          "issued_by": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+          "used_count": 1
+        }
+      ]
+    }
   }
 }

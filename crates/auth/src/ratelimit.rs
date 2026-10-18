@@ -2,7 +2,8 @@
 //! enforceAuthRateLimit / enforceAuthIdentityRateLimit. Every request counts
 //! against the kind's global bucket and, behind a trusted proxy, its client
 //! bucket; routes that receive an identity token also count it against an
-//! identity bucket, which bites even when client IPs are not trusted.
+//! identity bucket, which bites even when client IPs are not trusted. A Plex
+//! PIN poll also counts against its PIN's bucket.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -18,6 +19,9 @@ use crate::client_address;
 use crate::outcome::{Reporter, Scope};
 
 const WINDOW: Duration = Duration::from_secs(60);
+/// Polls of one Plex PIN per minute: two normal sign-ins from one household
+/// fit, a stuffing run against one PIN does not.
+const PIN_LIMIT: u32 = 60;
 const SWEEP_EVERY: Duration = Duration::from_secs(60);
 
 /// Which route family a request belongs to; each has its own buckets.
@@ -25,7 +29,7 @@ const SWEEP_EVERY: Duration = Duration::from_secs(60);
 pub enum Kind {
     /// Device-link start.
     Pin,
-    /// Device-link poll.
+    /// Device-link poll and Plex PIN poll (one shared set of buckets).
     Check,
     Apple,
     Google,
@@ -105,7 +109,20 @@ impl Limiter {
         kind: Kind,
         outcome: &Reporter,
     ) -> Result<(), Response> {
-        self.check_at(Instant::now(), headers, kind, outcome)
+        self.check_at(Instant::now(), headers, kind, None, outcome)
+    }
+
+    /// [`Limiter::check`] for a Plex PIN poll: the check kind's buckets plus,
+    /// when the body named an integer pinId, that PIN's bucket. A malformed
+    /// body consumes no PIN bucket.
+    #[allow(clippy::result_large_err)]
+    pub fn check_plex_pin(
+        &self,
+        headers: &HeaderMap,
+        pin_id: Option<i64>,
+        outcome: &Reporter,
+    ) -> Result<(), Response> {
+        self.check_at(Instant::now(), headers, Kind::Check, pin_id, outcome)
     }
 
     /// Count an attempted identity (rate-limit keying only, never an auth
@@ -129,6 +146,7 @@ impl Limiter {
         now: Instant,
         headers: &HeaderMap,
         kind: Kind,
+        pin_id: Option<i64>,
         outcome: &Reporter,
     ) -> Result<(), Response> {
         let mut rules = vec![Rule {
@@ -143,6 +161,13 @@ impl Limiter {
                 key: format!("{}:client:{source}:{address}", kind.as_str()),
                 scope: Scope::TrustedClient,
                 limit: kind.client_limit(),
+            });
+        }
+        if let Some(pin) = pin_id {
+            rules.push(Rule {
+                key: format!("{}:pin:{pin}", kind.as_str()),
+                scope: Scope::Pin,
+                limit: PIN_LIMIT,
             });
         }
         self.apply(now, &rules, outcome)

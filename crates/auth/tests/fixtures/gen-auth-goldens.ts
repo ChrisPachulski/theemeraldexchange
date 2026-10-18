@@ -10,8 +10,12 @@
 // server/ is gone from this branch, so the TS comes from the main checkout
 // (EEX_MAIN_CHECKOUT, default ~/theemeraldexchange), which is only read; it
 // needs its node_modules and the built contracts-napi binding.
-// route-goldens.json is not rewritten here: its generator (this file at
-// 25de8f6^) needed the port branch's server/test/iptvStub.ts, which main lacks.
+// route-goldens.json's `plex` key comes from here too: /api/auth/plex/config,
+// /plex/check, /methods and /logout through main's auth router, over a seeded
+// server.db, with global fetch answering for plex.tv per scenario (nothing
+// leaves the machine). The rest of route-goldens.json is kept as written at
+// a2f555b: its generator (this file at 25de8f6^) needed the port branch's
+// server/test/iptvStub.ts, which main lacks.
 // Run from this repo's root:
 //   cargo test -p auth -- --ignored write_rust_minted_cookies
 //   npx tsx crates/auth/tests/fixtures/gen-auth-goldens.ts
@@ -40,6 +44,7 @@ const DB_ADMIN = 'google:1234567890'
 const DEMOTED = 'google:999'
 const REVOKED = 'apple:000002.0123456789abcdef0123456789abcdef.0002'
 const STRANGER = 'local:01ARZ3NDEKTSV4RRFFQ69G5FAV' // no row, not in ADMIN_SUBS
+const PLEX_ADMIN = 'plex:4242' // ADMIN_SUBS in the plex route goldens, no row
 
 const POSTURES: Record<string, Record<string, string>> = {
   dev_split: { SERVE_SPA: '0' },
@@ -85,6 +90,17 @@ if (!process.env.GOLDEN_POSTURE) {
     if (posture === 'dev_split') Object.assign(out, { ...child, set_cookie: out.set_cookie })
   }
   fs.writeFileSync(path.join(here, 'auth-goldens.json'), JSON.stringify(out, null, 2) + '\n')
+  const routesFile = path.join(here, 'route-goldens.json')
+  const routes = JSON.parse(fs.readFileSync(routesFile, 'utf8')) as Json
+  routes.plex = runChild('plex_routes', {
+    SERVE_SPA: '0',
+    ALLOWED_ORIGINS: 'https://app.example',
+    ADMIN_SUBS: `${OWNER},${PLEX_ADMIN}`,
+    PLEX_CLIENT_ID: 'golden-plex-client',
+  })
+  fs.writeFileSync(routesFile, JSON.stringify(routes, null, 2) + '\n')
+} else if (process.env.GOLDEN_POSTURE === 'plex_routes') {
+  await plexRouteGoldens()
 } else {
   const { Hono } = await import(honoEntry)
   const { EncryptJWT } = await import('jose')
@@ -243,6 +259,162 @@ if (!process.env.GOLDEN_POSTURE) {
         .prepare('SELECT jti, last_seen_version, last_seen_at IS NOT NULL AS seen FROM device_tokens ORDER BY jti')
         .all(),
     }
+  }
+  fs.writeFileSync(process.env.GOLDEN_OUT!, JSON.stringify(result))
+}
+
+// What the plex.tv stand-in answers for one scenario; route_goldens.rs serves
+// the same from a local fake.
+type PlexSpec = {
+  token?: string | null
+  pinStatus?: number
+  retryAfter?: string
+  user?: Json
+  resources?: Json[]
+  resourcesStatus?: number
+  signoutStatus?: number
+}
+
+// Plex route goldens: web PIN sign-in, the Plex-share admission (PLEX_SERVER_ID
+// flipped per scenario, as auth.test.ts does), discovery, and logout's plex.tv
+// sign-out. Each check uses its own pinId, so no PIN bucket carries over.
+async function plexRouteGoldens(): Promise<void> {
+  const { createHash } = await import('node:crypto')
+  const { Hono } = await import(honoEntry)
+  const session = await import(path.join(server, 'session.js'))
+  const { env } = await import(path.join(server, 'env.js'))
+  const { serverDb } = await import(path.join(server, 'services/serverDb.js'))
+  const { auth } = await import(path.join(server, 'auth.js'))
+
+  let spec: PlexSpec = {}
+  let calls: string[] = []
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+    if (url.origin !== 'https://plex.tv') throw new Error(`unexpected fetch to ${url.origin}`)
+    calls.push(`${(init?.method ?? 'GET').toUpperCase()} ${url.pathname}${url.search}`)
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+    if (url.pathname.startsWith('/api/v2/pins/')) {
+      if (spec.pinStatus === 429) {
+        return new Response('slow down', { status: 429, headers: spec.retryAfter ? { 'Retry-After': spec.retryAfter } : {} })
+      }
+      return json({ id: 1, code: 'abc', authToken: spec.token ?? null })
+    }
+    if (url.pathname === '/api/v2/user') return json(spec.user)
+    if (url.pathname === '/api/v2/resources') return json(spec.resources ?? [], spec.resourcesStatus ?? 200)
+    if (url.pathname === '/api/v2/signout') return new Response(null, { status: spec.signoutStatus ?? 204 })
+    return new Response('not stubbed', { status: 599 })
+  }) as typeof fetch
+
+  const now = Math.floor(Date.now() / 1000)
+  const db = serverDb().raw
+  const member = db.prepare(
+    `INSERT INTO members (sub, display_name, role, auth_mode, invited_by, joined_at, revoked_at)
+     VALUES (?, ?, ?, 'plex', NULL, ?, ?)`,
+  )
+  member.run('plex:101', 'Member', 'user', '2026-10-04T00:00:00.000Z', null)
+  member.run('plex:102', 'Plex Admin Row', 'admin', '2026-10-03T00:00:00.000Z', null)
+  member.run('plex:107', 'Kicked', 'user', '2026-10-02T00:00:00.000Z', '2026-10-05T00:00:00.000Z')
+  db.prepare(
+    `INSERT INTO invites (code_hash, issued_by, label, role, expires_at, max_uses, used_count, created_at, revoked_at)
+     VALUES (?, ?, 'Plex friend', 'user', NULL, 1, 0, '2026-10-06T00:00:00.000Z', NULL)`,
+  ).run(createHash('sha256').update('golden-plex-invite').digest('hex'), OWNER)
+  const dump = (table: string) => db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()
+  const result: Json = { minted_at: now, seed: { members: dump('members'), invites: dump('invites') } }
+
+  const app = new Hono()
+  app.route('/api/auth', auth)
+
+  const user = (id: number, username: string) => ({
+    id, uuid: `uuid-${id}`, username, email: `${username}@example.com`, thumb: null,
+  })
+  const homeServer = { name: 'Home', clientIdentifier: 'golden-server', owned: false, home: false, provides: 'server' }
+  const otherServer = { name: 'Elsewhere', clientIdentifier: 'other-server', owned: true, home: false, provides: 'server,client' }
+  const player = { name: 'Some Player', clientIdentifier: 'player-id', owned: false, home: false, provides: 'player' }
+  const signedIn = (id: number, username: string, extra: PlexSpec = {}): PlexSpec => ({
+    token: `plex-token-${id}`, user: user(id, username), ...extra,
+  })
+  const pin = (id: number, extra: Json = {}) => JSON.stringify({ pinId: id, ...extra })
+  const plexCookie = async (token?: string) =>
+    `eex.session=${await session.createSession({
+      sub: 'plex:101', username: 'Member', role: 'user', auth_mode: 'plex',
+      ...(token ? { plexAuthToken: token } : {}),
+    })}`
+
+  // name, method, path, headers, body, PLEX_SERVER_ID set, plex.tv spec
+  type Scenario = [string, string, string, Record<string, string>, string | undefined, boolean, PlexSpec]
+  const scenarios: Scenario[] = [
+    ['plex config', 'GET', '/api/auth/plex/config', {}, undefined, false, {}],
+    ['methods with plex configured', 'GET', '/api/auth/methods', {}, undefined, false, {}],
+    ['check pending', 'POST', '/api/auth/plex/check', {}, pin(501), false, { token: null }],
+    ['check pending (string pinId)', 'POST', '/api/auth/plex/check', {}, '{"pinId":" 502 "}', false, { token: null }],
+    ['check empty token is pending', 'POST', '/api/auth/plex/check', {}, pin(503), false, { token: '' }],
+    ['check no body', 'POST', '/api/auth/plex/check', {}, undefined, false, {}],
+    ['check bad json', 'POST', '/api/auth/plex/check', {}, '{', false, {}],
+    ['check pinId foo', 'POST', '/api/auth/plex/check', {}, '{"pinId":"foo"}', false, {}],
+    ['check pinId 1.5', 'POST', '/api/auth/plex/check', {}, '{"pinId":1.5}', false, {}],
+    ['check pinId empty string', 'POST', '/api/auth/plex/check', {}, '{"pinId":""}', false, {}],
+    ['check oversized body', 'POST', '/api/auth/plex/check', {}, pin(504, { padding: 'x'.repeat(1024) }), false, {}],
+    ['check plex.tv 429 numeric', 'POST', '/api/auth/plex/check', {}, pin(505), false, { pinStatus: 429, retryAfter: '17' }],
+    ['check plex.tv 429 date', 'POST', '/api/auth/plex/check', {}, pin(506), false, { pinStatus: 429, retryAfter: 'Sat, 18 Jul 2026 23:59:59 GMT' }],
+    ['check plex.tv 429 malformed', 'POST', '/api/auth/plex/check', {}, pin(507), false, { pinStatus: 429, retryAfter: 'eventually' }],
+    ['check plex.tv 429 absent', 'POST', '/api/auth/plex/check', {}, pin(508), false, { pinStatus: 429 }],
+    ['member signs in, servers discovered', 'POST', '/api/auth/plex/check', {}, pin(509), false,
+      signedIn(101, 'Member', { resources: [homeServer, otherServer, player] })],
+    ['member signs in, discovery fails', 'POST', '/api/auth/plex/check', {}, pin(510), false,
+      signedIn(101, 'Member', { resourcesStatus: 503 })],
+    ['ADMIN_SUBS plex owner signs in', 'POST', '/api/auth/plex/check', {}, pin(511), false, signedIn(4242, 'Owner')],
+    ['admin member row signs in', 'POST', '/api/auth/plex/check', {}, pin(512), false, signedIn(102, 'Plex Admin Row')],
+    ['stranger without invite', 'POST', '/api/auth/plex/check', {}, pin(513), false, signedIn(103, 'Stranger')],
+    ['stranger with a bad invite', 'POST', '/api/auth/plex/check', {}, pin(514, { inviteCode: 'WRONG' }), false, signedIn(103, 'Stranger')],
+    ['stranger redeems an invite', 'POST', '/api/auth/plex/check', {}, pin(515, { inviteCode: 'golden-plex-invite' }), false,
+      signedIn(103, 'Stranger')],
+    ['spent invite', 'POST', '/api/auth/plex/check', {}, pin(516, { inviteCode: 'golden-plex-invite' }), false, signedIn(104, 'Late')],
+    ['shared on the home server is admitted', 'POST', '/api/auth/plex/check', {}, pin(517), true,
+      signedIn(105, 'Friend', { resources: [homeServer, player] })],
+    ['shared friend signs in again', 'POST', '/api/auth/plex/check', {}, pin(518), true, signedIn(105, 'Friend', { resources: [] })],
+    ['on another server only', 'POST', '/api/auth/plex/check', {}, pin(519), true,
+      signedIn(106, 'Elsewhere', { resources: [otherServer, player] })],
+    ['share probe outage fails closed', 'POST', '/api/auth/plex/check', {}, pin(520), true,
+      signedIn(108, 'Unlucky', { resourcesStatus: 503 })],
+    ['share probe 401 fails closed', 'POST', '/api/auth/plex/check', {}, pin(521), true,
+      signedIn(108, 'Unlucky', { resourcesStatus: 401 })],
+    ['revoked member still shared', 'POST', '/api/auth/plex/check', {}, pin(522), true,
+      signedIn(107, 'Kicked', { resources: [homeServer] })],
+    ['member with the server id set', 'POST', '/api/auth/plex/check', {}, pin(523), true, signedIn(101, 'Member')],
+    ['logout with a plex token', 'POST', '/api/auth/logout', { Cookie: await plexCookie('golden-logout-token') }, undefined, false, {}],
+    ['logout when plex signout fails', 'POST', '/api/auth/logout', { Cookie: await plexCookie('golden-logout-token') }, undefined, false,
+      { signoutStatus: 500 }],
+    ['logout with a plex cookie and no token', 'POST', '/api/auth/logout', { Cookie: await plexCookie() }, undefined, false, {}],
+    ['logout with a garbage cookie', 'POST', '/api/auth/logout', { Cookie: 'eex.session=garbage' }, undefined, false, {}],
+  ]
+  const envRw = env as { plexServerId: string | null }
+  const ran = []
+  for (const [label, method, p, headers, body, scoped, plex] of scenarios) {
+    spec = plex
+    calls = []
+    envRw.plexServerId = scoped ? 'golden-server' : null
+    const h = body === undefined ? headers : { ...headers, 'Content-Type': 'application/json' }
+    const r = await app.request(p, { method, headers: h, body })
+    const setCookie = r.headers.get('set-cookie')
+    const token = /^eex\.session=([^;]+)/.exec(setCookie ?? '')?.[1]
+    const s = token ? await session.verifySession(token) : null
+    ran.push({
+      name: label, method, path: p, headers: h, body: body ?? null, server_id: scoped, plex,
+      status: r.status, text: await r.text(),
+      set_cookie: setCookie && token ? setCookie.replace(token, '<token>') : setCookie,
+      session: s && { sub: s.sub, username: s.username, role: s.role, auth_mode: s.auth_mode, plexAuthToken: s.plexAuthToken ?? null },
+      retry_after: r.headers.get('retry-after'),
+      plex_calls: calls,
+    })
+  }
+  result.scenarios = ran
+  result.final = {
+    members: db.prepare(
+      `SELECT sub, display_name, role, auth_mode, invited_by, revoked_at IS NOT NULL AS revoked
+         FROM members ORDER BY sub`,
+    ).all(),
+    invites: db.prepare('SELECT issued_by, used_count FROM invites ORDER BY rowid').all(),
   }
   fs.writeFileSync(process.env.GOLDEN_OUT!, JSON.stringify(result))
 }
