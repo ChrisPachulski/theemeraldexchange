@@ -4,7 +4,9 @@
 //! transcoder, iptv) and the *arr/SAB/TMDB upstreams through one client.
 
 pub mod app;
+pub mod arr;
 pub mod config;
+pub mod jsonl;
 pub mod principal;
 pub mod recommender;
 pub mod routes;
@@ -46,6 +48,8 @@ pub struct AppState {
     pub syncplay: Arc<syncplay::Syncplay>,
     /// server.db's server_id for internal principals, once resolved.
     pub server_id: Arc<tokio::sync::OnceCell<String>>,
+    /// Reservation ledgers, mutate limiters and the grab log.
+    pub arr: Arc<arr::ArrState>,
 }
 
 impl AppState {
@@ -58,6 +62,7 @@ impl AppState {
             item_locks: Arc::default(),
             syncplay: Arc::default(),
             server_id: Arc::default(),
+            arr: Arc::new(arr::ArrState::new(&config, arr::shared::Timings::default())),
             config: Arc::new(config),
         }
     }

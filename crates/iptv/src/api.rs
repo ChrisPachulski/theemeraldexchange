@@ -6,9 +6,8 @@
 //! membership checks, then forwards here with a 60 s internal-principal JWE.
 //! This service trusts the principal for the acting sub and role only.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Query, Request, State};
@@ -27,6 +26,7 @@ use crate::catalog::{self, GridOpts, ListOpts};
 use crate::config::{Config, PrincipalMode};
 use crate::playlist;
 use crate::xtream::{iso, parse_js_number};
+use media_core::rate_limit::RateLimiter;
 
 const KINDS: [&str; 3] = ["live", "vod", "series"];
 const HIST_KINDS: [&str; 3] = ["live", "vod", "series_episode"];
@@ -517,7 +517,7 @@ async fn epg_search(
     headers: HeaderMap,
     Query(q): Params,
 ) -> ApiResult {
-    if let Err(r) = s.search_limit.check(&claims) {
+    if let Err(r) = s.search_limit.check(&limit_key(&claims)) {
         return Ok(r);
     }
     // One char would match nearly every programme: require two.
@@ -953,69 +953,12 @@ async fn internal_availability(
 
 // ---- rate limit --------------------------------------------------------------------
 
-/// Token bucket per caller key, as the Hono rateLimit middleware: `capacity`
-/// tokens, `refill` added back per whole interval.
-// ponytail: buckets are never evicted; one household is a handful of keys. Add
-// a sweep if callers ever become unbounded.
-pub(crate) struct RateLimiter {
-    capacity: u32,
-    refill: u32,
-    interval: Duration,
-    buckets: Mutex<HashMap<String, (u32, Instant)>>,
-}
-
-impl RateLimiter {
-    fn new(capacity: u32, refill: u32, interval: Duration) -> Self {
-        RateLimiter {
-            capacity,
-            refill,
-            interval,
-            buckets: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Take a token for the principal's sub (`anon` without one), or the 429
-    /// the Hono middleware answers: Retry-After plus `retry_after_ms`.
-    // The 429 is the cold path; boxing it buys nothing.
-    #[allow(clippy::result_large_err)]
-    pub(crate) fn check(&self, claims: &Claims) -> Result<(), Response> {
-        let key = claims
-            .as_ref()
-            .map_or_else(|| "anon".to_string(), |c| format!("sub:{}", c.sub));
-        self.take(&key).map_err(|retry_ms| {
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                [(header::RETRY_AFTER, retry_ms.div_ceil(1000).to_string())],
-                Json(json!({ "error": "rate_limited", "retry_after_ms": retry_ms })),
-            )
-                .into_response()
-        })
-    }
-
-    /// Ok, or the milliseconds until the next refill.
-    fn take(&self, key: &str) -> Result<(), u64> {
-        let now = Instant::now();
-        let mut buckets = self.buckets.lock().unwrap();
-        let (tokens, last) = buckets
-            .entry(key.to_string())
-            .or_insert((self.capacity, now));
-        let elapsed = now.duration_since(*last);
-        if elapsed >= self.interval {
-            let refills = (elapsed.as_millis() / self.interval.as_millis()) as u32;
-            *tokens = self
-                .capacity
-                .min(tokens.saturating_add(refills.saturating_mul(self.refill)));
-            *last = now;
-        }
-        if *tokens == 0 {
-            return Err(self
-                .interval
-                .saturating_sub(now.duration_since(*last))
-                .as_millis() as u64);
-        }
-        *tokens -= 1;
-        Ok(())
-    }
+/// The bucket key for the Hono rateLimit middleware: the principal's sub,
+/// `anon` without one.
+pub(crate) fn limit_key(claims: &Claims) -> String {
+    claims
+        .as_ref()
+        .map_or_else(|| "anon".to_string(), |c| format!("sub:{}", c.sub))
 }
 
 #[cfg(test)]

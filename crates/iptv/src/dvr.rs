@@ -709,7 +709,7 @@ fn js_string(v: Option<&Value>) -> String {
 /// Schedule a recording (admin; claims a provider connection and disk).
 async fn schedule_route(State(s): State<AppState>, claims: Claims, body: Bytes) -> ApiResult {
     require_admin(&s, &claims)?;
-    if let Err(r) = s.dvr_limit.check(&claims) {
+    if let Err(r) = s.dvr_limit.check(&crate::api::limit_key(&claims)) {
         return Ok(r);
     }
     let body: Value = serde_json::from_slice(&body).map_err(|_| bad("invalid_json"))?;
@@ -768,7 +768,7 @@ async fn delete_route(
     Path(id): Path<String>,
 ) -> ApiResult {
     require_admin(&s, &claims)?;
-    if let Err(r) = s.dvr_limit.check(&claims) {
+    if let Err(r) = s.dvr_limit.check(&crate::api::limit_key(&claims)) {
         return Ok(r);
     }
     let not_found = || error(StatusCode::NOT_FOUND, "not_found");

@@ -15,6 +15,7 @@ pub mod filename;
 pub mod models;
 pub mod podcasts;
 pub mod probe;
+pub mod rate_limit;
 pub mod routes;
 pub mod scanner;
 pub mod ssrf_guard;

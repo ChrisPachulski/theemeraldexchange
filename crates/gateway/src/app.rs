@@ -45,6 +45,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/limits", get(limits))
         .route("/api/version", get(version))
         .merge(crate::routes::router())
+        .merge(crate::arr::router())
         .with_state(state.clone())
         .merge(auth::router(state.auth.clone()));
     edge(routes, &state)
@@ -361,7 +362,7 @@ async fn limits(State(st): State<AppState>, headers: HeaderMap) -> Response {
 }
 
 /// A JS number on the wire: 100, not 100.0.
-fn js_number(n: f64) -> serde_json::Number {
+pub(crate) fn js_number(n: f64) -> serde_json::Number {
     if n.fract() == 0.0 && n.abs() < 9_007_199_254_740_992.0 {
         (n as i64).into()
     } else {

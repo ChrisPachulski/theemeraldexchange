@@ -33,7 +33,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde.workspace = true
 # Insertion-ordered maps: the JSON stores keep their files' key order.
 indexmap = { version = "2", features = ["serde"] }
-serde_json.workspace = true
+# raw_value: grab-log lines are served as written.
+serde_json = { workspace = true, features = ["raw_value"] }
 regex.workspace = true
 ulid.workspace = true
 uuid = { version = "1", features = ["v4"] }

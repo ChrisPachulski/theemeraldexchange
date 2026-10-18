@@ -7,6 +7,7 @@ use super::*;
 use crate::catalog::tests::{channel, exec, pool, prog};
 use crate::config::test_config;
 use axum::http::{HeaderValue, Method};
+use std::sync::Mutex;
 use tower::ServiceExt;
 
 const PRINCIPAL_SECRET: &str = "pppppppppppppppppppppppppppppppppppppppp";
@@ -1386,15 +1387,4 @@ fn js_coercions() {
         ),
         (1.0, 12.5, 0.0)
     );
-}
-
-#[test]
-fn rate_limiter_refills_in_whole_intervals() {
-    let l = RateLimiter::new(2, 2, Duration::from_millis(50));
-    assert!(l.take("a").is_ok() && l.take("a").is_ok());
-    let retry = l.take("a").unwrap_err();
-    assert!(retry <= 50);
-    assert!(l.take("b").is_ok(), "per key");
-    std::thread::sleep(Duration::from_millis(60));
-    assert!(l.take("a").is_ok());
 }
