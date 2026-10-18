@@ -1,6 +1,4 @@
-//! middleware/csrf.test.ts and app.csrf.test.ts, minus the Plex and passkey
-//! paths. The Plex /device/poll and /plex/check paths are now plain gated
-//! routes, which is asserted below.
+//! middleware/csrf.test.ts and app.csrf.test.ts, minus the passkey paths.
 
 use axum::Router;
 use axum::body::Body;
@@ -37,9 +35,8 @@ fn app(allowed: &[&str], is_prod: bool, gate: Gate) -> Router {
     let mut r = Router::new()
         .route("/echo", any(ok))
         .route("/api/transcode/session/{id}/heartbeat", any(ok))
-        // Cookie-authed or dropped auth paths: never in the bootstrap list.
+        // Cookie-authed auth paths: never in the bootstrap list.
         .route("/api/auth/device/link/claim", any(ok))
-        .route("/api/auth/device/poll", any(ok))
         .route("/api/auth/plex/check", any(ok));
     for path in NATIVE_BOOTSTRAP_PATHS {
         r = r.route(path, any(ok));
@@ -332,17 +329,24 @@ async fn bootstrap_with_a_cookie_is_gated() {
         assert_eq!(body, forbidden("bad_origin"));
     }
     let h = [("cookie", "eex.session=abc"), ("origin", ATTACKER)];
-    let (status, _) = send(&a, "POST", "/api/auth/device/link/poll", &h).await;
+    for path in ["/api/auth/device/link/poll", "/api/auth/device/poll"] {
+        let (status, body) = send(&a, "POST", path, &h).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+        assert_eq!(body, forbidden("bad_origin"));
+    }
+    // A cookie alone, no Origin, is gated on the device poll too.
+    let h = [("cookie", "eex.session=abc")];
+    let (status, _) = send(&a, "POST", "/api/auth/device/poll", &h).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
 async fn non_bootstrap_auth_paths_stay_gated() {
     let a = prod();
-    // The cookie-authed claim, and the dropped Plex paths.
+    // The cookie-authed claim, and the web Plex sign-in (it sets the session
+    // cookie, so a cookieless cross-origin POST stays gated: session fixation).
     for path in [
         "/api/auth/device/link/claim",
-        "/api/auth/device/poll",
         "/api/auth/plex/check",
         "/echo",
     ] {

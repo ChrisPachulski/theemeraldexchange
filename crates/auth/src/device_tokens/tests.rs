@@ -187,6 +187,42 @@ async fn another_secret_garbage_or_an_unknown_kid_fails() {
     );
 }
 
+/// device.test.ts: Plex and Google tokens verify back with their mode, and a
+/// flipped ciphertext byte fails.
+#[tokio::test]
+async fn plex_and_google_tokens_round_trip_and_tampering_fails() {
+    let db = pool().await;
+    let keys = Keys::from_secret(SECRET);
+    for (sub, mode) in [
+        ("plex:12345", AuthMode::Plex),
+        ("google:998877", AuthMode::Google),
+    ] {
+        let t = mint(
+            &db,
+            &keys,
+            &MintInput {
+                sub,
+                auth_mode: mode,
+                ..input()
+            },
+        )
+        .await
+        .unwrap();
+        let c = verify(&db, &keys, &t, now()).await.unwrap().unwrap();
+        assert_eq!((c.sub.as_str(), c.auth_mode.as_str()), (sub, mode.as_str()));
+        assert_eq!(c.jti.len(), 26);
+        let mut parts: Vec<String> = t.split('.').map(String::from).collect();
+        let last = parts[3].pop().unwrap();
+        parts[3].push(if last == 'A' { 'B' } else { 'A' });
+        assert!(
+            verify(&db, &keys, &parts.join("."), now())
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
 #[tokio::test]
 async fn a_bad_role_or_an_unknown_auth_mode_fails() {
     let db = pool().await;

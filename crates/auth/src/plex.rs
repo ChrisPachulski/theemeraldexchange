@@ -24,6 +24,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::Config;
 
+mod device;
 mod signin;
 pub(crate) use signin::routes;
 

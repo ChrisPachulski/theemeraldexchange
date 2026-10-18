@@ -26,6 +26,7 @@ pub(crate) fn routes() -> Router<AuthState> {
     Router::new()
         .route("/api/auth/plex/config", get(plex_config))
         .route("/api/auth/plex/check", post(plex_check))
+        .route("/api/auth/device/poll", post(super::device::poll))
 }
 
 /// GET /api/auth/plex/config: the public client id and product label the SPA
@@ -232,7 +233,7 @@ struct Server {
 
 /// Whether the body named a pinId (a non-empty string or a number), and its
 /// value when that is an integer, read the way JS `Number()` reads it.
-fn pin_id(body: &Value) -> (bool, Option<i64>) {
+pub(super) fn pin_id(body: &Value) -> (bool, Option<i64>) {
     let n = match body.get("pinId") {
         Some(Value::Number(n)) => n.as_f64(),
         Some(Value::String(s)) if !s.is_empty() => js_number(s),

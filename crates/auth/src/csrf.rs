@@ -22,8 +22,10 @@ use crate::config::Config;
 /// Cookieless, Origin-less token-mint endpoints the native app calls before it
 /// holds any token. No ambient credential rides them, so they pass; any Origin
 /// marks a browser and gets the normal check. The cookie-authed
-/// /device/link/claim stays gated.
+/// /device/link/claim and the web cookie sign-in /plex/check (session
+/// fixation) stay gated.
 const NATIVE_BOOTSTRAP_PATHS: &[&str] = &[
+    "/api/auth/device/poll",
     "/api/auth/apple",
     "/api/auth/google",
     "/api/auth/device/link/start",
