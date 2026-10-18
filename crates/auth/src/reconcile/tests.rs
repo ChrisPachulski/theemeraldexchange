@@ -619,6 +619,41 @@ async fn a_burst_of_parallel_requests_shares_one_probe() {
     assert_eq!(g.probes(), 1);
 }
 
+/// Review finding: one process-wide probe lock queued every member's stale
+/// probe behind every other's, so with plex.tv hanging the fourth member
+/// waited 4 x GATE_TIMEOUT. Each waits at most one timeout, as in TS.
+#[tokio::test]
+async fn a_hung_plex_tv_stalls_each_member_for_one_timeout_not_the_queue() {
+    let mut g = gate().await;
+    // Accepts connections (the kernel backlog) and never answers.
+    let hung = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    g.st.plex = Arc::new(crate::plex::Plex::at(&format!(
+        "http://{}",
+        hung.local_addr().unwrap()
+    )));
+    let mut set = tokio::task::JoinSet::new();
+    for i in 0..4 {
+        let sub = format!("plex:{}", 100 + i);
+        add_member(&g.db, &sub, "user", "plex").await;
+        let st = g.st.clone();
+        set.spawn(async move {
+            let start = std::time::Instant::now();
+            let s = Session {
+                sub,
+                ..plex_session(Some(&format!("token-{i}")), Role::User)
+            };
+            let r = reconcile_cookie(&st, s).await.unwrap();
+            (r.is_some(), start.elapsed())
+        });
+    }
+    while let Some(r) = set.join_next().await {
+        let (signed_in, waited) = r.unwrap();
+        assert!(signed_in);
+        assert!(waited < GATE_TIMEOUT + Duration::from_secs(2), "{waited:?}");
+    }
+    drop(hung);
+}
+
 #[tokio::test]
 async fn a_plex_outage_fails_open_and_waits_out_the_ttl() {
     capture_logs();

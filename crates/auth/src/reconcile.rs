@@ -7,7 +7,7 @@
 //! services/reconcileDeviceToken.ts.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::Json;
@@ -154,9 +154,10 @@ async fn plex_token_live(st: &AuthState, sub: &str, token: &str, server_id: &str
     if st.plex_gate.fresh(sub, &fingerprint, server_id, st.now()) {
         return true;
     }
-    // ponytail: one lock for every sub's probe; per-sub locks if the member
-    // count ever makes 5 s plex.tv waits queue up.
-    let _probing = st.plex_gate.probing.lock().await;
+    // Single flight per token: a page load's parallel requests share one
+    // probe, while another member or device never waits on it.
+    let probing = st.plex_gate.probe_lock(&fingerprint);
+    let _probing = probing.lock().await;
     let now = st.now();
     if st.plex_gate.fresh(sub, &fingerprint, server_id, now) {
         return true;
@@ -194,11 +195,19 @@ struct GateEntry {
 #[derive(Default)]
 pub struct PlexGate {
     entries: Mutex<(u64, HashMap<String, GateEntry>)>,
-    /// Held across a probe, so a page load's parallel requests make one.
-    probing: tokio::sync::Mutex<()>,
+    /// Token fingerprint -> the lock held across that token's probe.
+    probing: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl PlexGate {
+    /// The probe lock for this token. Locks no one else holds are dropped
+    /// here, so the map only ever holds in-flight probes.
+    fn probe_lock(&self, fingerprint: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.probing.lock().unwrap();
+        locks.retain(|_, l| Arc::strong_count(l) > 1);
+        locks.entry(fingerprint.to_string()).or_default().clone()
+    }
+
     /// A pass for this token and server within the TTL.
     fn fresh(&self, sub: &str, fingerprint: &str, server_id: &str, now: i64) -> bool {
         let guard = self.entries.lock().unwrap();
