@@ -70,7 +70,7 @@ fn media_routes(state: &AppState) -> Router<AppState> {
 /// Fallbacks and layers around `routes`.
 pub(crate) fn edge(routes: Router, state: &AppState) -> Router {
     let spa = state.spa_dir.clone();
-    routes
+    let inner = routes
         .fallback(move |req: Request| fallback(spa.clone(), req))
         // Hono answered a known path's wrong method with its 404 too.
         .method_not_allowed_fallback(not_found)
@@ -86,8 +86,15 @@ pub(crate) fn edge(routes: Router, state: &AppState) -> Router {
         .layer(middleware::from_fn(preflight_no_content))
         .layer(middleware::from_fn(frame_headers))
         .layer(middleware::from_fn(request_log))
-        .layer(middleware::from_fn(request_id))
-        .layer(middleware::from_fn(normalize_path))
+        .layer(middleware::from_fn(request_id));
+    // Normalized before routing: a Router layer runs after the route is
+    // picked, so `/api/iptv/stream/..\playlist.m3u` would reach the stream
+    // handler and skip the playlist's own gates.
+    Router::new().fallback_service(
+        tower::ServiceBuilder::new()
+            .layer(middleware::from_fn(normalize_path))
+            .service(inner),
+    )
 }
 
 /// Dot segments resolved as the WHATWG URL parser does (`.`, `..` and their

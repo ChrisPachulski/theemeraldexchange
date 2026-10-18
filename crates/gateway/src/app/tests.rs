@@ -372,3 +372,18 @@ async fn version_advertises_configured_sign_ins() {
     assert_eq!(b["release"], "dev");
     assert_eq!(b["schemas"]["exchange"], json!({"present": false}));
 }
+
+/// The path is normalized before a route is picked: otherwise a backslash or
+/// dot-segment spelling selects one handler and is forwarded as another
+/// (`/api/iptv/stream/..\playlist.m3u` would skip the playlist's gates).
+#[tokio::test]
+async fn routing_sees_the_normalized_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let st = state_in(&dir, &[]).await;
+    let app = router(st);
+    let want = send(&app, get_req("/api/version")).await;
+    for spelling in ["/api/health\\..\\version", "/api/health/../version"] {
+        let r = send(&app, get_req(spelling)).await;
+        assert_eq!((r.status, &r.body), (want.status, &want.body), "{spelling}");
+    }
+}
