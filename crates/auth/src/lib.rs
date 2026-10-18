@@ -8,14 +8,71 @@ pub mod db;
 pub mod device_tokens;
 pub mod invites;
 pub mod members;
+pub mod reconcile;
+pub mod session;
 
 #[cfg(test)]
 mod testutil;
 
 pub use db::ensure_server_id;
 pub use members::{effective_role, member_status};
+pub use reconcile::{Principal, Rejection, RequireAdmin, RequireAuth, authenticate};
 
+use std::sync::Arc;
+
+use axum::routing::get;
+use axum::{Json, Router};
 use serde::Serialize;
+use sqlx::SqlitePool;
+
+/// What the auth routes and extractors need. Cheap to clone (the extractors
+/// take it through `FromRef` on every request).
+#[derive(Clone)]
+pub struct AuthState {
+    pub pool: SqlitePool,
+    pub config: Arc<config::Config>,
+    pub session_key: session::SessionKey,
+    /// None in dev without DEVICE_TOKEN_SECRET: every Bearer is then invalid.
+    pub device_keys: Option<Arc<device_tokens::Keys>>,
+    /// Pins the clock in tests so committed goldens never expire.
+    #[cfg(test)]
+    pub(crate) fixed_now: Option<i64>,
+}
+
+impl AuthState {
+    pub fn new(pool: SqlitePool, config: config::Config) -> AuthState {
+        AuthState {
+            session_key: session::SessionKey::from_secret(&config.session_secret),
+            device_keys: config
+                .device_token_secret
+                .as_deref()
+                .map(|s| Arc::new(device_tokens::Keys::from_secret(s))),
+            config: Arc::new(config),
+            pool,
+            #[cfg(test)]
+            fixed_now: None,
+        }
+    }
+
+    pub(crate) fn now(&self) -> i64 {
+        #[cfg(test)]
+        if let Some(t) = self.fixed_now {
+            return t;
+        }
+        chrono::Utc::now().timestamp()
+    }
+}
+
+/// The auth routes, at their full /api paths.
+pub fn router(state: AuthState) -> Router {
+    Router::new().route("/api/me", get(me)).with_state(state)
+}
+
+/// GET /api/me: the reconciled caller. Over a Bearer the username is the
+/// device's name.
+async fn me(RequireAuth(p): RequireAuth) -> Json<serde_json::Value> {
+    Json(serde_json::json!({ "user": p.session }))
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -56,8 +113,9 @@ impl Role {
 
 /// The provider an identity signed in with. Plex is gone (decisions.md), so a
 /// stored `plex` row reads as a plain string on [`members::Member`] and a
-/// `plex` device token no longer verifies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `plex` device token or session cookie no longer verifies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AuthMode {
     Local,
     Apple,

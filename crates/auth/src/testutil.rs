@@ -56,3 +56,52 @@ pub async fn set_revoked(pool: &SqlitePool, sub: &str) {
         .await
         .unwrap();
 }
+
+/// tests/fixtures/auth-goldens.json, written by gen-auth-goldens.ts.
+pub fn goldens() -> &'static serde_json::Value {
+    static G: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    G.get_or_init(|| {
+        serde_json::from_str(include_str!("../tests/fixtures/auth-goldens.json")).unwrap()
+    })
+}
+
+/// A Config under the goldens' secrets and ADMIN_SUBS, plus `extra` env.
+pub fn config(extra: &[(&str, &str)]) -> crate::config::Config {
+    let g = goldens();
+    let admin_subs: Vec<&str> = g["admin_subs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_str().unwrap())
+        .collect();
+    let mut env: std::collections::HashMap<String, String> = [
+        ("SESSION_SECRET", g["session_secret"].as_str().unwrap()),
+        (
+            "DEVICE_TOKEN_SECRET",
+            g["device_token_secret"].as_str().unwrap(),
+        ),
+        (
+            "STREAM_TOKEN_SECRET",
+            "auth-goldens-stream-secret-0123456789abcdef",
+        ),
+        (
+            "INTERNAL_PRINCIPAL_SECRET",
+            "auth-goldens-internal-secret-0123456789abcdef",
+        ),
+        ("ADMIN_SUBS", &admin_subs.join(",")),
+        ("SERVE_SPA", "0"),
+    ]
+    .into_iter()
+    .chain(extra.iter().copied())
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect();
+    env.retain(|_, v| !v.is_empty());
+    crate::config::Config::from_lookup(|k| env.get(k).cloned()).unwrap()
+}
+
+/// A fresh server.db and an AuthState over it (golden secrets, dev posture).
+pub async fn state() -> (TestDb, crate::AuthState) {
+    let db = pool().await;
+    let state = crate::AuthState::new(db.pool.clone(), config(&[]));
+    (db, state)
+}

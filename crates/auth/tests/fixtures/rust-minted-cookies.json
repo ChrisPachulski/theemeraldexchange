@@ -1,0 +1,46 @@
+[
+  {
+    "minted_at": 1792288067,
+    "name": "rust apple user",
+    "session": {
+      "auth_mode": "apple",
+      "role": "user",
+      "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+      "username": "someone"
+    },
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..IgmuQkXSDsY0gBgn.muIx0CVBFgXOainFVYEss36N-OSu3V7sS70NP5g_vbkixox3cgxT1OVQ_SftnSm10n60JdJVESlsFiCh4hHMryYDOp1kO-JEcuU67-HLEh4YxWoD-w8LF4ORkYGiVqqMYuAARkjUeupbVv9Mf1N53xwTxMzhlGvF9Pcuk0XXH-lykjQXbaIoTA-BeGMC0l7dpyihNKQ.-dYEcJMScLvuTTHYe1KU6Q"
+  },
+  {
+    "minted_at": 1792288067,
+    "name": "rust workos admin",
+    "session": {
+      "auth_mode": "workos",
+      "role": "admin",
+      "sub": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
+      "username": "someone"
+    },
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..IsYjjJmoSzgfT1pF.4TRCMyCPk9obBJGgkPV-2fTPeHGWBj8CNlc0V0oE9aa80TliirHuWUFtVItjgosdl7Dme97XS_d2BClJ4FUeHNBmH75Oxxz3HyQ5vWVmJOM0WxaSXQGSxO0wPBgLlGhsOEKh6CZ3PYbRRstYEOicqj8nR_dz3jJXnK9jayKNGv9_TTV210aLV_nJzw.SZYooXl5trF9HD1Mu20-jA"
+  },
+  {
+    "minted_at": 1792288067,
+    "name": "rust google user",
+    "session": {
+      "auth_mode": "google",
+      "role": "user",
+      "sub": "google:1234567890",
+      "username": "someone"
+    },
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..IzGuEBHWvB98V_HW.FQZX13oN-9fIf6AdFPL8uiOpF51dwXKbJZiNzj41rma-GKZ1IW-jmVqW-jS7_c85aUj6NLzYtviMFE00eB0zMJxvgaIXTWdYjP8FuMfD6DdCr4dYePvWtuwurAoFb2vxC71KUJtmE54Hh338Sg0dXYd5FWyp.TXAqygWO6jnK5QJlD4yT9w"
+  },
+  {
+    "minted_at": 1792288067,
+    "name": "rust local user",
+    "session": {
+      "auth_mode": "local",
+      "role": "user",
+      "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "username": "someone"
+    },
+    "token": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoic2Vzc2lvbi12MSJ9..sJcb4_zePEk0G13Z.-ZHL8uYrah7dr5b33pSyFvz-_2Wj-t3kqiSRA-VnwvBpCUIj4pVYlhrw7P7XKhtqLAX4O8VyLdrC8kkDr4_9V5VqOeR3HuzkUpOXwvSLoZrlRwQDytJWFsVxt3WUKXD5lxKDl15Fd1-YwwRApPa8M7CvJ4cR53Jf-1widvAMqaJfRfI.cBGqm_Wrqw6p-OAeN2o4Og"
+  }
+]
