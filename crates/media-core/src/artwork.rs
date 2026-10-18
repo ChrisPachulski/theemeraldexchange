@@ -155,8 +155,19 @@ fn webp_frames_fit(bytes: &[u8]) -> bool {
         }
         true
     }
+    // The chunks end where the RIFF size says; bytes after it (some tools
+    // append them) are not chunks.
+    let riff_end = bytes
+        .get(4..8)
+        .map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap()) as usize)
+        .saturating_add(8)
+        .min(bytes.len());
     let (mut out, mut canvas) = (vec![], None);
-    if !frames(bytes.get(12..).unwrap_or_default(), &mut out, &mut canvas) {
+    if !frames(
+        bytes.get(12..riff_end).unwrap_or_default(),
+        &mut out,
+        &mut canvas,
+    ) {
         return false;
     }
     match canvas {
@@ -1091,6 +1102,12 @@ mod tests {
             .encode(&[9; 40 * 30 * 3], 40, 30, image::ExtendedColorType::Rgb8)
             .unwrap();
         assert!(webp_frames_fit(&real));
+        let mut trailing = real.clone();
+        trailing.extend_from_slice(b"VP8 \xff\xff\xff\x7f trailing bytes past the RIFF size");
+        assert!(
+            webp_frames_fit(&trailing),
+            "bytes after the RIFF chunk are ignored"
+        );
         let path = dir.path().join("real.webp");
         std::fs::write(&path, real).unwrap();
         let (decoder, _) = open(&path).unwrap();
