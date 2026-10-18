@@ -1,11 +1,11 @@
 {
-  "minted_at": 1792291264,
+  "minted_at": 1792294256,
   "seed": {
     "server_state": [
       {
         "key": "server_id",
-        "value": "ab4a9681-c95a-4042-af68-2fe5328c3835",
-        "ts": "2026-10-18 02:41:04"
+        "value": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
+        "ts": "2026-10-18 03:30:56"
       }
     ],
     "members": [
@@ -48,99 +48,99 @@
     ],
     "device_tokens": [
       {
-        "jti": "01M56E4NT7Q73X9QZWP2E6ASXE",
+        "jti": "01M56GZZT9HNRTVVFPVRCMB5S6",
         "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
         "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ0",
         "device_name": "Living Room Apple TV",
         "platform": "tvos",
-        "server_id": "ab4a9681-c95a-4042-af68-2fe5328c3835",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
         "kid": "device-v1",
-        "issued_at": "2026-10-18T01:41:04.000Z",
-        "expires_at": "2027-04-16T02:41:04.000Z",
+        "issued_at": "2026-10-18T02:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
         "last_seen_at": null,
         "last_seen_version": null,
         "username": null
       },
       {
-        "jti": "01M56E4NT7EVVQ46KD502EEEES",
+        "jti": "01M56GZZT99RR91W5HSSMTJ7K6",
         "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
         "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ1",
         "device_name": "iPhone",
         "platform": "tvos",
-        "server_id": "ab4a9681-c95a-4042-af68-2fe5328c3835",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
         "kid": "device-v1",
-        "issued_at": "2026-10-18T00:41:04.000Z",
-        "expires_at": "2027-04-16T02:41:04.000Z",
+        "issued_at": "2026-10-18T01:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
         "last_seen_at": null,
         "last_seen_version": null,
         "username": null
       },
       {
-        "jti": "01M56E4NT7TJYN1MTY78G6E4KK",
+        "jti": "01M56GZZT9RPBEHP1Q6WZQFMFY",
         "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
         "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ2",
         "device_name": "Old TV",
         "platform": "tvos",
-        "server_id": "ab4a9681-c95a-4042-af68-2fe5328c3835",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
         "kid": "device-v1",
-        "issued_at": "2026-10-17T23:41:04.000Z",
-        "expires_at": "2027-04-16T02:41:04.000Z",
+        "issued_at": "2026-10-18T00:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
         "last_seen_at": null,
         "last_seen_version": null,
         "username": null
       },
       {
-        "jti": "01M56E4NT7S0JRNFVXAT7PK3AG",
+        "jti": "01M56GZZTAY884XJE7G2746BJM",
         "sub": "google:777",
         "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ3",
         "device_name": "Other TV",
         "platform": "tvos",
-        "server_id": "ab4a9681-c95a-4042-af68-2fe5328c3835",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
         "kid": "device-v1",
-        "issued_at": "2026-10-17T22:41:04.000Z",
-        "expires_at": "2027-04-16T02:41:04.000Z",
+        "issued_at": "2026-10-17T23:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
         "last_seen_at": null,
         "last_seen_version": null,
         "username": null
       },
       {
-        "jti": "01M56E4NT77TVERQSARZENDFQ6",
+        "jti": "01M56GZZTAQC3ABX69NTQ0HGT1",
         "sub": "google:777",
         "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ4",
         "device_name": "Other iPad",
         "platform": "tvos",
-        "server_id": "ab4a9681-c95a-4042-af68-2fe5328c3835",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
         "kid": "device-v1",
-        "issued_at": "2026-10-17T21:41:04.000Z",
-        "expires_at": "2027-04-16T02:41:04.000Z",
+        "issued_at": "2026-10-17T22:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
         "last_seen_at": null,
         "last_seen_version": null,
         "username": null
       },
       {
-        "jti": "01M56E4NT7TF39HX06TZBS81SF",
+        "jti": "01M56GZZTAQ7NYG0GTGNRQ8MF4",
         "sub": "google:1234567890",
         "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ5",
         "device_name": "Admin's Mac",
         "platform": "tvos",
-        "server_id": "ab4a9681-c95a-4042-af68-2fe5328c3835",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
         "kid": "device-v1",
-        "issued_at": "2026-10-17T20:41:04.000Z",
-        "expires_at": "2027-04-16T02:41:04.000Z",
+        "issued_at": "2026-10-17T21:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
         "last_seen_at": null,
         "last_seen_version": null,
         "username": null
       },
       {
-        "jti": "01M56E4NT7E2RJMTY4BRHFM5AN",
+        "jti": "01M56GZZTA6ZV8FV175A2866WC",
         "sub": "workos:user_01E4ZCR3C56J083X43JQXF3JK5",
         "device_id": "01HABCDEFGHJKMNPQRSTVWXYZ6",
         "device_name": "Owner iPad",
         "platform": "tvos",
-        "server_id": "ab4a9681-c95a-4042-af68-2fe5328c3835",
+        "server_id": "16db7ad8-0547-444e-ba4c-8c64c20e715c",
         "kid": "device-v1",
-        "issued_at": "2026-10-17T19:41:04.000Z",
-        "expires_at": "2027-04-16T02:41:04.000Z",
+        "issued_at": "2026-10-17T20:30:56.000Z",
+        "expires_at": "2027-04-16T03:30:56.000Z",
         "last_seen_at": null,
         "last_seen_version": null,
         "username": null
@@ -148,7 +148,7 @@
     ],
     "device_token_revocations": [
       {
-        "jti": "01M56E4NT7TJYN1MTY78G6E4KK",
+        "jti": "01M56GZZT9RPBEHP1Q6WZQFMFY",
         "revoked_at": "2026-10-06 00:00:00",
         "reason": "self_revoke"
       }
@@ -227,8 +227,8 @@
         "device_id": "tv-link-1",
         "device_name": "Link TV",
         "device_platform": "tvos",
-        "created_at": 1792291264,
-        "expires_at": 1792291864,
+        "created_at": 1792294256,
+        "expires_at": 1792294856,
         "claimed_sub": null,
         "claimed_username": null,
         "claimed_role": null,
@@ -241,8 +241,8 @@
         "device_id": "tv-link-2",
         "device_name": "Link TV",
         "device_platform": "tvos",
-        "created_at": 1792291264,
-        "expires_at": 1792291864,
+        "created_at": 1792294256,
+        "expires_at": 1792294856,
         "claimed_sub": null,
         "claimed_username": null,
         "claimed_role": null,
@@ -255,8 +255,8 @@
         "device_id": "tv-link-3",
         "device_name": "Link TV",
         "device_platform": "tvos",
-        "created_at": 1792290564,
-        "expires_at": 1792291254,
+        "created_at": 1792293556,
+        "expires_at": 1792294246,
         "claimed_sub": null,
         "claimed_username": null,
         "claimed_role": null,
@@ -269,27 +269,13 @@
         "device_id": "tv-link-4",
         "device_name": "Link TV",
         "device_platform": "tvos",
-        "created_at": 1792289264,
-        "expires_at": 1792289964,
+        "created_at": 1792292256,
+        "expires_at": 1792292956,
         "claimed_sub": null,
         "claimed_username": null,
         "claimed_role": null,
         "claimed_auth_mode": null,
         "claimed_at": null,
-        "consumed_at": null
-      },
-      {
-        "code": "LEGA2345",
-        "device_id": "tv-link-5",
-        "device_name": "Link TV",
-        "device_platform": "tvos",
-        "created_at": 1792291264,
-        "expires_at": 1792291864,
-        "claimed_sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
-        "claimed_username": null,
-        "claimed_role": null,
-        "claimed_auth_mode": "plex",
-        "claimed_at": 1792291264,
         "consumed_at": null
       }
     ]
@@ -311,7 +297,7 @@
       "method": "GET",
       "path": "/api/me",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
       },
       "body": null,
       "volatile": [],
@@ -324,14 +310,14 @@
       "method": "GET",
       "path": "/api/devices/self",
       "headers": {
-        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..vTkfdkXb4q1WaXCM.Py3ulAegnjtvGkGElpKb3KKyU7D6SLjH3nYNj1tNkNOKoT4JEFdmQALP_gn-FjwQ2mUjq-Hovmzt1a1UC1sxsaDy--GqfDeCscRw_DldabJRMO3Pqqqxb5s8Ow31vvdqsJ56C4z7eU6Bd0xp3ex00CxeGLg-IP6LZ8KLtf9q9q9VilLl3VmBgQY-YK_iz1TdWuOJ0JiisTXn_N-9q6e3fks3gH9Y3_hIDhiRYtE9Q_iIm3llj96664z8IYJBrqLawSH_da0d2diDr9-Zw6CP_VbRWp6BeWonuGQsNo289k_c87ywYcC-yX7jM_5ZcEHVlORnjBO9RK2XVTZRdyj_Tuq3JdIdxKSYuMBc1gVa1_cM-5Cn1l6cEF-cMj1xDs7S7tCBAB3NBCe-nWxJqg7zht97CGJ2z6GGyhOQ9-Cj6FSHkYPN.SEfDTnCCkAhtaxoNJ76Rpw"
+        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..6_6K81DXmYiWV_FJ.1tA7hvE3rPexrePDvFOkqp3NhOndWLU7D67WeyrZoCurUaRz2P3Z3__GC3-k1y1qs8ZzaP_PIrGuhEjKpHc3VRbl227EEmhhG3dkpf4wbMDRFIsLzY_G5-Xy0JH1w6uLsVIn2LU8CVHETbWpsQl7FjLF0HVZ1Q4v5EYg_nPBTgxP0sNvAYVrYxVV2HFlKy_LDtO46FQAHc9xrRSfU0Lmm0o2pOtEdWbc7Se5sh-KZREnT-DQgjoI-aSO42D3YlsQPHrCUtodlc522K4xpzysEnL7FWaD8IunLEVWRMf5VG9zYmOn0Bem9Cj1zTJW4O4ofGtd4-3y5zLSWKdOJcF77is_xu_YWmYZ0MOmKc-ftU_HC7b2fmtsxxkR_zgfc4CJjuG2yfTPQoYpaf8CZQ_RolODwYcc6eqf5TSIDurhxhY7vRsz.kuhX8hY5-u_w4xsQBi0T_Q"
       },
       "body": null,
       "volatile": [
         "last_seen_at"
       ],
       "status": 200,
-      "text": "{\"devices\":[{\"jti\":\"01M56E4NT7Q73X9QZWP2E6ASXE\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ0\",\"device_name\":\"Living Room Apple TV\",\"platform\":\"tvos\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"issued_at\":\"2026-10-18T01:41:04.000Z\",\"expires_at\":\"2027-04-16T02:41:04.000Z\",\"last_seen_at\":\"<last_seen_at>\",\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null,\"is_current\":true},{\"jti\":\"01M56E4NT7EVVQ46KD502EEEES\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ1\",\"device_name\":\"iPhone\",\"platform\":\"tvos\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"issued_at\":\"2026-10-18T00:41:04.000Z\",\"expires_at\":\"2027-04-16T02:41:04.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null}]}",
+      "text": "{\"devices\":[{\"jti\":\"01M56GZZT9HNRTVVFPVRCMB5S6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ0\",\"device_name\":\"Living Room Apple TV\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T02:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":\"<last_seen_at>\",\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null,\"is_current\":true},{\"jti\":\"01M56GZZT99RR91W5HSSMTJ7K6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ1\",\"device_name\":\"iPhone\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T01:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null}]}",
       "set_cookie": null
     },
     {
@@ -339,14 +325,14 @@
       "method": "GET",
       "path": "/api/devices/self",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
       },
       "body": null,
       "volatile": [
         "last_seen_at"
       ],
       "status": 200,
-      "text": "{\"devices\":[{\"jti\":\"01M56E4NT7Q73X9QZWP2E6ASXE\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ0\",\"device_name\":\"Living Room Apple TV\",\"platform\":\"tvos\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"issued_at\":\"2026-10-18T01:41:04.000Z\",\"expires_at\":\"2027-04-16T02:41:04.000Z\",\"last_seen_at\":\"<last_seen_at>\",\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null},{\"jti\":\"01M56E4NT7EVVQ46KD502EEEES\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ1\",\"device_name\":\"iPhone\",\"platform\":\"tvos\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"issued_at\":\"2026-10-18T00:41:04.000Z\",\"expires_at\":\"2027-04-16T02:41:04.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null}]}",
+      "text": "{\"devices\":[{\"jti\":\"01M56GZZT9HNRTVVFPVRCMB5S6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ0\",\"device_name\":\"Living Room Apple TV\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T02:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":\"<last_seen_at>\",\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null},{\"jti\":\"01M56GZZT99RR91W5HSSMTJ7K6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ1\",\"device_name\":\"iPhone\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T01:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null}]}",
       "set_cookie": null
     },
     {
@@ -365,7 +351,7 @@
       "method": "GET",
       "path": "/api/devices/self",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..VP8c2_yQ_uXgFy9S.dqMlxolWy_uVa2a1wq9QPJ2cHp0FFO3tj6DupFag2EQ_lhx6ioh6UtCjURpiiCjfRMp0pafw2hGmuvGZ31iDNB66b9Pnhynrgm2kRNCZyHXHTxrtxu5tEAkiSeQ61jlEGhXd9_sg-sUuRi2oi-xvEKXkw1nhDf-lgeoICVTzPy4ngWU8jtQzWAp2Bt1U7so.yf7o0WNC_T80ygudGlt9Zw"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..FIGUdwj47ywBnqvc.ayrKVTS86tyM1ToAsYsYGrGV-T_LqbRgvzQLfKU9zgXiiCQTZzYnD8DMwQmvm9Tzp4BGeRfkWnFXvuydJ6zr1mwdFISJ7chliV8NSP4PrDdFa7WHq6YbOBxZaAZJu9pn_fwYUdq_FXGWAyt3keYLZIf0LaUm_BwZwzsu_wAzyB-BTrZoKCHR8jYBDqQC7D0.iiKteJF1RWMhQiCgL0Qcng"
       },
       "body": null,
       "volatile": [],
@@ -376,9 +362,9 @@
     {
       "name": "rename own",
       "method": "PATCH",
-      "path": "/api/devices/self/01M56E4NT7EVVQ46KD502EEEES/name",
+      "path": "/api/devices/self/01M56GZZT99RR91W5HSSMTJ7K6/name",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
         "Content-Type": "application/json"
       },
       "body": "{\"device_name\":\"  Kids iPhone \"}",
@@ -390,9 +376,9 @@
     {
       "name": "rename own blank",
       "method": "PATCH",
-      "path": "/api/devices/self/01M56E4NT7EVVQ46KD502EEEES/name",
+      "path": "/api/devices/self/01M56GZZT99RR91W5HSSMTJ7K6/name",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
         "Content-Type": "application/json"
       },
       "body": "{\"device_name\":\"   \"}",
@@ -404,9 +390,9 @@
     {
       "name": "rename own 129 chars",
       "method": "PATCH",
-      "path": "/api/devices/self/01M56E4NT7EVVQ46KD502EEEES/name",
+      "path": "/api/devices/self/01M56GZZT99RR91W5HSSMTJ7K6/name",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
         "Content-Type": "application/json"
       },
       "body": "{\"device_name\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
@@ -418,9 +404,9 @@
     {
       "name": "rename own non-string",
       "method": "PATCH",
-      "path": "/api/devices/self/01M56E4NT7EVVQ46KD502EEEES/name",
+      "path": "/api/devices/self/01M56GZZT99RR91W5HSSMTJ7K6/name",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
         "Content-Type": "application/json"
       },
       "body": "{\"device_name\":7}",
@@ -432,9 +418,9 @@
     {
       "name": "rename own bad json",
       "method": "PATCH",
-      "path": "/api/devices/self/01M56E4NT7EVVQ46KD502EEEES/name",
+      "path": "/api/devices/self/01M56GZZT99RR91W5HSSMTJ7K6/name",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
         "Content-Type": "application/json"
       },
       "body": "not json",
@@ -446,9 +432,9 @@
     {
       "name": "rename someone else's",
       "method": "PATCH",
-      "path": "/api/devices/self/01M56E4NT7S0JRNFVXAT7PK3AG/name",
+      "path": "/api/devices/self/01M56GZZTAY884XJE7G2746BJM/name",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
         "Content-Type": "application/json"
       },
       "body": "{\"device_name\":\"Hijacked\"}",
@@ -460,9 +446,9 @@
     {
       "name": "revoke someone else's",
       "method": "DELETE",
-      "path": "/api/devices/self/01M56E4NT7S0JRNFVXAT7PK3AG",
+      "path": "/api/devices/self/01M56GZZTAY884XJE7G2746BJM",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
       },
       "body": null,
       "volatile": [],
@@ -473,14 +459,14 @@
     {
       "name": "revoke own",
       "method": "DELETE",
-      "path": "/api/devices/self/01M56E4NT7EVVQ46KD502EEEES",
+      "path": "/api/devices/self/01M56GZZT99RR91W5HSSMTJ7K6",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
       },
       "body": null,
       "volatile": [],
       "status": 200,
-      "text": "{\"ok\":true,\"revoked\":\"01M56E4NT7EVVQ46KD502EEEES\"}",
+      "text": "{\"ok\":true,\"revoked\":\"01M56GZZT99RR91W5HSSMTJ7K6\"}",
       "set_cookie": null
     },
     {
@@ -488,7 +474,7 @@
       "method": "DELETE",
       "path": "/api/devices/self/01HNONEXISTENTNONEXISTENT0",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
       },
       "body": null,
       "volatile": [],
@@ -501,7 +487,7 @@
       "method": "DELETE",
       "path": "/api/devices/self",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..7_ydGny_Exuu-E9s.6O-X_3wcC44va1j08FTOYhkHek9OlqU1G9I8MOJqKn0o_WX5gjn0-iRXM-W_ZglDywDewP5YUARk8rOxGeZ1DV-ZtkEMnr2w4uJU1tebALYRw_hQkmAv-pYIPeQql490IJWK5ognAFdOr9Q5.IQbMbTuymbp3cIF_lg1LPQ"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..2SRC0TW1bwwdmA5o.lAwTUK7xCEFv0XC06P3ETMMdE7xPZvEj2PrIv39fPaf-Z3lLsKDQGmMXZQxwRx8KXiZCyJuI2MMncl8BDXkT0QGpwlSEXpmIYAWbpdJPrYqtWKL5FjkDLkJPhZk0zxcWVL_H27-vXjrFAlpw.cCRrn_R9zwITggiIdwRTUA"
       },
       "body": null,
       "volatile": [],
@@ -514,7 +500,7 @@
       "method": "GET",
       "path": "/api/admin/devices",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [
@@ -522,7 +508,7 @@
         "revoked_at"
       ],
       "status": 200,
-      "text": "{\"devices\":[{\"jti\":\"01M56E4NT7Q73X9QZWP2E6ASXE\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ0\",\"device_name\":\"Living Room Apple TV\",\"platform\":\"tvos\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"issued_at\":\"2026-10-18T01:41:04.000Z\",\"expires_at\":\"2027-04-16T02:41:04.000Z\",\"last_seen_at\":\"<last_seen_at>\",\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null,\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\"},{\"jti\":\"01M56E4NT7EVVQ46KD502EEEES\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ1\",\"device_name\":\"Kids iPhone\",\"platform\":\"tvos\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"issued_at\":\"2026-10-18T00:41:04.000Z\",\"expires_at\":\"2027-04-16T02:41:04.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":true,\"revoked_at\":\"<revoked_at>\",\"revoked_reason\":\"self_revoke\",\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\"},{\"jti\":\"01M56E4NT7TJYN1MTY78G6E4KK\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ2\",\"device_name\":\"Old TV\",\"platform\":\"tvos\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"issued_at\":\"2026-10-17T23:41:04.000Z\",\"expires_at\":\"2027-04-16T02:41:04.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":true,\"revoked_at\":\"<revoked_at>\",\"revoked_reason\":\"self_revoke\",\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\"},{\"jti\":\"01M56E4NT7S0JRNFVXAT7PK3AG\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ3\",\"device_name\":\"Other TV\",\"platform\":\"tvos\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"issued_at\":\"2026-10-17T22:41:04.000Z\",\"expires_at\":\"2027-04-16T02:41:04.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":true,\"revoked_at\":\"<revoked_at>\",\"revoked_reason\":\"self_logout_everywhere\",\"sub\":\"google:777\"},{\"jti\":\"01M56E4NT77TVERQSARZENDFQ6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ4\",\"device_name\":\"Other iPad\",\"platform\":\"tvos\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"issued_at\":\"2026-10-17T21:41:04.000Z\",\"expires_at\":\"2027-04-16T02:41:04.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":true,\"revoked_at\":\"<revoked_at>\",\"revoked_reason\":\"self_logout_everywhere\",\"sub\":\"google:777\"},{\"jti\":\"01M56E4NT7TF39HX06TZBS81SF\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ5\",\"device_name\":\"Admin's Mac\",\"platform\":\"tvos\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"issued_at\":\"2026-10-17T20:41:04.000Z\",\"expires_at\":\"2027-04-16T02:41:04.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null,\"sub\":\"google:1234567890\"},{\"jti\":\"01M56E4NT7E2RJMTY4BRHFM5AN\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ6\",\"device_name\":\"Owner iPad\",\"platform\":\"tvos\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"issued_at\":\"2026-10-17T19:41:04.000Z\",\"expires_at\":\"2027-04-16T02:41:04.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null,\"sub\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\"}]}",
+      "text": "{\"devices\":[{\"jti\":\"01M56GZZT9HNRTVVFPVRCMB5S6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ0\",\"device_name\":\"Living Room Apple TV\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T02:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":\"<last_seen_at>\",\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null,\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\"},{\"jti\":\"01M56GZZT99RR91W5HSSMTJ7K6\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ1\",\"device_name\":\"Kids iPhone\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T01:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":true,\"revoked_at\":\"<revoked_at>\",\"revoked_reason\":\"self_revoke\",\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\"},{\"jti\":\"01M56GZZT9RPBEHP1Q6WZQFMFY\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ2\",\"device_name\":\"Old TV\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-18T00:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":true,\"revoked_at\":\"<revoked_at>\",\"revoked_reason\":\"self_revoke\",\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\"},{\"jti\":\"01M56GZZTAY884XJE7G2746BJM\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ3\",\"device_name\":\"Other TV\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-17T23:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":true,\"revoked_at\":\"<revoked_at>\",\"revoked_reason\":\"self_logout_everywhere\",\"sub\":\"google:777\"},{\"jti\":\"01M56GZZTAQC3ABX69NTQ0HGT1\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ4\",\"device_name\":\"Other iPad\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-17T22:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":true,\"revoked_at\":\"<revoked_at>\",\"revoked_reason\":\"self_logout_everywhere\",\"sub\":\"google:777\"},{\"jti\":\"01M56GZZTAQ7NYG0GTGNRQ8MF4\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ5\",\"device_name\":\"Admin's Mac\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-17T21:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null,\"sub\":\"google:1234567890\"},{\"jti\":\"01M56GZZTA6ZV8FV175A2866WC\",\"device_id\":\"01HABCDEFGHJKMNPQRSTVWXYZ6\",\"device_name\":\"Owner iPad\",\"platform\":\"tvos\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"issued_at\":\"2026-10-17T20:30:56.000Z\",\"expires_at\":\"2027-04-16T03:30:56.000Z\",\"last_seen_at\":null,\"last_seen_version\":null,\"revoked\":false,\"revoked_at\":null,\"revoked_reason\":null,\"sub\":\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\"}]}",
       "set_cookie": null
     },
     {
@@ -530,7 +516,7 @@
       "method": "GET",
       "path": "/api/admin/devices",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
       },
       "body": null,
       "volatile": [],
@@ -552,9 +538,9 @@
     {
       "name": "admin rename",
       "method": "PATCH",
-      "path": "/api/admin/devices/01M56E4NT7Q73X9QZWP2E6ASXE/name",
+      "path": "/api/admin/devices/01M56GZZT9HNRTVVFPVRCMB5S6/name",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{\"device_name\":\"Renamed By Admin\"}",
@@ -568,7 +554,7 @@
       "method": "PATCH",
       "path": "/api/admin/devices/01HNONEXISTENTNONEXISTENT0/name",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{\"device_name\":\"X\"}",
@@ -580,9 +566,9 @@
     {
       "name": "admin rename blank",
       "method": "PATCH",
-      "path": "/api/admin/devices/01M56E4NT7Q73X9QZWP2E6ASXE/name",
+      "path": "/api/admin/devices/01M56GZZT9HNRTVVFPVRCMB5S6/name",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{\"device_name\":\"\"}",
@@ -594,14 +580,14 @@
     {
       "name": "admin revoke as a DB admin",
       "method": "DELETE",
-      "path": "/api/admin/devices/01M56E4NT7TF39HX06TZBS81SF",
+      "path": "/api/admin/devices/01M56GZZTAQ7NYG0GTGNRQ8MF4",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..bSu-wWaQw5dZ_goU.dUIBKUwN0sOygErMugLW4RAS-5LA5BZ_vuGluQJfP2xYOaZiUax8bOzq6U-_GHo_mJCQb9mOKn8VOHXIOsC4lgMcUocMPjjPCb3q2_YmLC8-3suPOcLfweYGJv7nVudEyvkXd2DFNxK7NuZdunR0Xw.GVEAsNi1fCjmlSGSOgJzdQ"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..VrY--Ni1BbPObLXS.6WNJnDrqM9GS8MYTDh9Q4k8ncKeB6kIAJpW07K0mwiwwBTF05SC5KS8BzglBw81is23RS2BPDkqIjIzfwbJQC1PozJ3y8JyrvBTaqBox-s3RDnxBBpFRx8ncA7l-ZQUfjgENsDLFcY8f8OdPSXoHSQ.j8HxIWOziAc8vYCOmAMakw"
       },
       "body": null,
       "volatile": [],
       "status": 200,
-      "text": "{\"ok\":true,\"revoked\":\"01M56E4NT7TF39HX06TZBS81SF\"}",
+      "text": "{\"ok\":true,\"revoked\":\"01M56GZZTAQ7NYG0GTGNRQ8MF4\"}",
       "set_cookie": null
     },
     {
@@ -609,7 +595,7 @@
       "method": "DELETE",
       "path": "/api/admin/devices/01HNONEXISTENTNONEXISTENT0",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [],
@@ -620,9 +606,9 @@
     {
       "name": "admin revoke as a member",
       "method": "DELETE",
-      "path": "/api/admin/devices/01M56E4NT7S0JRNFVXAT7PK3AG",
+      "path": "/api/admin/devices/01M56GZZTAY884XJE7G2746BJM",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
       },
       "body": null,
       "volatile": [],
@@ -646,7 +632,7 @@
       "method": "GET",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
       },
       "body": null,
       "volatile": [],
@@ -659,7 +645,7 @@
       "method": "GET",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [],
@@ -672,7 +658,7 @@
       "method": "DELETE",
       "path": "/api/admin/invites/1da08c9e",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [],
@@ -685,7 +671,7 @@
       "method": "DELETE",
       "path": "/api/admin/invites/1da08c9e",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [],
@@ -698,7 +684,7 @@
       "method": "DELETE",
       "path": "/api/admin/invites/deadbeef",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [],
@@ -711,7 +697,7 @@
       "method": "DELETE",
       "path": "/api/admin/invites/6d92335d",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [],
@@ -724,7 +710,7 @@
       "method": "DELETE",
       "path": "/api/admin/invites/F27EF52C",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [],
@@ -737,7 +723,7 @@
       "method": "GET",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [
@@ -752,7 +738,7 @@
       "method": "POST",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{}",
@@ -770,7 +756,7 @@
       "method": "POST",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{\"label\":\"  Mom's iPad  \",\"expiresInDays\":30,\"maxUses\":3}",
@@ -788,7 +774,7 @@
       "method": "POST",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{\"role\":\"admin\",\"label\":\"App Review\",\"expiresInDays\":null}",
@@ -805,7 +791,7 @@
       "method": "POST",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{\"label\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
@@ -823,7 +809,7 @@
       "method": "POST",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{\"label\":null,\"maxUses\":2}",
@@ -841,7 +827,7 @@
       "method": "POST",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "not json",
@@ -859,7 +845,7 @@
       "method": "POST",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{\"label\":123}",
@@ -873,7 +859,7 @@
       "method": "POST",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{\"expiresInDays\":\"soon\"}",
@@ -887,7 +873,7 @@
       "method": "POST",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{\"maxUses\":0}",
@@ -901,7 +887,7 @@
       "method": "POST",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{\"maxUses\":1.5}",
@@ -915,7 +901,7 @@
       "method": "POST",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww",
         "Content-Type": "application/json"
       },
       "body": "{\"role\":\"owner\"}",
@@ -929,7 +915,7 @@
       "method": "POST",
       "path": "/api/admin/invites",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
         "Content-Type": "application/json"
       },
       "body": "{}",
@@ -943,7 +929,7 @@
       "method": "GET",
       "path": "/api/admin/members",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [],
@@ -956,7 +942,7 @@
       "method": "GET",
       "path": "/api/admin/members",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg"
       },
       "body": null,
       "volatile": [],
@@ -969,7 +955,7 @@
       "method": "DELETE",
       "path": "/api/admin/members/workos:user_01E4ZCR3C56J083X43JQXF3JK5",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [],
@@ -982,7 +968,7 @@
       "method": "DELETE",
       "path": "/api/admin/members/google:1234567890",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..bSu-wWaQw5dZ_goU.dUIBKUwN0sOygErMugLW4RAS-5LA5BZ_vuGluQJfP2xYOaZiUax8bOzq6U-_GHo_mJCQb9mOKn8VOHXIOsC4lgMcUocMPjjPCb3q2_YmLC8-3suPOcLfweYGJv7nVudEyvkXd2DFNxK7NuZdunR0Xw.GVEAsNi1fCjmlSGSOgJzdQ"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..VrY--Ni1BbPObLXS.6WNJnDrqM9GS8MYTDh9Q4k8ncKeB6kIAJpW07K0mwiwwBTF05SC5KS8BzglBw81is23RS2BPDkqIjIzfwbJQC1PozJ3y8JyrvBTaqBox-s3RDnxBBpFRx8ncA7l-ZQUfjgENsDLFcY8f8OdPSXoHSQ.j8HxIWOziAc8vYCOmAMakw"
       },
       "body": null,
       "volatile": [],
@@ -995,7 +981,7 @@
       "method": "DELETE",
       "path": "/api/admin/members/google%3A777",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [],
@@ -1008,7 +994,7 @@
       "method": "DELETE",
       "path": "/api/admin/members/apple:000002.0123456789abcdef0123456789abcdef.0002",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [],
@@ -1021,7 +1007,7 @@
       "method": "DELETE",
       "path": "/api/admin/members/google:5",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [],
@@ -1034,7 +1020,7 @@
       "method": "GET",
       "path": "/api/admin/members",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Pp5BaWGryqXldv16.Oq3o6LMRIUnUC4Q0LJZnOKaC_xUPlZtXe_ufZdTaw6h4lkRVVD9R5HxofSf64NelmSeMzAd-nCR4RIkJaDPYJaV8KLETuHtNmsiSWSlqoeUt6C6JVN6xmI1dZ5NBna0UCg06CJN7NrzwTcFa3r2XfYy2YYfMtj0Au2MlSmRgBtwcnGAJC9UgSP0.8zrduN1GIOLBcQT13WmwOA"
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..-TkHZ8J3rIXqFx4O.bYcmPp7YBIqHtt6bgBPO6aaQp_ZrDD5dmMOVDlsidY_X3eFED1XP-Xl1vuHqB0B0lHsaUHA6W9InX9rVjY3iB5i5zS3vwpmZuv_ELevJGk_Q9uigJP5YiDoMjIolP4dX3bJGinFEyR20nVWjgYepTVdfXMr2arf3YauBIQj4APyKV-RG6hDNwVI.23me4oPYFMrDoFCoCDF5ww"
       },
       "body": null,
       "volatile": [
@@ -1142,7 +1128,7 @@
       "method": "POST",
       "path": "/api/auth/device/link/claim",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
         "Content-Type": "application/json"
       },
       "body": "{\"code\":\"nope\"}",
@@ -1156,7 +1142,7 @@
       "method": "POST",
       "path": "/api/auth/device/link/claim",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
         "Content-Type": "application/json"
       },
       "body": "{\"code\":\"ZZZZ2345\"}",
@@ -1170,7 +1156,7 @@
       "method": "POST",
       "path": "/api/auth/device/link/claim",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
         "Content-Type": "application/json"
       },
       "body": "{\"code\":\"EXPD2345\"}",
@@ -1184,7 +1170,7 @@
       "method": "POST",
       "path": "/api/auth/device/link/claim",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Vnydpd7Iv-lfRt10.TZ2AZ299mowE6ZAYBnx4Ta4916U7dzv-Yuxu0paEi-PodCwg95ZkvhevLePFnt-YvIz4x0Lo3FmEjURtmTP1bJwKebywM1E2Di21Xr3fKJxP_0JXUia8vfoeoqmI5MYWZTME6dhuTkQ20ogQhUUyxtanT-lHjw4NCaRVTzv50UGgDDb9ZRfpri19_c5f0lj3vA.EnPDuvNzHTZ0LDl0qTHaTw",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..Of7x2wfm6mLYURVU.Cs-6pyHIuTam9Q_cEB1h-UIbN6lfGcDBFbe7uN8XvG_OaCEFNUNTSgpcPXsxABUr2ZEzoXtIxeTEhPVd69IoynL3VXrPjkZaV-mM3wMrYX39uASzj2qS1eqfpibLOecrGEs4XFaSgok9JYAbq6wG8g9OnRWlIHoHq0LfB7XgD2EomGTvBlNfRO02BUrIAyL7jw._l_TWGd6ReN_2ufMiuIALg",
         "Content-Type": "application/json"
       },
       "body": "{\"code\":\" pend-2345 \"}",
@@ -1198,7 +1184,7 @@
       "method": "POST",
       "path": "/api/auth/device/link/claim",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..bSu-wWaQw5dZ_goU.dUIBKUwN0sOygErMugLW4RAS-5LA5BZ_vuGluQJfP2xYOaZiUax8bOzq6U-_GHo_mJCQb9mOKn8VOHXIOsC4lgMcUocMPjjPCb3q2_YmLC8-3suPOcLfweYGJv7nVudEyvkXd2DFNxK7NuZdunR0Xw.GVEAsNi1fCjmlSGSOgJzdQ",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..VrY--Ni1BbPObLXS.6WNJnDrqM9GS8MYTDh9Q4k8ncKeB6kIAJpW07K0mwiwwBTF05SC5KS8BzglBw81is23RS2BPDkqIjIzfwbJQC1PozJ3y8JyrvBTaqBox-s3RDnxBBpFRx8ncA7l-ZQUfjgENsDLFcY8f8OdPSXoHSQ.j8HxIWOziAc8vYCOmAMakw",
         "Content-Type": "application/json"
       },
       "body": "{\"code\":\"PEND2345\"}",
@@ -1219,7 +1205,7 @@
         "token"
       ],
       "status": 200,
-      "text": "{\"status\":\"authorized\",\"token\":\"<token>\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"user\":{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"Mom\",\"role\":\"user\"}}",
+      "text": "{\"status\":\"authorized\",\"token\":\"<token>\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"user\":{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"Mom\",\"role\":\"user\"}}",
       "set_cookie": null
     },
     {
@@ -1253,7 +1239,7 @@
       "method": "POST",
       "path": "/api/auth/device/link/claim",
       "headers": {
-        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..vTkfdkXb4q1WaXCM.Py3ulAegnjtvGkGElpKb3KKyU7D6SLjH3nYNj1tNkNOKoT4JEFdmQALP_gn-FjwQ2mUjq-Hovmzt1a1UC1sxsaDy--GqfDeCscRw_DldabJRMO3Pqqqxb5s8Ow31vvdqsJ56C4z7eU6Bd0xp3ex00CxeGLg-IP6LZ8KLtf9q9q9VilLl3VmBgQY-YK_iz1TdWuOJ0JiisTXn_N-9q6e3fks3gH9Y3_hIDhiRYtE9Q_iIm3llj96664z8IYJBrqLawSH_da0d2diDr9-Zw6CP_VbRWp6BeWonuGQsNo289k_c87ywYcC-yX7jM_5ZcEHVlORnjBO9RK2XVTZRdyj_Tuq3JdIdxKSYuMBc1gVa1_cM-5Cn1l6cEF-cMj1xDs7S7tCBAB3NBCe-nWxJqg7zht97CGJ2z6GGyhOQ9-Cj6FSHkYPN.SEfDTnCCkAhtaxoNJ76Rpw",
+        "Authorization": "Bearer eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwia2lkIjoiZGV2aWNlLXYxIn0..6_6K81DXmYiWV_FJ.1tA7hvE3rPexrePDvFOkqp3NhOndWLU7D67WeyrZoCurUaRz2P3Z3__GC3-k1y1qs8ZzaP_PIrGuhEjKpHc3VRbl227EEmhhG3dkpf4wbMDRFIsLzY_G5-Xy0JH1w6uLsVIn2LU8CVHETbWpsQl7FjLF0HVZ1Q4v5EYg_nPBTgxP0sNvAYVrYxVV2HFlKy_LDtO46FQAHc9xrRSfU0Lmm0o2pOtEdWbc7Se5sh-KZREnT-DQgjoI-aSO42D3YlsQPHrCUtodlc522K4xpzysEnL7FWaD8IunLEVWRMf5VG9zYmOn0Bem9Cj1zTJW4O4ofGtd4-3y5zLSWKdOJcF77is_xu_YWmYZ0MOmKc-ftU_HC7b2fmtsxxkR_zgfc4CJjuG2yfTPQoYpaf8CZQ_RolODwYcc6eqf5TSIDurhxhY7vRsz.kuhX8hY5-u_w4xsQBi0T_Q",
         "Content-Type": "application/json"
       },
       "body": "{\"code\":\"BEAR2345\"}",
@@ -1274,22 +1260,7 @@
         "token"
       ],
       "status": 200,
-      "text": "{\"status\":\"authorized\",\"token\":\"<token>\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"user\":{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"Renamed By Admin\",\"role\":\"user\"}}",
-      "set_cookie": null
-    },
-    {
-      "name": "link poll TS-era claim",
-      "method": "POST",
-      "path": "/api/auth/device/link/poll",
-      "headers": {
-        "Content-Type": "application/json"
-      },
-      "body": "{\"code\":\"LEGA2345\",\"device_id\":\"tv-link-5\"}",
-      "volatile": [
-        "token"
-      ],
-      "status": 200,
-      "text": "{\"status\":\"authorized\",\"token\":\"<token>\",\"server_id\":\"ab4a9681-c95a-4042-af68-2fe5328c3835\",\"user\":{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"role\":\"user\"}}",
+      "text": "{\"status\":\"authorized\",\"token\":\"<token>\",\"server_id\":\"16db7ad8-0547-444e-ba4c-8c64c20e715c\",\"user\":{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"Renamed By Admin\",\"role\":\"user\"}}",
       "set_cookie": null
     },
     {
@@ -1297,7 +1268,7 @@
       "method": "POST",
       "path": "/api/auth/device/link/claim",
       "headers": {
-        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..VP8c2_yQ_uXgFy9S.dqMlxolWy_uVa2a1wq9QPJ2cHp0FFO3tj6DupFag2EQ_lhx6ioh6UtCjURpiiCjfRMp0pafw2hGmuvGZ31iDNB66b9Pnhynrgm2kRNCZyHXHTxrtxu5tEAkiSeQ61jlEGhXd9_sg-sUuRi2oi-xvEKXkw1nhDf-lgeoICVTzPy4ngWU8jtQzWAp2Bt1U7so.yf7o0WNC_T80ygudGlt9Zw",
+        "Cookie": "eex.session=eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..FIGUdwj47ywBnqvc.ayrKVTS86tyM1ToAsYsYGrGV-T_LqbRgvzQLfKU9zgXiiCQTZzYnD8DMwQmvm9Tzp4BGeRfkWnFXvuydJ6zr1mwdFISJ7chliV8NSP4PrDdFa7WHq6YbOBxZaAZJu9pn_fwYUdq_FXGWAyt3keYLZIf0LaUm_BwZwzsu_wAzyB-BTrZoKCHR8jYBDqQC7D0.iiKteJF1RWMhQiCgL0Qcng",
         "Content-Type": "application/json"
       },
       "body": "{\"code\":\"BEAR2345\"}",
@@ -1358,57 +1329,57 @@
     "invite_count": 12,
     "revocations": [
       {
-        "jti": "01M56E4NT77TVERQSARZENDFQ6",
-        "reason": "self_logout_everywhere"
-      },
-      {
-        "jti": "01M56E4NT7EVVQ46KD502EEEES",
+        "jti": "01M56GZZT99RR91W5HSSMTJ7K6",
         "reason": "self_revoke"
       },
       {
-        "jti": "01M56E4NT7S0JRNFVXAT7PK3AG",
-        "reason": "self_logout_everywhere"
+        "jti": "01M56GZZT9RPBEHP1Q6WZQFMFY",
+        "reason": "self_revoke"
       },
       {
-        "jti": "01M56E4NT7TF39HX06TZBS81SF",
+        "jti": "01M56GZZTAQ7NYG0GTGNRQ8MF4",
         "reason": "admin_revoke"
       },
       {
-        "jti": "01M56E4NT7TJYN1MTY78G6E4KK",
-        "reason": "self_revoke"
+        "jti": "01M56GZZTAQC3ABX69NTQ0HGT1",
+        "reason": "self_logout_everywhere"
+      },
+      {
+        "jti": "01M56GZZTAY884XJE7G2746BJM",
+        "reason": "self_logout_everywhere"
       }
     ],
     "device_names": [
       {
-        "jti": "01M56E4NT77TVERQSARZENDFQ6",
-        "device_name": "Other iPad"
-      },
-      {
-        "jti": "01M56E4NT7E2RJMTY4BRHFM5AN",
-        "device_name": "Owner iPad"
-      },
-      {
-        "jti": "01M56E4NT7EVVQ46KD502EEEES",
+        "jti": "01M56GZZT99RR91W5HSSMTJ7K6",
         "device_name": "Kids iPhone"
       },
       {
-        "jti": "01M56E4NT7Q73X9QZWP2E6ASXE",
+        "jti": "01M56GZZT9HNRTVVFPVRCMB5S6",
         "device_name": "Renamed By Admin"
       },
       {
-        "jti": "01M56E4NT7S0JRNFVXAT7PK3AG",
-        "device_name": "Other TV"
+        "jti": "01M56GZZT9RPBEHP1Q6WZQFMFY",
+        "device_name": "Old TV"
       },
       {
-        "jti": "01M56E4NT7TF39HX06TZBS81SF",
+        "jti": "01M56GZZTA6ZV8FV175A2866WC",
+        "device_name": "Owner iPad"
+      },
+      {
+        "jti": "01M56GZZTAQ7NYG0GTGNRQ8MF4",
         "device_name": "Admin's Mac"
       },
       {
-        "jti": "01M56E4NT7TJYN1MTY78G6E4KK",
-        "device_name": "Old TV"
+        "jti": "01M56GZZTAQC3ABX69NTQ0HGT1",
+        "device_name": "Other iPad"
+      },
+      {
+        "jti": "01M56GZZTAY884XJE7G2746BJM",
+        "device_name": "Other TV"
       }
     ],
-    "device_count": 10,
+    "device_count": 9,
     "link_codes": [
       {
         "code": "BEAR2345",
@@ -1429,15 +1400,6 @@
         "consumed": 0
       },
       {
-        "code": "LEGA2345",
-        "claimed_sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
-        "claimed_username": null,
-        "claimed_role": null,
-        "claimed_auth_mode": "plex",
-        "claimed": 1,
-        "consumed": 1
-      },
-      {
         "code": "PEND2345",
         "claimed_sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
         "claimed_username": "Mom",
@@ -1447,6 +1409,6 @@
         "consumed": 1
       }
     ],
-    "link_code_count": 5
+    "link_code_count": 4
   }
 }

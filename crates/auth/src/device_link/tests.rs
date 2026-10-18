@@ -254,12 +254,12 @@ async fn a_bearer_claim_binds_the_device_name_and_its_provider() {
 }
 
 #[tokio::test]
-async fn a_claimed_row_without_a_usable_mode_falls_back_to_the_sub_provider() {
+async fn a_claimed_row_without_a_usable_mode_is_denied_and_left_unconsumed() {
     let (_db, st) = state().await;
     insert_code(&st, "LEGA2345", st.now() + 60).await;
     sqlx::query(
-        "UPDATE device_link_codes SET claimed_sub = ?, claimed_username = NULL, \
-         claimed_role = NULL, claimed_auth_mode = 'plex' WHERE code = 'LEGA2345'",
+        "UPDATE device_link_codes SET claimed_sub = ?, claimed_auth_mode = 'plex' \
+         WHERE code = 'LEGA2345'",
     )
     .bind(APPLE)
     .execute(&st.pool)
@@ -267,11 +267,16 @@ async fn a_claimed_row_without_a_usable_mode_falls_back_to_the_sub_provider() {
     .unwrap();
     let app = crate::router(st.clone());
     let r = post(&app, "/poll", &poll_body("LEGA2345", "ulid-tv-1"), &[]).await;
-    assert_eq!(r.json()["status"], "authorized");
     assert_eq!(
-        r.json()["user"],
-        json!({ "sub": APPLE, "username": APPLE, "role": "user" })
+        r.json(),
+        json!({ "status": "denied", "reason": "unknown_code" })
     );
+    let consumed: Option<i64> =
+        sqlx::query_scalar("SELECT consumed_at FROM device_link_codes WHERE code = 'LEGA2345'")
+            .fetch_one(&st.pool)
+            .await
+            .unwrap();
+    assert_eq!(consumed, None);
 }
 
 #[tokio::test]

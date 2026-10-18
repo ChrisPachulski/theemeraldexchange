@@ -209,7 +209,7 @@ async fn replays_the_ts_route_goldens() {
         "link_codes",
         "SELECT code, claimed_sub, claimed_username, claimed_role, claimed_auth_mode, \
          claimed_at IS NOT NULL AS claimed, consumed_at IS NOT NULL AS consumed \
-         FROM device_link_codes WHERE code IN ('PEND2345', 'BEAR2345', 'EXPD2345', 'OLDD2345', 'LEGA2345') \
+         FROM device_link_codes WHERE code IN ('PEND2345', 'BEAR2345', 'EXPD2345', 'OLDD2345') \
          ORDER BY code",
     )
     .await;

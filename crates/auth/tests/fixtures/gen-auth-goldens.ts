@@ -322,10 +322,6 @@ async function routeGoldens(): Promise<void> {
   link.run('BEAR2345', 'tv-link-2', now, now + 600)
   link.run('EXPD2345', 'tv-link-3', now - 700, now - 10)
   link.run('OLDD2345', 'tv-link-4', now - 2000, now - 1300)
-  link.run('LEGA2345', 'tv-link-5', now, now + 600)
-  // A TS-era claim: Plex mode, no username or role.
-  db.prepare(`UPDATE device_link_codes SET claimed_sub = ?, claimed_auth_mode = 'plex', claimed_at = ? WHERE code = 'LEGA2345'`)
-    .run(MEMBER, now)
 
   const dump = (table: string, order: string) => db.prepare(`SELECT * FROM ${table} ORDER BY ${order}`).all()
   const result: Json = {
@@ -437,7 +433,6 @@ async function routeGoldens(): Promise<void> {
     ['link poll expired', 'POST', '/api/auth/device/link/poll', {}, poll('EXPD2345', 'tv-link-3')],
     ['link claim by bearer', 'POST', '/api/auth/device/link/claim', momTv, '{"code":"BEAR2345"}'],
     ['link poll bearer claim', 'POST', '/api/auth/device/link/poll', {}, poll('BEAR2345', 'tv-link-2'), ['token']],
-    ['link poll TS-era claim', 'POST', '/api/auth/device/link/poll', {}, poll('LEGA2345', 'tv-link-5'), ['token']],
     ['link claim as a revoked member', 'POST', '/api/auth/device/link/claim', revoked, '{"code":"BEAR2345"}'],
   ]
   const ran = []
@@ -461,7 +456,7 @@ async function routeGoldens(): Promise<void> {
     link_codes: db.prepare(
       `SELECT code, claimed_sub, claimed_username, claimed_role, claimed_auth_mode,
               claimed_at IS NOT NULL AS claimed, consumed_at IS NOT NULL AS consumed
-         FROM device_link_codes WHERE code IN ('PEND2345', 'BEAR2345', 'EXPD2345', 'OLDD2345', 'LEGA2345')
+         FROM device_link_codes WHERE code IN ('PEND2345', 'BEAR2345', 'EXPD2345', 'OLDD2345')
         ORDER BY code`,
     ).all(),
     link_code_count: (db.prepare('SELECT COUNT(*) AS n FROM device_link_codes').get() as { n: number }).n,

@@ -328,14 +328,9 @@ async fn poll_inner(
         .and_then(Role::parse)
         .unwrap_or(Role::User);
     let username = row.claimed_username.as_deref().unwrap_or(sub);
-    // Rows this crate claims always carry a mode; a TS-era row may not (or
-    // say plex, which no longer verifies), so fall back to the sub's provider.
-    let Some(auth_mode) = row
-        .claimed_auth_mode
-        .as_deref()
-        .and_then(AuthMode::parse)
-        .or_else(|| AuthMode::parse(crate::sub_namespace(sub)))
-    else {
+    // A claim always records the mode; one that no longer verifies (plex) is
+    // refused rather than reinterpreted.
+    let Some(auth_mode) = row.claimed_auth_mode.as_deref().and_then(AuthMode::parse) else {
         return Ok(denied("unknown_code"));
     };
     let keys = st.device_keys.as_deref().ok_or(Error::NoDeviceSecret)?;
