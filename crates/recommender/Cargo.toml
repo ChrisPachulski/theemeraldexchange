@@ -1,0 +1,35 @@
+[package]
+name = "recommender"
+version = "0.1.0"
+edition.workspace = true
+license-file.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "The Emerald Exchange recommender: owns exchange.db (catalog, embeddings, household signals) and serves /score and /events/* to the gateway."
+publish = false
+
+[[bin]]
+name = "eex-recommender"
+path = "src/main.rs"
+
+[lib]
+name = "recommender"
+path = "src/lib.rs"
+
+[dependencies]
+# The schema_migrations migrator and PrincipalMode.
+media-core = { path = "../media-core" }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
+# The sqlite sqlx links; sqlite-vec registers on it through sqlite3_auto_extension.
+libsqlite3-sys = "0.37"
+# Pinned to the Python lock's sqlite-vec so the vec0 shadow tables match.
+sqlite-vec = "=0.1.9"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+chrono = "0.4"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json.workspace = true

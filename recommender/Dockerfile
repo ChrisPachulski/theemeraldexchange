@@ -45,6 +45,7 @@ COPY crates/transcoder ./crates/transcoder
 COPY crates/iptv ./crates/iptv
 COPY crates/auth ./crates/auth
 COPY crates/gateway ./crates/gateway
+COPY crates/recommender ./crates/recommender
 
 # `maturin build -m <crate>/Cargo.toml --release` produces an abi3 wheel
 # under crates/emerald-contracts-pyo3/target/wheels/. --out redirects the
