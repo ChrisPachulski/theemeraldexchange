@@ -26,11 +26,11 @@ Two deploy tracks exist, both built from the same images and the same `server/`,
   `http://<host>:3001` (`selfhost/docker-compose.yml:7`, `server/app.ts:334-339`).
 
 - **Backend**, Hono + TypeScript (`server/`), entry `server/index.ts`, wiring in `server/app.ts`.
-  Owns auth/authorization, the `*arr`/SAB/IPTV/DVR bridges, TMDB lookups, the recommender and
-  media-core/transcoder proxies, telemetry DSN distribution, and the SQLite data layer
-  (`server.db`, `media.db` read path, `iptv.db`). Global middleware, in the order `app.ts` applies
+  Owns auth/authorization, the `*arr`/SAB bridges, TMDB lookups, the recommender and
+  media-core/transcoder/iptv proxies, telemetry DSN distribution, and the SQLite data layer
+  (`server.db`, `media.db` read path). Global middleware, in the order `app.ts` applies
   it: `requestId()` (`server/app.ts:73`), a 1 MiB body-size cap on the `/api/media/*` and
-  `/api/transcode/*` control-plane routes (`server/app.ts:79-88`), a frame-ancestors/X-Frame-Options
+  `/api/transcode/*`, `/api/iptv/*` and `/api/dvr/*` control-plane routes (`server/app.ts:79-88`), a frame-ancestors/X-Frame-Options
   header pass (`server/app.ts:93-97`), a redacting request logger (`server/app.ts:104-119`), CORS
   built from `env.allowedOrigins` when non-empty (`server/app.ts:124-147`), and the CSRF/Origin gate
   `requireSafeOrigin` (`server/app.ts:153`, implemented in `server/middleware/csrf.ts`). Routes are
@@ -45,6 +45,12 @@ Two deploy tracks exist, both built from the same images and the same `server/`,
   `Config::from_env()`, connect `Db`, build the router, start the boot/periodic library scanner
   (`spawn_scheduler`), then serve with graceful shutdown on SIGTERM or SIGINT
   (`crates/media-core/src/main.rs:69-107`).
+
+- **iptv** (`crates/iptv`, Rust/Axum), sole owner of `iptv.db` and the only process that dials
+  the IPTV provider: catalog + EPG sync, live/catch-up/VOD streams, the AVPlayer live remux, feed
+  checks, DVR and a nightly `iptv.db` snapshot. The backend keeps the auth, membership, live-section
+  and rating gates and forwards `/api/iptv/*` and `/api/dvr/*` here with an internal principal
+  (`server/routes/iptv.ts`, `server/routes/dvr.ts`, `server/services/iptvService.ts`).
 
 - **transcoder** (`crates/transcoder`, Rust/Axum), runs ffmpeg-backed HLS transcode sessions for
   files that cannot direct-play. `crates/transcoder/src/main.rs:1-60` detects which hardware
@@ -87,12 +93,13 @@ Owner deployment (`docker-compose.yml`):
 | backend | 3001 | `127.0.0.1:3001` | loopback-only (`docker-compose.yml:63-64`) |
 | recommender | 8000 | `127.0.0.1:8001` | loopback-only, admin debugging (`docker-compose.yml:247-248`) |
 | media-core | 8002 | `127.0.0.1:8002` | loopback-only (`docker-compose.yml:335-336`) |
+| iptv | 8004 | `127.0.0.1:8004` | loopback-only |
 | transcoder | 8003 | `127.0.0.1:8003` | loopback-only (`docker-compose.yml:432-433`) |
 | glitchtip | 8000 (in-container) | `127.0.0.1:8100` | loopback-only (`docker-compose.yml:620-622`) |
 | cloudflared | n/a | none (`network_mode: service:backend`) | terminates the public Cloudflare Tunnel; reaches the backend at `localhost:3001` inside the shared netns (`docker-compose.yml:522`) |
 | tailscale | n/a | none (`network_mode: service:backend`) | tailnet-only via Tailscale Serve |
 
-recommender, media-core, transcoder, and glitchtip-db/redis have no path to the public internet;
+recommender, media-core, iptv, transcoder, and glitchtip-db/redis have no path to the public internet;
 the only container with an internet-facing listener is cloudflared, and only when the
 `remote-cloudflare` profile is enabled.
 
@@ -101,7 +108,7 @@ Self-host bundle (`selfhost/docker-compose.yml`):
 | Service | Container port | Host publish | Reachability |
 | --- | --- | --- | --- |
 | backend | 3001 | `3001` (all interfaces) | **LAN-reachable by design**, no tunnel in front (`selfhost/docker-compose.yml:41-44`); the comment there notes changing it to `127.0.0.1:3001:3001` if the operator only ever uses the `remote` profile |
-| media-core, transcoder, recommender | 8002/8003/8000 | none published | reachable only over the compose network, from the backend |
+| media-core, transcoder, iptv, recommender | 8002/8003/8004/8000 | none published | reachable only over the compose network, from the backend |
 | tailscale | n/a | none (`network_mode: service:backend`) | opt-in private remote access |
 
 ## 3. Trust boundaries
@@ -130,9 +137,9 @@ Four independent credential mechanisms, plus one narrow export secret:
   directly (`crates/emerald-contracts/README.md:36-39`), kept as a separate secret from
   `SESSION_SECRET` specifically so a stream-token compromise cannot expose session cookies
   (`server/env.ts:255-266`). Local-media tokens default to a 6-hour TTL
-  (`MEDIA_STREAM_TOKEN_TTL_SECS`, `server/env.ts:726`), IPTV on-demand tokens to 6 hours
-  (`IPTV_ONDEMAND_TOKEN_TTL_SECS`, `server/env.ts:720`) and IPTV live tokens to 12 hours
-  (`IPTV_LIVE_TOKEN_TTL_SECS`, `server/env.ts:706`), because a single token is re-presented on
+  (`MEDIA_STREAM_TOKEN_TTL_SECS`, `server/env.ts`), IPTV on-demand tokens to 6 hours
+  (`IPTV_ONDEMAND_TOKEN_TTL_SECS`) and IPTV live tokens to 12 hours (`IPTV_LIVE_TOKEN_TTL_SECS`,
+  both minted by the iptv service, `crates/iptv/src/config.rs`), because a single token is re-presented on
   every byte-range/HLS-segment fetch for the length of a viewing session.
 
 - **Internal principal** (backend → media-core / transcoder / recommender), a 60-second JWE the
@@ -160,18 +167,13 @@ Four independent credential mechanisms, plus one narrow export secret:
   `SESSION_SECRET` (`server/env.ts:253`, `recommender/app/config.py:8-21`). It sits alongside, not
   instead of, the internal-principal check, the recommender's `/events/*` routes can require both.
 
-- One more narrow secret worth naming: `IPTV_RECOMMENDER_EXPORT_SECRET`, checked in
-  `server/routes/iptv/admin.ts` and unrelated to the four boundaries above, it gates a single IPTV
-  catalog-export endpoint the recommender pulls from the backend, distinct from
-  `RECOMMENDER_EVENT_SECRET`.
-
 ## 4. Data stores
 
 | Store | Path | Owner | Notes |
 | --- | --- | --- | --- |
 | `server.db` | `SERVER_DB_PATH`, default `./data/server.db` (`server/env.ts:664`); mounted at `/app/data` in both compose files | backend | sessions/invites/members/settings/watchlist; `server/services/serverDb.ts` singleton; probed by `/api/health` (`server/app.ts:162-170`) |
 | `media.db` | `MEDIA_DB_PATH`, default `./data/media.db` (`server/env.ts:649`, `crates/media-core/src/config.rs:151`) | media-core (writer), backend (read-only via a shared bind mount) | owner deployment mounts media-core's live DB directory straight into the backend container at `/media-core-db` specifically so the backend's availability tagger and `/api/version` schema probe never see a stale copy (`docker-compose.yml:69-74`); self-host shares it via the `media-core-db` named volume (`selfhost/docker-compose.yml:46-47,123-124`) |
-| `iptv.db` | `IPTV_DB_PATH`, default `./data/iptv.db` (`server/env.ts:665`); `/app/data/iptv.db` in both composes | backend | Xtream/IPTV channel and EPG cache (`server/services/iptvSync.ts`); lives inside the same `backend-data`/appdata volume as `server.db` |
+| `iptv.db` | `IPTV_DB_PATH`, `/data/iptv.db` in the iptv image (`crates/iptv/Dockerfile`) | iptv service (sole reader and writer) | Xtream catalog + EPG, favorites, watch history, playlist tokens, feed checks, DVR schedule (`crates/iptv/migrations`); snapshotted nightly to `/data/backups` (`crates/iptv/src/backup.rs`) |
 | recommender sqlite-vec DB | `RECOMMENDER_DB_PATH`, default `./data/exchange.db` (`recommender/app/config.py:161`); `/data/exchange.db` in both composes | recommender | SQLite with the `sqlite-vec` extension loaded at connect time (`recommender/app/db.py:1-10,315-317`); the `title_vec` `vec0` virtual table holds title embeddings (`recommender/app/db.py:62`) |
 | transcoder scratch | `TRANSCODER_TMP_DIR` = `/scratch`, backed by a durable disk bind mount (owner) or a named volume `transcoder-scratch` (self-host), **not** a RAM tmpfs, VOD sessions retain every HLS segment for full-title seek (`docker-compose.yml:434-448`) | transcoder | idle sessions are reaped 30s after the last heartbeat; also swept on boot |
 | Glitchtip Postgres/Valkey | `glitchtip-pgdata` / in-memory Valkey | glitchtip stack | owner-deployment-only, `telemetry` profile |

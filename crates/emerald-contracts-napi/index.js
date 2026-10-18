@@ -586,7 +586,6 @@ if (!nativeBinding) {
 }
 
 module.exports = nativeBinding
-module.exports.XmltvParser = nativeBinding.XmltvParser
 module.exports.deviceTokenDecrypt = nativeBinding.deviceTokenDecrypt
 module.exports.deviceTokenEncrypt = nativeBinding.deviceTokenEncrypt
 module.exports.hkdfDerive = nativeBinding.hkdfDerive
@@ -600,4 +599,3 @@ module.exports.piiScrubValue = nativeBinding.piiScrubValue
 module.exports.streamTokenEnforceTimeWindow = nativeBinding.streamTokenEnforceTimeWindow
 module.exports.streamTokenSign = nativeBinding.streamTokenSign
 module.exports.streamTokenVerify = nativeBinding.streamTokenVerify
-module.exports.streamTokenVerifyDualKey = nativeBinding.streamTokenVerifyDualKey

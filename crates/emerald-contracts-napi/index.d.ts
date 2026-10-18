@@ -52,16 +52,6 @@ export interface StreamClaimsJs {
 export function streamTokenSign(secret: Buffer, claims: StreamClaimsJs): string
 export function streamTokenVerify(secret: Buffer, token: string): StreamClaimsJs
 
-export interface DualKeyVerifyResult {
-  claims: StreamClaimsJs
-  usedFallback: boolean
-}
-export function streamTokenVerifyDualKey(
-  primary: Buffer,
-  fallback: Buffer,
-  token: string,
-): DualKeyVerifyResult
-
 /** Throws on nbf/exp violation; ±30s/±5s skew per contract §6. */
 export function streamTokenEnforceTimeWindow(claims: StreamClaimsJs, nowSecs: number): void
 
@@ -134,22 +124,3 @@ export function parseSub(s: string): SubJs
 export function piiScrubKeys(): Array<string>
 /** Returns a JSON string with PII keys scrubbed in-place. */
 export function piiScrubValue(jsonStr: string): string
-
-// ---------------------------------------------------------------------------
-// XMLTV parsing (server/services/iptvEpg.ts streamXmltv)
-// ---------------------------------------------------------------------------
-
-/**
- * Incremental XMLTV parser over raw (optionally gzipped) feed bytes. push()
- * and finish() return the rows completed so far as JSON
- * `{"programmes": EpgProgrammeRow[], "channels": XmltvChannelDef[]}`, and
- * throw on malformed XML or a corrupt gzip stream.
- */
-export class XmltvParser {
-  constructor(sniffChannels: boolean)
-  push(chunk: Buffer): string
-  /** From now on, emit only programmes on these normalized channel ids. Text
-   *  already parsed is unaffected; skipped programmes are still checked as XML. */
-  keepChannels(ids: Array<string>): void
-  finish(): string
-}

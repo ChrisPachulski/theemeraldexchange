@@ -16,8 +16,7 @@ const DTS_PATH = resolve(
 
 function declaredFunctions(): string[] {
   const dts = readFileSync(DTS_PATH, 'utf-8')
-  // A class (XmltvParser) is a function at runtime too.
-  const names = [...dts.matchAll(/^export (?:function|class) (\w+)/gm)].map((m) => m[1])
+  const names = [...dts.matchAll(/^export function (\w+)/gm)].map((m) => m[1])
   // The dts-guard exists because this file was once clobbered to 0 bytes
   // (fixed 1ae47c0); an empty parse here means the guard failed again.
   expect(names.length).toBeGreaterThanOrEqual(13)

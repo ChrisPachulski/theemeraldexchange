@@ -265,7 +265,7 @@ suggestions.get('/:type', async (c) => {
     setTimingHeader()
     return c.json({
       source: 'trending',
-      items: tagIptvAvailability(trending.slice(0, TARGET_COUNT)),
+      items: await tagIptvAvailability(trending.slice(0, TARGET_COUNT), session),
       _diag: diag(),
     })
   }

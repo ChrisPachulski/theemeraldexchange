@@ -19,12 +19,12 @@
 #      server/, recommender/, crates/ FROM THAT STAGE — never the working
 #      tree — to /mnt/user/appdata/exchange-backend/ on the NAS.
 #   4. Ships .env.production → NAS as .env (consumed by docker compose).
-#   5. Tags every currently-deployed image as :rollback, pulls the four
+#   5. Tags every currently-deployed image as :rollback, pulls the five
 #      CI-built images for HEAD (ghcr.io ...:sha-<commit>, pushed by the CI
 #      docker-build job — so a green CI gate means they exist) and retags
 #      them to the compose names, then recreates the stack with
 #      `docker compose up -d --no-build`. The NAS never compiles.
-#   6. Health-gates backend + recommender + media-core + transcoder; on
+#   6. Health-gates backend + recommender + media-core + iptv + transcoder; on
 #      failure rolls back to the :rollback images and prints the manual
 #      rollback commands for every image.
 #
@@ -263,6 +263,16 @@ test -s "${STAGE_DIR}/bin/eex-ytresolve" \
 echo "→ Ensuring ${APPDATA} exists on ${NAS_HOST}"
 ssh "${NAS_USER}@${NAS_HOST}" "mkdir -p ${APPDATA} ${APPDATA}/bin"
 
+# iptv.db moved from the backend's data dir to the iptv service's volume
+# (DEPLOY.md, "Moving iptv.db to the iptv service"). An iptv container started
+# on an empty volume would create a fresh DB and bootstrap-sync against the
+# provider while the real one sits stranded, so refuse until the move is done.
+if ssh "${NAS_USER}@${NAS_HOST}" "test -f ${APPDATA}/data/iptv.db && ! test -f ${APPDATA}/iptv/iptv.db"; then
+  echo "ERROR: ${APPDATA}/data/iptv.db is not yet moved to ${APPDATA}/iptv/." >&2
+  echo "       Do the one-time move in DEPLOY.md, then deploy again." >&2
+  exit 1
+fi
+
 # ── Rollback config snapshot ────────────────────────────────────────────────
 # Image-only rollback is insufficient: the rsync below overwrites
 # docker-compose.yml and the env ship overwrites .env, so a deploy broken BY
@@ -368,15 +378,17 @@ ssh "${NAS_USER}@${NAS_HOST}" "test -f ${APPDATA}/.dockerignore || echo '[deploy
 # any extra capability. The backend runs as uid 10001 too (Dockerfile USER
 # emerald), so its data dir gets the same treatment, non-recursively: only the
 # dir itself must be writable, and operator backups inside it keep their owner.
+# The iptv service (uid 10004) owns iptv.db, recordings and snapshots.
 # The transcoder (uid 10003) creates per-session subdirs in its scratch dir,
 # which takes the scratch convention (1777, world-writable + sticky).
 scratch_dir=$(env_value TRANSCODER_SCRATCH_HOST_PATH || printf '%s' "${APPDATA}/transcoder-scratch")
 echo "→ Pre-creating + chowning sidecar DB volumes (fresh-volume crash-loop guard)"
 ssh "${NAS_USER}@${NAS_HOST}" "\
-  mkdir -p ${APPDATA}/data ${APPDATA}/recommender-db ${APPDATA}/recommender-db/hf-cache ${APPDATA}/media-core-db '${scratch_dir}' && \
+  mkdir -p ${APPDATA}/data ${APPDATA}/recommender-db ${APPDATA}/recommender-db/hf-cache ${APPDATA}/media-core-db ${APPDATA}/iptv '${scratch_dir}' && \
   chown 10001:10001 ${APPDATA}/data && \
   chown -R 10001:10001 ${APPDATA}/recommender-db && \
   chown -R 10002:10002 ${APPDATA}/media-core-db && \
+  chown -R 10004:10004 ${APPDATA}/iptv && \
   chmod 1777 '${scratch_dir}'"
 
 # Snapshot every currently-deployed image as :rollback-${ROLLBACK_TS} BEFORE
@@ -391,7 +403,7 @@ ssh "${NAS_USER}@${NAS_HOST}" "\
 # Best-effort: the first-ever deploy has no prior images.
 echo "→ Tagging current images as :rollback-${ROLLBACK_TS} (revert targets; keeping last 2 generations)"
 ssh "${NAS_USER}@${NAS_HOST}" "
-  for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-transcoder; do
+  for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-iptv theemeraldexchange-transcoder; do
     if docker image inspect \"\$img:latest\" >/dev/null 2>&1; then
       docker tag \"\$img:latest\" \"\$img:rollback-${ROLLBACK_TS}\"
       echo \"[deploy] tagged \$img:rollback-${ROLLBACK_TS}\"
@@ -418,7 +430,7 @@ ssh "${NAS_USER}@${NAS_HOST}" "cd ${APPDATA} && docker compose version >/dev/nul
 # alone does not protect memory or I/O. Build sequentially, then recreate from
 # the completed images without allowing Compose to start another build.
 if [[ "$BUILD_ON_NAS" == "1" ]]; then
-  for service in backend recommender media-core transcoder; do
+  for service in backend recommender media-core iptv transcoder; do
     echo "→ Guarded NAS build: ${service}"
     EEX_RELEASE="${DEPLOY_SHA_SHORT}" \
       NAS_HOST="${NAS_HOST}" \
@@ -432,7 +444,7 @@ else
   # compose, the :rollback-* generations, and --build-on-nas interchangeable.
   echo "→ Pulling CI-built images for ${DEPLOY_SHA_SHORT} from ${IMAGE_BASE}"
   ssh "${NAS_USER}@${NAS_HOST}" "set -e
-    for svc in backend recommender media-core transcoder; do
+    for svc in backend recommender media-core iptv transcoder; do
       src=${IMAGE_BASE}-\$svc:sha-${DEPLOY_SHA}
       docker pull -q \"\$src\" >/dev/null || { echo \"ERROR: cannot pull \$src — was CI green for this commit? (--build-on-nas compiles locally)\" >&2; exit 1; }
       docker tag \"\$src\" \"theemeraldexchange-\$svc:latest\"
@@ -514,7 +526,7 @@ ssh "${NAS_USER}@${NAS_HOST}" "chmod +x ${APPDATA}/scripts/nas-cloudflared-watch
 # "✓ Deployed" and the API was simply down. Poll the backend's health until it
 # is actually serving; if it never does, roll back to the :rollback image.
 # Gate on the WHOLE service stack, not just the backend: recommender,
-# media-core and transcoder all carry docker healthchecks (compose +
+# media-core, iptv and transcoder all carry docker healthchecks (compose +
 # image HEALTHCHECK), so a sidecar that crash-loops (bad migration,
 # missing INTERNAL_PRINCIPAL_SECRET, torch OOM) fails the deploy instead
 # of silently degrading suggestions/playback. The recommender's first
@@ -527,7 +539,7 @@ echo "→ Waiting for backend + sidecars to report healthy (up to ~150s)"
 # never reports "rolled back" without re-verifying the restored stack with
 # the exact same gate.
 health_poll_remote='
-  containers="exchange-backend exchange-recommender exchange-media-core exchange-transcoder"
+  containers="exchange-backend exchange-recommender exchange-media-core exchange-iptv exchange-transcoder"
   summary=""
   # Telemetry stack status (§15: telemetry is MANDATORY, but it is not in the
   # request path). Reported as WARN-not-fail, deliberately: hard-failing here
@@ -592,8 +604,14 @@ if [ "$health_rc" -ne 0 ]; then
         echo \"[deploy] WARN: no \$f.rollback-${ROLLBACK_TS} snapshot to restore (first deploy?)\" >&2; \
       fi; \
     done; \
+    if [ -f iptv/iptv.db ] && ! grep -q '^  iptv:' docker-compose.yml; then \
+      docker stop exchange-iptv >/dev/null 2>&1 || true; \
+      for f in iptv.db iptv.db-wal iptv.db-shm; do [ -f \"iptv/\$f\" ] && mv \"iptv/\$f\" \"data/\$f\"; done; \
+      chown 10001:10001 data/iptv.db*; \
+      echo '[deploy] restored config predates the iptv service: moved iptv.db back to data/'; \
+    fi; \
     rolled=0; \
-    for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-transcoder; do \
+    for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-iptv theemeraldexchange-transcoder; do \
       if docker image inspect \"\$img:rollback-${ROLLBACK_TS}\" >/dev/null 2>&1; then \
         docker tag \"\$img:rollback-${ROLLBACK_TS}\" \"\$img:latest\"; \
         echo \"[deploy] restored \$img:latest from :rollback-${ROLLBACK_TS}\"; \
@@ -627,9 +645,10 @@ if [ "$health_rc" -ne 0 ]; then
   echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-backend'" >&2
   echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-recommender'" >&2
   echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-media-core'" >&2
+  echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-iptv'" >&2
   echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker logs --tail=80 exchange-transcoder'" >&2
   echo "  Manual rollback (already attempted automatically), per image:" >&2
-  for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-transcoder; do
+  for img in theemeraldexchange-backend theemeraldexchange-recommender theemeraldexchange-media-core theemeraldexchange-iptv theemeraldexchange-transcoder; do
     echo "    ssh ${NAS_USER}@${NAS_HOST} 'docker tag ${img}:rollback-${ROLLBACK_TS} ${img}:latest'" >&2
   done
   echo "  Manual config restore:" >&2

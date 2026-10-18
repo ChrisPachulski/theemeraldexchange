@@ -7,12 +7,10 @@ import path from 'node:path'
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eex-version-test-'))
 const serverDbPath = path.join(tmpDir, 'server.db')
-const iptvDbPath = path.join(tmpDir, 'iptv.db')
 const exchangeDbPath = path.join(tmpDir, 'exchange.db')
 const mediaDbPath = path.join(tmpDir, 'media.db')
 
 process.env.SERVER_DB_PATH = serverDbPath
-process.env.IPTV_DB_PATH = iptvDbPath
 process.env.RECOMMENDER_DB_PATH = exchangeDbPath
 process.env.MEDIA_DB_PATH = mediaDbPath
 process.env.EEX_RELEASE = 'test-release'
@@ -71,7 +69,6 @@ async function getVersion(): Promise<Record<string, unknown>> {
 beforeEach(() => {
   closeServerDb()
   removeDb(serverDbPath)
-  removeDb(iptvDbPath)
   removeDb(exchangeDbPath)
   removeDb(mediaDbPath)
 })
@@ -86,8 +83,7 @@ afterAll(() => {
 })
 
 describe('GET /api/version', () => {
-  it('reports current schema_migrations versions for iptv, exchange, and media DBs', async () => {
-    writeMigratedDb(iptvDbPath, [1, 2, 6])
+  it('reports current schema_migrations versions for the exchange and media DBs', async () => {
     writeMigratedDb(exchangeDbPath, [1, 5, 7])
     writeMigratedDb(mediaDbPath, [1, 3])
 
@@ -99,16 +95,12 @@ describe('GET /api/version', () => {
       // No APPLE_CLIENT_ID / GOOGLE_CLIENT_ID / WORKOS_* in this env → plex only.
       auth_modes: ['plex'],
       accepting_device_pairs: true,
-      schemas: {
-        iptv: { current: 6 },
-        exchange: { current: 7 },
-        media: { current: 3 },
-      },
     })
+    // iptv.db belongs to the iptv service; the backend no longer opens it.
+    expect(body.schemas).toEqual({ exchange: { current: 7 }, media: { current: 3 } })
   })
 
   it('advertises apple and google in auth_modes when their client IDs are configured', async () => {
-    writeMigratedDb(iptvDbPath, [6])
     writeMigratedDb(exchangeDbPath, [7])
     writeMigratedDb(mediaDbPath, [3])
 
@@ -129,13 +121,11 @@ describe('GET /api/version', () => {
   })
 
   it('reports a missing media DB as not present without creating it', async () => {
-    writeMigratedDb(iptvDbPath, [6])
     writeMigratedDb(exchangeDbPath, [7])
 
     const body = await getVersion()
 
     expect(body.schemas).toMatchObject({
-      iptv: { current: 6 },
       exchange: { current: 7 },
       media: { present: false },
     })
@@ -143,15 +133,13 @@ describe('GET /api/version', () => {
   })
 
   it('does not crash when an existing DB lacks schema_migrations', async () => {
-    writeDbWithoutMigrations(iptvDbPath)
-    writeMigratedDb(exchangeDbPath, [7])
+    writeDbWithoutMigrations(exchangeDbPath)
     writeMigratedDb(mediaDbPath, [3])
 
     const body = await getVersion()
 
     expect(body.schemas).toMatchObject({
-      iptv: { current: null },
-      exchange: { current: 7 },
+      exchange: { current: null },
       media: { current: 3 },
     })
   })

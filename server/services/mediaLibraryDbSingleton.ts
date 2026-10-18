@@ -1,7 +1,6 @@
 // server/services/mediaLibraryDbSingleton.ts
 //
-// Lazy cached handle for media-core's read-only media.db, mirroring
-// iptvDbSingleton.ts. Unlike the IPTV singleton, this one degrades
+// Lazy cached handle for media-core's read-only media.db. It degrades
 // GRACEFULLY: if the file is missing (media-core not deployed / never
 // scanned) or the open fails for any reason, mediaLibraryDb() returns
 // null instead of throwing. Callers (the recommender availability tagger)

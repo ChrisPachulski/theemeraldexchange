@@ -50,10 +50,11 @@ COPY Cargo.toml Cargo.lock LICENSE ./
 COPY crates/emerald-contracts ./crates/emerald-contracts
 COPY crates/emerald-contracts-napi ./crates/emerald-contracts-napi
 COPY crates/emerald-contracts-pyo3 ./crates/emerald-contracts-pyo3
-# media-core and transcoder are workspace members too; cargo must see them to
-# resolve the workspace even though this stage only builds the napi addon.
+# media-core, transcoder and iptv are workspace members too; cargo must see them
+# to resolve the workspace.
 COPY crates/media-core ./crates/media-core
 COPY crates/transcoder ./crates/transcoder
+COPY crates/iptv ./crates/iptv
 
 # napi-rs CLI ships its own builder script; run it inside the crate dir
 # so it picks up package.json's napi block (binaryName, target list).

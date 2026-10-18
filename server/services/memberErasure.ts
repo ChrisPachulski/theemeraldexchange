@@ -7,7 +7,7 @@
 // believe the account still exists when the member can no longer sign in.
 
 import { serverDb } from './serverDb.js'
-import { iptvDb } from './iptvDbSingleton.js'
+import { eraseIptvMember } from './iptvService.js'
 import { cascadeRevokeForSub } from './reconcileDeviceToken.js'
 import { deleteUserApiKey } from './userApiKeys.js'
 import { removePolicy } from './userPolicies.js'
@@ -16,9 +16,7 @@ import { clearUserWatchlist } from './userWatchlist.js'
 
 export type ErasureStep =
   | 'device_tokens'
-  | 'playlist_tokens'
-  | 'iptv_favorites'
-  | 'iptv_watch_history'
+  | 'iptv'
   | 'api_key'
   | 'passkeys'
   | 'policy'
@@ -49,15 +47,8 @@ export async function eraseMemberState(sub: string, hooks: ErasureHooks = {}): P
   await attempt('device_tokens', () => {
     cascadeRevokeForSub(sub, 'account_deleted')
   })
-  await attempt('playlist_tokens', () => {
-    iptvDb().stmts.revokePlaylistTokensBySub.run(new Date().toISOString(), sub)
-  })
-  await attempt('iptv_favorites', () => {
-    iptvDb().stmts.deleteFavoritesBySub.run(sub)
-  })
-  await attempt('iptv_watch_history', () => {
-    iptvDb().stmts.deleteHistoryBySub.run(sub)
-  })
+  // Playlist tokens, favorites and watch history, in one iptv-side transaction.
+  await attempt('iptv', () => eraseIptvMember(sub))
   await attempt('api_key', () => {
     deleteUserApiKey(sub)
   })

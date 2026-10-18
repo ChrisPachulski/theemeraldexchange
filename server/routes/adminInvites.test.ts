@@ -30,13 +30,12 @@ import type { Env } from '../middleware/auth.js'
 // --- env bootstrap, BEFORE any server module import ------------------------
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'admin-invites-test-'))
 process.env.SERVER_DB_PATH = path.join(tmpDir, 'server.db')
-process.env.IPTV_DB_PATH = path.join(tmpDir, 'iptv.db')
 process.env.ADMIN_SUBS = 'plex:42'
 
 // Dynamic imports so the modules read the env set above. Hono is imported the
 // same way purely to keep all "load after env" imports in one place.
 const { serverDb, closeServerDb } = await import('../services/serverDb.js')
-const { iptvDb, closeIptvDb } = await import('../services/iptvDbSingleton.js')
+const { startIptvStub } = await import('../test/iptvStub.js')
 const { adminInvites, adminMembers } = await import('./adminInvites.js')
 const { createSession, mintDeviceToken } = await import('../session.js')
 const { env } = await import('../env.js')
@@ -108,24 +107,16 @@ function insertDeviceToken(jti: string, sub: string): void {
     )
 }
 
-function insertPlaylistToken(jti: string, sub: string): void {
-  iptvDb().stmts.insertPlaylistToken.run({
-    jti,
-    sub,
-    device_name: 'Kitchen TV',
-    issued_at: new Date('2026-01-01T00:00:00Z').toISOString(),
-    expires_at: new Date('2027-01-01T00:00:00Z').toISOString(),
-  })
-}
+const iptvStub = await startIptvStub()
+const iptvCalls = () => iptvStub.calls.map((call) => `${call.method} ${call.url}`)
 
-function revocationState(sub: string, deviceJti: string, playlistJti: string) {
+function revocationState(sub: string, deviceJti: string) {
   return {
     member: serverDb().raw.prepare(`SELECT * FROM members WHERE sub = ?`).get(sub),
     deviceToken: serverDb().raw.prepare(`SELECT * FROM device_tokens WHERE jti = ?`).get(deviceJti),
     deviceRevocation: serverDb()
       .raw.prepare(`SELECT * FROM device_token_revocations WHERE jti = ?`)
       .get(deviceJti),
-    playlist: iptvDb().stmts.getPlaylistToken.get(playlistJti),
   }
 }
 
@@ -183,20 +174,19 @@ describe('admin invites + members routes', () => {
     serverDb() // run migrations against the throwaway DB
   })
 
-  afterAll(() => {
+  afterAll(async () => {
     // IR-3 leak-guard: this suite MUTATES process.env (ADMIN_SUBS,
-    // SERVER_DB_PATH/IPTV_DB_PATH) to bootstrap an isolated admin + temp DB. If we leave
+    // SERVER_DB_PATH) to bootstrap an isolated admin + temp DB. If we leave
     // those set, sibling suites in the same vitest worker inherit a phantom
     // ADMIN_SUBS owner and a stale DB path — the exact cross-suite-leak class
     // commits cea20ce / 8d1d418 fixed. Restore the env, close the DB handle,
     // and delete the temp dir so no state escapes this file.
     delete process.env.ADMIN_SUBS
     delete process.env.SERVER_DB_PATH
-    delete process.env.IPTV_DB_PATH
     envRw.adminSubs = [...originalAdminSubs]
     envRw.admins = [...originalAdmins]
     closeServerDb()
-    closeIptvDb()
+    await iptvStub.close()
     fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
@@ -209,7 +199,7 @@ describe('admin invites + members routes', () => {
        DELETE FROM members;
        DELETE FROM invites;`,
     )
-    iptvDb().raw.exec('DELETE FROM iptv_playlist_tokens;')
+    iptvStub.reset()
   })
 
   // -------------------------------------------------------------------------
@@ -434,8 +424,7 @@ describe('admin invites + members routes', () => {
   describe('DELETE /members/:sub — owner protection', () => {
     it('refuses to revoke the ADMIN_SUBS owner → 409 cannot_revoke_owner', async () => {
       insertDeviceToken('owner-device', ADMIN_SUB)
-      insertPlaylistToken('owner-playlist', ADMIN_SUB)
-      const before = revocationState(ADMIN_SUB, 'owner-device', 'owner-playlist')
+      const before = revocationState(ADMIN_SUB, 'owner-device')
       const r = await appUnderTest().request(`/members/${ADMIN_SUB}`, {
         method: 'DELETE',
         headers: { Cookie: await adminCookie() },
@@ -446,7 +435,8 @@ describe('admin invites + members routes', () => {
       // Owner is implicit — no row should have been written for it.
       const row = serverDb().raw.prepare('SELECT 1 FROM members WHERE sub = ?').get(ADMIN_SUB)
       expect(row).toBeUndefined()
-      expect(revocationState(ADMIN_SUB, 'owner-device', 'owner-playlist')).toEqual(before)
+      expect(revocationState(ADMIN_SUB, 'owner-device')).toEqual(before)
+      expect(iptvCalls()).toEqual([])
     })
 
     it('refuses a DB-backed admin self-revocation without touching cascades', async () => {
@@ -454,8 +444,7 @@ describe('admin invites + members routes', () => {
       envRw.admins = []
       insertActiveMember(ADMIN_SUB, 'admin')
       insertDeviceToken('self-device', ADMIN_SUB)
-      insertPlaylistToken('self-playlist', ADMIN_SUB)
-      const before = revocationState(ADMIN_SUB, 'self-device', 'self-playlist')
+      const before = revocationState(ADMIN_SUB, 'self-device')
 
       const r = await appUnderTest().request(`/members/${ADMIN_SUB}`, {
         method: 'DELETE',
@@ -463,7 +452,8 @@ describe('admin invites + members routes', () => {
       })
       expect(r.status).toBe(409)
       expect(await r.json()).toEqual({ error: 'cannot_revoke_self' })
-      expect(revocationState(ADMIN_SUB, 'self-device', 'self-playlist')).toEqual(before)
+      expect(revocationState(ADMIN_SUB, 'self-device')).toEqual(before)
+      expect(iptvCalls()).toEqual([])
     })
 
     it('counts a live legacy Plex admin as authority when revoking a DB admin', async () => {
@@ -472,7 +462,6 @@ describe('admin invites + members routes', () => {
       insertActiveMember(ADMIN_SUB, 'user')
       insertActiveMember(SECOND_ADMIN_SUB, 'admin')
       insertDeviceToken('final-device', SECOND_ADMIN_SUB)
-      insertPlaylistToken('final-playlist', SECOND_ADMIN_SUB)
 
       const r = await appUnderTest().request(`/members/${SECOND_ADMIN_SUB}`, {
         method: 'DELETE',
@@ -480,10 +469,12 @@ describe('admin invites + members routes', () => {
       })
       expect(r.status).toBe(200)
       expect(await r.json()).toEqual({ ok: true })
-      const after = revocationState(SECOND_ADMIN_SUB, 'final-device', 'final-playlist')
+      const after = revocationState(SECOND_ADMIN_SUB, 'final-device')
       expect((after.member as { revoked_at: string | null }).revoked_at).not.toBeNull()
       expect(after.deviceRevocation).toMatchObject({ reason: 'member_revoked' })
-      expect((after.playlist as { revoked_at: string | null }).revoked_at).not.toBeNull()
+      expect(iptvCalls()).toEqual([
+        `POST /internal/members/${encodeURIComponent(SECOND_ADMIN_SUB)}/revoke-playlist-tokens`,
+      ])
     })
 
     it('uses a Bearer admin identity username, not its device display label', async () => {
@@ -533,7 +524,6 @@ describe('admin invites + members routes', () => {
     it('revokes an ordinary member → 200; the row is retained with revoked_at set', async () => {
       insertActiveMember(USER_SUB, 'user')
       insertDeviceToken('device-user-sub', USER_SUB)
-      insertPlaylistToken('playlist-user-sub', USER_SUB)
       const del = await appUnderTest().request(`/members/${USER_SUB}`, {
         method: 'DELETE',
         headers: { Cookie: await adminCookie() },
@@ -545,10 +535,8 @@ describe('admin invites + members routes', () => {
       const revoked = members.find((m) => m.sub === USER_SUB)
       expect(revoked).toBeDefined() // retained for audit, not removed
       expect(revoked?.revoked_at).not.toBeNull()
-      const token = iptvDb().stmts.getPlaylistToken.get('playlist-user-sub') as
-        | { revoked_at: string | null }
-        | undefined
-      expect(token?.revoked_at).not.toBeNull()
+      expect(iptvCalls()).toEqual([`POST /internal/members/${encodeURIComponent(USER_SUB)}/revoke-playlist-tokens`])
+      expect(iptvStub.calls[0].headers.authorization).toMatch(/^Bearer /)
       const deviceRevocation = serverDb()
         .raw.prepare(`SELECT reason FROM device_token_revocations WHERE jti = ?`)
         .get('device-user-sub') as { reason: string } | undefined
@@ -557,9 +545,9 @@ describe('admin invites + members routes', () => {
 
     it('logs a cascade failure with request correlation but without the member sub', async () => {
       insertActiveMember(USER_SUB, 'user')
-      const statement = iptvDb().stmts.revokePlaylistTokensBySub
-      const runSpy = vi.spyOn(statement, 'run').mockImplementation(() => {
-        throw new Error('simulated cascade failure')
+      iptvStub.respond((_call, res) => {
+        res.statusCode = 500
+        res.end()
       })
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
@@ -576,11 +564,10 @@ describe('admin invites + members routes', () => {
         const line = String(errorSpy.mock.calls.at(-1)?.[0] ?? '')
         expect(line).toContain('[adminMembers] playlist-token cascade revoke failed')
         expect(line).toContain('"requestId":"member-revoke-request"')
-        expect(line).toContain('simulated cascade failure')
+        expect(line).toContain('iptv internal POST answered 500')
         expect(line).not.toContain(USER_SUB)
       } finally {
         errorSpy.mockRestore()
-        runSpy.mockRestore()
       }
     })
 

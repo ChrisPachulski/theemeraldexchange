@@ -24,7 +24,7 @@ import { requireAdmin, type Env } from '../middleware/auth.js'
 import { env } from '../env.js'
 import { issueInvite, listInvites, revokeInvite } from '../services/invites.js'
 import { listMembers, revokeMemberSafely, type Member } from '../services/members.js'
-import { iptvDb } from '../services/iptvDbSingleton.js'
+import { revokeIptvPlaylistTokens } from '../services/iptvService.js'
 import { cascadeRevokeForSub } from '../services/reconcileDeviceToken.js'
 import { createLogger } from '../services/logger.js'
 
@@ -151,7 +151,7 @@ adminMembers.get('/', (c) => {
   return c.json({ members })
 })
 
-adminMembers.delete('/:sub', (c) => {
+adminMembers.delete('/:sub', async (c) => {
   const sub = c.req.param('sub')
   const session = c.get('session')
   const result = revokeMemberSafely({
@@ -181,7 +181,7 @@ adminMembers.delete('/:sub', (c) => {
     })
   }
   try {
-    iptvDb().stmts.revokePlaylistTokensBySub.run(new Date().toISOString(), sub)
+    await revokeIptvPlaylistTokens(sub)
   } catch (err) {
     memberLog.error('playlist-token cascade revoke failed', {
       requestId: c.get('requestId') ?? c.req.header('x-request-id') ?? 'unavailable',

@@ -1,268 +1,50 @@
-// DVR API (M6).
+// /api/dvr: a gated proxy to the iptv service, which schedules, records and
+// serves the recordings (crates/iptv/src/dvr.rs). Mounted only with
+// DVR_ENABLED and IPTV on (app.ts); the service mounts its routes on the same
+// condition.
 //
-// Schedule, list, play, cancel, and delete IPTV recordings. The scheduler and
-// ffmpeg recorder are registered at boot when DVR_ENABLED is set; the feature
-// stays opt-in because it consumes provider connections and disk.
+// Recorded live TV belongs to the `live` section and carries no
+// certification, so every route needs the section and the grant needs an
+// uncapped profile. Scheduling and deleting are admin-only (the service also
+// rate-limits them per caller). Play accepts a ?t= recording token (Hono
+// checks signature + membership, the service checks kind + recording id) or
+// falls back to the session, where the grant's gates are re-applied.
 
-import { createReadStream, statSync, rmSync } from 'node:fs'
-import { Readable } from 'node:stream'
-import { Hono, type Context, type Next } from 'hono'
-import { requireAuth, requireAdmin, type Env } from '../middleware/auth.js'
-import { rateLimit } from '../middleware/rateLimit.js'
-import { requireSection } from '../services/userPolicies.js'
+import { Hono, type Context } from 'hono'
+import { requireAdmin, requireAuth, type Env } from '../middleware/auth.js'
 import { capBlocksUnrated } from '../services/parentalRating.js'
-import { memberStatus } from '../services/membership.js'
-import { env } from '../env.js'
-import { iptvDb } from '../services/iptvDbSingleton.js'
-import { signStreamToken, verifyStreamToken, type StreamKind } from '../services/iptvStreamToken.js'
 import {
-  validateNewRecording,
-  scheduleRecording,
-  listRecordings,
-  getRecording,
-  cancelRecording,
-  type NewRecordingInput,
-} from '../services/dvrRecordings.js'
+  forwardToIptv,
+  liveSectionDenied,
+  sessionFromSub,
+  verifyStreamTokenMember,
+} from '../services/iptvService.js'
 
 export const dvr = new Hono<Env>()
 
-// Per-caller token bucket on the admin-mutate routes, matching every sibling
-// mutate surface (radarr/sonarr/sab). A schedule claims a hard-capped provider
-// connection plus unbounded disk and a delete does real fs work, so a looped
-// client — or a leaked admin session — is exactly the DoS shape finding 4-0
-// covered. Reuses the ARR_MUTATE_RATE_* knobs: same shape, no new dial.
-const dvrMutateLimit = rateLimit({
-  name: 'dvr-mutate',
-  capacity: env.arrMutateRateCapacity,
-  refill: env.arrMutateRateRefill,
-  intervalMs: env.arrMutateRateIntervalMs,
-})
-
-// The DVR play token's kind. `'recording'` is the M6-reserved StreamKind that
-// verifiers already accept cross-language (see iptvStreamToken.ts §5.3) — this
-// is the first path to actually MINT it. Bound to a single recording id + sub
-// like the VOD idiom in routes/iptv.ts.
-const RECORDING_KIND: StreamKind = 'recording'
-
-// The stream token's `rid` for a recording — the bare recording id, mirroring
-// the VOD grant which binds to the bare streamId. Kind (`recording`) already
-// disambiguates it from any other token class, and rid pins it to this one file.
-function recordingResourceId(id: string): string {
-  return id
-}
-
-// The DVR scheduler owns the single FfmpegRecorder (it lives in index.ts,
-// created by startDvrScheduler). The DELETE route needs a handle to it to stop
-// an in-flight ffmpeg on cancel — without this a cancelled recording keeps
-// pulling a hard-capped provider connection and writing the .ts until its
-// window ends. index.ts registers the recorder after starting the scheduler;
-// null when DVR is disabled or in a unit test that doesn't register one.
-type DvrStopper = { stop: (id: string) => void }
-let dvrRecorder: DvrStopper | null = null
-/** Register (or clear) the live recorder so DELETE can stop an in-flight ffmpeg. */
-export function registerDvrRecorder(recorder: DvrStopper | null): void {
-  dvrRecorder = recorder
-}
-
-// Schedule a recording. Admin-gated (mutates the DVR queue + will consume disk).
-dvr.post('/recordings', requireAdmin, dvrMutateLimit, async (c) => {
-  let body: Partial<NewRecordingInput>
-  try {
-    body = (await c.req.json()) as Partial<NewRecordingInput>
-  } catch {
-    return c.json({ error: 'invalid_json' }, 400)
-  }
-  const input: NewRecordingInput = {
-    channel_stream_id: Number(body.channel_stream_id),
-    channel_name: String(body.channel_name ?? ''),
-    title: String(body.title ?? ''),
-    start_utc: String(body.start_utc ?? ''),
-    stop_utc: String(body.stop_utc ?? ''),
-  }
-  // Other recordings still holding this channel's tuner slot. Terminal rows are
-  // excluded — a cancelled/completed/failed/missed window is free to record over.
-  const existingForChannel = iptvDb()
-    .raw.prepare(
-      `SELECT start_utc, stop_utc FROM dvr_recordings
-        WHERE channel_stream_id = ? AND status IN ('scheduled','recording')`,
-    )
-    .all(input.channel_stream_id) as Array<{ start_utc: string; stop_utc: string }>
-  const err = validateNewRecording(input, new Date().toISOString(), existingForChannel)
-  if (err) return c.json({ error: err }, 400)
-  const recording = scheduleRecording(iptvDb().raw, input)
-  return c.json({ recording }, 201)
-})
-
-// List all recordings (newest scheduled first). DVR content is recorded
-// live-TV, so the whole surface belongs to the `live` section: a member whose
-// policy denies Live TV must not even browse the recordings (admins exempt),
-// matching requireSection semantics on the IPTV grants.
-dvr.get('/recordings', requireAuth, requireSection('live'), (c) => {
-  return c.json({ recordings: listRecordings(iptvDb().raw) })
-})
-
-// One recording by id.
-dvr.get('/recordings/:id', requireAuth, requireSection('live'), (c) => {
-  const recording = getRecording(iptvDb().raw, c.req.param('id'))
-  if (!recording) return c.json({ error: 'not_found' }, 404)
-  return c.json({ recording })
-})
-
-// Cancel a scheduled/in-flight recording, or delete a terminal one. Both must
-// reclaim resources the DB row alone does not: an in-flight cancel has to stop
-// ffmpeg (the recorder's exit handler then removes the junk partial), and a
-// terminal delete has to remove the completed .ts (otherwise "deleting to free
-// space" frees nothing and DVR_DIR grows unbounded).
-dvr.delete('/recordings/:id', requireAdmin, dvrMutateLimit, (c) => {
-  const id = c.req.param('id')
-  const rec = getRecording(iptvDb().raw, id)
-  if (!rec) return c.json({ error: 'not_found' }, 404)
-  const wasRecording = rec.status === 'recording'
-  const filePath = rec.file_path
-  const outcome = cancelRecording(iptvDb().raw, id)
-  if (!outcome) return c.json({ error: 'not_found' }, 404)
-  if (wasRecording) {
-    // Stop the live ffmpeg NOW (frees the provider connection + slot); its exit
-    // handler removes the partial file once the descriptor is released.
-    dvrRecorder?.stop(id)
-  } else if (outcome === 'deleted' && filePath) {
-    // Terminal row deleted → ffmpeg is long gone, so remove the file directly.
-    try {
-      rmSync(filePath, { force: true })
-    } catch {
-      // Best-effort: a stranded file is a leak, not a delete failure to report.
-    }
-  }
-  return c.json({ status: outcome })
-})
-
-// Mint a playback grant for a completed recording (S7). Cookie/bearer authed —
-// the caller must already be a logged-in member. Returns a `recording`-kind
-// stream token bound to this recording id + the caller's sub, on the cookieless
-// `?t=` play URL a device-token (tvOS/iOS) client can load. Mirrors the VOD
-// grant idiom in routes/iptv.ts: a finite-asset TTL (the on-demand TTL, ~6h —
-// NOT the 300s live TTL), so re-presenting the token on every range GET across
-// the whole recording never expires mid-playback.
-dvr.post('/recordings/:id/grant', requireAuth, requireSection('live'), async (c) => {
-  // DVR captures UNRATED IPTV provider content (no certification), so a rating
-  // cap forbids the grant wholesale — fail closed, exactly as the catchup / VOD
-  // / series grants do (routes/iptv.ts). Without this a rating-capped kid
-  // profile could mint a playable token for recorded live-TV it can't watch
-  // live. Checked before touching the row so existence never leaks either.
-  if (await capBlocksUnrated(c.get('session'))) {
+async function liveGates(c: Context<Env>, capped: boolean): Promise<Response> {
+  const denied = await liveSectionDenied(c)
+  if (denied) return denied
+  if (capped && (await capBlocksUnrated(c.get('session')))) {
     return c.json({ error: 'rating_blocked' }, 403)
   }
-  const id = c.req.param('id')
-  const rec = getRecording(iptvDb().raw, id)
-  if (!rec) return c.json({ error: 'not_found' }, 404)
-  // Only a completed recording with a materialized file is playable — don't
-  // hand out a token that can only 404, mirroring the play route's own gate.
-  if (rec.status !== 'completed' || !rec.file_path) {
-    return c.json({ error: 'not_ready' }, 404)
-  }
-  const { sub } = c.get('session')
-  const token = signStreamToken(env.streamTokenSecret, {
-    kind: RECORDING_KIND,
-    resourceId: recordingResourceId(id),
-    sub,
-    ttlSecs: env.IPTV_ONDEMAND_TOKEN_TTL_SECS,
-  })
-  return c.json({
-    url: `/api/dvr/recordings/${id}/play?t=${token}`,
-    delivery: 'progressive',
-    mime: 'video/mp2t',
-  })
-})
+  return forwardToIptv(c, c.get('session'))
+}
 
-// Auth gate for the play route: accept a `?t=` recording stream token (bound to
-// this exact recording id) so a cookieless device-token client can play; any
-// tokenless request falls back to the session cookie/bearer. Mirrors the
-// `mediaAuth` seam in routes/media.ts (which does the same for /stream/*).
-async function dvrPlayAuth(c: Context<Env, '/recordings/:id/play'>, next: Next) {
+dvr.post('/recordings', requireAdmin, (c) => forwardToIptv(c, c.get('session')))
+dvr.delete('/recordings/:id', requireAdmin, (c) => forwardToIptv(c, c.get('session')))
+dvr.get('/recordings', requireAuth, (c) => liveGates(c, false))
+dvr.get('/recordings/:id', requireAuth, (c) => liveGates(c, false))
+dvr.post('/recordings/:id/grant', requireAuth, (c) => liveGates(c, true))
+
+dvr.get('/recordings/:id/play', async (c) => {
   const token = c.req.query('t')
   if (token) {
-    const id = c.req.param('id')
-    let claims: ReturnType<typeof verifyStreamToken>
-    try {
-      claims = verifyStreamToken(env.streamTokenSecret, token)
-    } catch (err) {
-      return c.json({ error: 'invalid_token', detail: err instanceof Error ? err.message : String(err) }, 401)
-    }
-    // Kind + rid must both match: a token for another kind or another recording
-    // must not unlock this file (no replay tracking — a recording token is
-    // re-presented on every range GET, exactly like the VOD path).
-    if (claims.k !== RECORDING_KIND || claims.rid !== recordingResourceId(id)) {
-      return c.json({ error: 'token_mismatch' }, 401)
-    }
-    // Revocation must take effect immediately: the cookieless ?t= path bypasses
-    // requireAuth's membership reconciliation, so a token minted before the
-    // holder was revoked would otherwise keep streaming for the full on-demand
-    // TTL (~6h). Re-check membership here, matching media.ts / transcode.ts.
-    if (memberStatus(claims.sub) !== 'allowed') {
-      return c.json({ error: 'access_revoked' }, 401)
-    }
-    c.set('session', { sub: claims.sub, username: '', role: 'user' })
-    return next()
+    const sub = verifyStreamTokenMember(c, token)
+    if (typeof sub !== 'string') return sub
+    return forwardToIptv(c, sessionFromSub(sub))
   }
-  // Tokenless → session cookie/bearer fallback. A session-authed caller never
-  // passed the grant's parental gates, so re-apply them here: a rating-capped or
-  // live-excluded profile must not stream a recorded live-TV asset via a plain
-  // cookie any more than via the live / catchup / vod paths. (The ?t= path above
-  // skips this — its token was already gated at grant time, so re-checking would
-  // add a policy read per range GET.)
   const authDenied = await requireAuth(c, async () => {})
   if (authDenied) return authDenied
-  let sectionOk = false
-  const sectionDenied = await requireSection('live')(c, async () => {
-    sectionOk = true
-  })
-  if (!sectionOk) return sectionDenied
-  if (await capBlocksUnrated(c.get('session'))) {
-    return c.json({ error: 'rating_blocked' }, 403)
-  }
-  return next()
-}
-
-// Play back a completed recording (range-serve the local .ts). Accepts either a
-// session cookie/bearer OR a cookieless `?t=` recording stream token (S7), so a
-// device-token tvOS/iOS client — which never holds a cookie — can play.
-dvr.get('/recordings/:id/play', dvrPlayAuth, (c) => {
-  const rec = getRecording(iptvDb().raw, c.req.param('id'))
-  if (!rec || rec.status !== 'completed' || !rec.file_path) {
-    return c.json({ error: 'not_ready' }, 404)
-  }
-  let size: number
-  try {
-    size = statSync(rec.file_path).size
-  } catch {
-    return c.json({ error: 'file_missing' }, 404)
-  }
-  const base = { 'Content-Type': 'video/mp2t', 'Accept-Ranges': 'bytes' }
-  const range = c.req.header('range')
-  const m = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null
-  // Same parse as the trailer route (tmdb.ts); keep the two in step. `bytes=-`
-  // is invalid syntax → ignore the header and serve 200 full (RFC 9110 14.2).
-  if (m && !(m[1] === '' && m[2] === '')) {
-    let start: number
-    let end: number
-    if (m[1] === '') {
-      // suffix range: bytes=-N → the LAST N bytes, not the first N.
-      start = Math.max(0, size - parseInt(m[2], 10))
-      end = size - 1
-    } else {
-      start = parseInt(m[1], 10)
-      // A last-byte-pos past EOF means "to the end", not unsatisfiable.
-      end = m[2] === '' ? size - 1 : Math.min(parseInt(m[2], 10), size - 1)
-    }
-    if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= size) {
-      return new Response(null, { status: 416, headers: { ...base, 'Content-Range': `bytes */${size}` } })
-    }
-    const body = Readable.toWeb(createReadStream(rec.file_path, { start, end })) as ReadableStream
-    return new Response(body, {
-      status: 206,
-      headers: { ...base, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Content-Length': String(end - start + 1) },
-    })
-  }
-  const body = Readable.toWeb(createReadStream(rec.file_path)) as ReadableStream
-  return new Response(body, { status: 200, headers: { ...base, 'Content-Length': String(size) } })
+  return liveGates(c, true)
 })

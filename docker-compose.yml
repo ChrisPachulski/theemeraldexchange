@@ -34,8 +34,7 @@ services:
     # Hardening (audit 9-4): no privilege escalation, drop all Linux caps
     # (none are needed beyond the defaults that stay dropped), read-only root
     # fs. The only writable path is the /app/data bind mount below; /tmp is
-    # supplied as tmpfs for transient writes (IPTV remux scratch lives under
-    # /tmp/iptv-remux by default).
+    # supplied as tmpfs for transient writes (trailer mux scratch).
     security_opt:
       - "no-new-privileges:true"
     cap_drop:
@@ -189,28 +188,9 @@ services:
       # URLs through the backend's /api/transcode proxy. Same service URL
       # media-core itself uses for the grant handoff.
       MEDIA_TRANSCODER_URL: "${MEDIA_TRANSCODER_URL:-http://transcoder:8003}"
-      # mybunny.tv / Xtream Codes — see server/services/xtream.ts and
-      # server/services/iptvSync.ts. With XTREAM_HOST blank, the scheduler
-      # self-skips at boot so non-iptv deploys still work unchanged.
-      XTREAM_HOST: "${XTREAM_HOST:-}"
-      XTREAM_USERNAME: "${XTREAM_USERNAME:-}"
-      XTREAM_PASSWORD: "${XTREAM_PASSWORD:-}"
-      IPTV_DB_PATH: "${IPTV_DB_PATH:-/app/data/iptv.db}"
-      IPTV_MAX_CONCURRENT_STREAMS: "${IPTV_MAX_CONCURRENT_STREAMS:-4}"
-      IPTV_STREAM_TOKEN_TTL_SECS: "${IPTV_STREAM_TOKEN_TTL_SECS:-300}"
-      IPTV_LIST_TIMEOUT_MS: "${IPTV_LIST_TIMEOUT_MS:-30000}"
-      IPTV_SYNC_CRON: "${IPTV_SYNC_CRON:-0 */6 * * *}"
-      IPTV_RECOMMENDER_EXPORT_SECRET: "${IPTV_RECOMMENDER_EXPORT_SECRET:-}"
-      IPTV_REMUX_TMP_DIR: "${IPTV_REMUX_TMP_DIR:-/tmp/iptv-remux}"
-      IPTV_EPG_PATH: "${IPTV_EPG_PATH:-/xmltv.php}"
-      # SQLite temp tables (the EPG sync stages ~300 MB in one) spill to an
-      # unlinked file in TMPDIR, and /tmp here is RAM tmpfs charged to
-      # mem_limit that never shrinks; 2026-10-17 it OOM-killed the backend
-      # mid-sync twice. Keep SQLite's temp files on the data disk instead.
-      SQLITE_TMPDIR: /app/data
-      # Feed checks (server/env.ts): IPTV_FEED_CHECK=0 in .env turns them off.
-      IPTV_FEED_CHECK: "${IPTV_FEED_CHECK:-1}"
-      IPTV_FEED_SWEEP_HOURS_UTC: "${IPTV_FEED_SWEEP_HOURS_UTC:-9-15}"
+      # Live TV + DVR: the iptv service below owns iptv.db and every provider
+      # connection; /api/iptv and /api/dvr forward there.
+      IPTV_SERVICE_URL: "${IPTV_SERVICE_URL:-http://iptv:8004}"
 
   recommender:
     # Context is repo root (not ./recommender) so the Dockerfile can
@@ -296,7 +276,6 @@ services:
       INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET:-}"
       RECOMMENDER_INTERNAL_PRINCIPAL_MODE: "${RECOMMENDER_INTERNAL_PRINCIPAL_MODE:-enforce}"
       HONO_HOST: "${HONO_HOST:-http://backend:3001}"
-      IPTV_RECOMMENDER_EXPORT_SECRET: "${IPTV_RECOMMENDER_EXPORT_SECRET:-}"
       TMDB_READ_ACCESS_TOKEN: "${TMDB_READ_ACCESS_TOKEN:-}"
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
       # The optimizer is the only place Claude runs server-side. Per-user
@@ -382,6 +361,82 @@ services:
       # transcoder service over the docker network (never the host port).
       MEDIA_TRANSCODER_URL: "${MEDIA_TRANSCODER_URL:-http://transcoder:8003}"
       RUST_LOG: "${MEDIA_CORE_LOG:-media_core=info}"
+
+  # ── iptv — Rust live TV / EPG / DVR service ───────────────────────────────
+  # Sole owner of iptv.db and the only process that dials the IPTV provider
+  # (catalog + EPG sync, live/catch-up/VOD streams, the AVPlayer remux, feed
+  # checks, DVR). The backend keeps auth, membership, section and rating gates
+  # and forwards /api/iptv/* and /api/dvr/* here with an internal principal.
+  # Its own container so a media-core deploy or scan restart never drops a live
+  # tune or an in-flight recording, and the provider connection cap lives in
+  # exactly one process. Never exposed publicly.
+  iptv:
+    build:
+      context: .
+      dockerfile: ./crates/iptv/Dockerfile
+      args:
+        # Cap the Rust compile on the shared NAS (see the transcoder's arg).
+        CARGO_BUILD_JOBS: "${CARGO_BUILD_JOBS:-}"
+    image: theemeraldexchange-iptv:latest
+    container_name: exchange-iptv
+    restart: unless-stopped
+    # Past the remux drain (5 s) and the DVR stop (6 s) in main.rs, so a
+    # SIGTERM lets every ffmpeg child exit and an open recording stays resumable.
+    stop_grace_period: 20s
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    read_only: true
+    # Remux segments and feed-check captures (IPTV_REMUX_TMP_DIR=/tmp/iptv-remux).
+    tmpfs:
+      - /tmp
+    # The same ceiling the backend had while it ran this stack in-process.
+    mem_limit: 768m
+    cpus: 1.5
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8004/healthz"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+    ports:
+      - "127.0.0.1:8004:8004"
+    volumes:
+      # iptv.db (+ -wal/-shm), DVR recordings (DVR_DIR=/data/recordings) and the
+      # nightly iptv.db snapshots (DB_BACKUP_DIR=/data/backups). uid 10004.
+      - "/mnt/user/appdata/exchange-backend/iptv:/data"
+    environment:
+      NODE_ENV: production
+      XTREAM_HOST: "${XTREAM_HOST:-}"
+      XTREAM_USERNAME: "${XTREAM_USERNAME:-}"
+      XTREAM_PASSWORD: "${XTREAM_PASSWORD:-}"
+      IPTV_MAX_CONCURRENT_STREAMS: "${IPTV_MAX_CONCURRENT_STREAMS:-4}"
+      IPTV_STREAM_TOKEN_TTL_SECS: "${IPTV_STREAM_TOKEN_TTL_SECS:-300}"
+      IPTV_LIST_TIMEOUT_MS: "${IPTV_LIST_TIMEOUT_MS:-30000}"
+      IPTV_SYNC_CRON: "${IPTV_SYNC_CRON:-0 */6 * * *}"
+      IPTV_EPG_PATH: "${IPTV_EPG_PATH:-/xmltv.php}"
+      # IPTV_FEED_CHECK=0 in .env turns feed checks off.
+      IPTV_FEED_CHECK: "${IPTV_FEED_CHECK:-1}"
+      IPTV_FEED_SWEEP_HOURS_UTC: "${IPTV_FEED_SWEEP_HOURS_UTC:-9-15}"
+      # Stream tokens are minted here and verified by the backend too; the
+      # principal secret and posture match media-core's. Values MUST match the
+      # backend's.
+      STREAM_TOKEN_SECRET: "${STREAM_TOKEN_SECRET}"
+      INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET:-}"
+      MEDIA_INTERNAL_PRINCIPAL_MODE: "${MEDIA_INTERNAL_PRINCIPAL_MODE:-enforce}"
+      # Minted playlist URLs only echo a host under these origins.
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS}"
+      # A qualifying live/VOD watch is posted to the recommender as `watched`.
+      USE_LOCAL_RECOMMENDER: "${USE_LOCAL_RECOMMENDER:-0}"
+      RECOMMENDER_URL: "${RECOMMENDER_URL:-http://recommender:8000}"
+      RECOMMENDER_EVENT_SECRET: "${RECOMMENDER_EVENT_SECRET:-}"
+      # Server-side errors go to the same Glitchtip project as the backend's.
+      GLITCHTIP_DSN: "${EEX_TELEMETRY_DSN_INTERNAL:-}"
+      # Escape hatch for the first boot on a moved iptv.db whose ledger
+      # checksums differ from crates/iptv/migrations (DEPLOY.md). Leave unset.
+      ALLOW_MIGRATION_CHECKSUM_MISMATCH: "${ALLOW_MIGRATION_CHECKSUM_MISMATCH:-}"
+      RUST_LOG: "${IPTV_LOG:-iptv=info}"
 
   # ── transcoder (M4) — Rust HLS transcode service ──────────────────────────
   # Fallback path when a client cannot direct-play a library file. media-core

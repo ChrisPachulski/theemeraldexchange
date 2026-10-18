@@ -4,9 +4,8 @@
 // process if ffmpeg is absent or below the minimum version required for
 // HLS Low-Latency features (v6.0, assumed by the M4 transcoder).
 //
-// §13.4 — required in M1.5, not M4-era.  M1 already calls spawn('ffmpeg')
-// in iptvRemux.ts; a missing or out-of-version binary currently fails
-// silently at runtime (ENOENT on spawn).
+// §13.4 — the trailer muxer (ytmux.ts) spawns ffmpeg; a missing or
+// out-of-version binary would otherwise fail silently at runtime (ENOENT).
 
 import { execFileSync } from 'node:child_process'
 import { createLogger } from './logger.js'

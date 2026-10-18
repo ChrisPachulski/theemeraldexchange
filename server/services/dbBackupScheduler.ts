@@ -1,6 +1,5 @@
 // Cron registration for the scheduled DB backup (finding 14-4).
 //
-// Kept separate from iptvScheduler so it runs even on IPTV_DISABLED builds —
 // server.db durability is NOT IPTV-gated (it holds server_id + device tokens).
 // Returns the scheduled task so graceful shutdown can .stop() it (finding 14-2).
 

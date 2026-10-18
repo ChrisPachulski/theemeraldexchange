@@ -19,6 +19,7 @@ actual Dockerfiles by `server/licensing.test.ts`, so it cannot silently drift.
 | backend server | `Dockerfile` | Static build copied from `mwader/static-ffmpeg:7.1` | GPL-3.0-or-later |
 | media-core | `crates/media-core/Dockerfile` | Static build copied from `mwader/static-ffmpeg:7.1` | GPL-3.0-or-later |
 | transcoder | `crates/transcoder/Dockerfile` | Debian bookworm `ffmpeg` package (dynamically linked, installed via apt) | GPL-2.0-or-later |
+| iptv | `crates/iptv/Dockerfile` | Debian bookworm `ffmpeg` package (dynamically linked, installed via apt) | GPL-2.0-or-later |
 
 ### Server and media-core images — static FFmpeg (GPL-3.0-or-later)
 
@@ -41,7 +42,12 @@ General Public License, version 3 or later (GPL-3.0-or-later)**. The GPL-3.0
 terms therefore govern the FFmpeg and FFprobe binaries as distributed in these
 two images.
 
-### Transcoder image — Debian's dynamically-linked FFmpeg (GPL-2.0-or-later)
+### Transcoder and iptv images — Debian's dynamically-linked FFmpeg (GPL-2.0-or-later)
+
+The iptv image (`crates/iptv/Dockerfile`) installs the same Debian bookworm
+`ffmpeg` package (CPU only: no VAAPI or Vulkan packages), so everything below
+about the Debian build, its GPL-2.0-or-later license and its corresponding
+source applies to it as well.
 
 The transcoder image (`crates/transcoder/Dockerfile`) switched away from the
 static build on 2026-06-08 and does **not** contain `mwader/static-ffmpeg`
@@ -78,8 +84,9 @@ by package version. The written offer below covers these binaries as well.
 The project's own software invokes FFmpeg and FFprobe **only as a separate
 process** — an arms-length command-line invocation over a child process, with no
 linking (neither static nor dynamic) against any FFmpeg, `libx264`, or `libx265`
-library. This is true in all three images, including the transcoder (it spawns
-`/usr/bin/ffmpeg` per session). Consequently the GPL obligations attach to the
+library. This is true in every image, including the transcoder (it spawns
+`/usr/bin/ffmpeg` per session) and iptv (it spawns `/usr/bin/ffmpeg` per live
+remux, feed check and recording). Consequently the GPL obligations attach to the
 distributed FFmpeg binaries and libraries alone and do **not** extend to the
 project's first-party source code, which remains proprietary under `LICENSE`.
 
@@ -110,7 +117,7 @@ projects:
 - static-ffmpeg packaging (pinned tag `7.1`, server + media-core images):
   https://github.com/wader/static-ffmpeg
 - FFmpeg project source: https://ffmpeg.org/
-- Debian source packages (transcoder image): `apt-get source ffmpeg` /
+- Debian source packages (transcoder and iptv images): `apt-get source ffmpeg` /
   https://snapshot.debian.org/ (permanent, per-version archive of every Debian
   package, including `ffmpeg`, `x264`, `x265`, `intel-media-driver`, and
   `libva`)

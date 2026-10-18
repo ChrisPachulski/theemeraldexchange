@@ -268,7 +268,6 @@ doesn't attach cookies cross-origin to them.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/api/iptv/health` | session | Upstream Xtream account health (expiry, connection cap, status). (`iptv.ts:153`) |
 | GET | `/api/iptv/sessions` | session | Caller's own active stream sessions (admin sees everyone's). (`iptv.ts:250`) |
 | DELETE | `/api/iptv/sessions/:sessionId` | session, self or admin | Force-release a stream session; also tears down its live remux ffmpeg if applicable. (`iptv.ts:281`) |
 | GET | `/api/iptv/categories` | session + section(live) | Category list for `live`/`vod`/`series`. (`iptv.ts:366`) |

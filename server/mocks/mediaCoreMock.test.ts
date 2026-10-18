@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { app } from './mediaCoreMock.js'
 import { MOVIES } from './fixtures.js'
 
-// In-process tests against the Hono mock — no listening socket, mirroring
-// server/services/iptvEpgQuery.test.ts's app.request(...) style. These pin the
+// In-process tests against the Hono mock — no listening socket, in the
+// app.request(...) style. These pin the
 // CONTRACT the backend proxy (server/routes/media.ts) and the SPA
 // (src/lib/api/media.ts) depend on; a shape drift here is the loud signal that
 // the mock fell behind media-core.

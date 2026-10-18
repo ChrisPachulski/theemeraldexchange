@@ -3,30 +3,31 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-// Fresh server.db + iptv.db + JSON stores per run so the deletes are observable.
+// Fresh server.db + JSON stores per run so the deletes are observable; IPTV
+// state lives in the iptv service, stubbed locally.
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'eex-account-test-'))
 process.env.SERVER_DB_PATH = path.join(tmpDir, 'server.db')
-process.env.IPTV_DB_PATH = path.join(tmpDir, 'iptv.db')
 process.env.ADMINS = 'legacy-admin'
 
 const { mintDeviceToken: mintRawDeviceToken, _resetDeviceKeyForTests } = await import('../session.js')
 const { closeServerDb, serverDb } = await import('../services/serverDb.js')
-const { iptvDb } = await import('../services/iptvDbSingleton.js')
 const { env } = await import('../env.js')
 const { getAllPolicies, setPolicy, defaultPolicy, _setUserPoliciesPathForTests } = await import('../services/userPolicies.js')
 const { getUserFeedback, setLike, _setUserFeedbackPathForTests } = await import('../services/userFeedback.js')
 const { getWatchlist, upsertWatchlist, _setUserWatchlistPathForTests } = await import('../services/userWatchlist.js')
 const { app } = await import('../app.js')
+const { startIptvStub } = await import('../test/iptvStub.js')
 
 _setUserPoliciesPathForTests(path.join(tmpDir, 'policies.json'))
 _setUserFeedbackPathForTests(path.join(tmpDir, 'feedback.json'))
 _setUserWatchlistPathForTests(path.join(tmpDir, 'watchlist.json'))
+const iptvStub = await startIptvStub()
 
-afterAll(() => {
+afterAll(async () => {
   delete process.env.ADMINS
   delete process.env.SERVER_DB_PATH
-  delete process.env.IPTV_DB_PATH
   closeServerDb()
+  await iptvStub.close()
   fs.rmSync(tmpDir, { recursive: true, force: true })
 })
 
@@ -85,7 +86,7 @@ describe('DELETE /api/account/self', () => {
     serverDb().raw.exec(
       'DELETE FROM device_token_revocations; DELETE FROM device_tokens; DELETE FROM invites; DELETE FROM members; DELETE FROM webauthn_credentials; DELETE FROM user_api_keys;',
     )
-    iptvDb().raw.exec('DELETE FROM iptv_favorites; DELETE FROM iptv_watch_history;')
+    iptvStub.reset()
     ;(env as Record<string, unknown>).adminSubs = []
   })
 
@@ -106,9 +107,6 @@ describe('DELETE /api/account/self', () => {
       )
       .run(USER.sub)
     serverDb().raw.prepare(`INSERT INTO user_api_keys (sub, ciphertext, updated_at) VALUES (?, 'x', datetime('now'))`).run(USER.sub)
-    iptvDb().stmts.addFavorite.run({ sub: USER.sub, kind: 'live', item_id: 7, added_ts: 1 })
-    iptvDb().stmts.putHistory.run({ sub: USER.sub, kind: 'vod', item_id: 9, position_secs: 30, duration_secs: 60, watched_at: 1, completed: 0 })
-    iptvDb().stmts.addFavorite.run({ sub: ADMIN.sub, kind: 'live', item_id: 7, added_ts: 1 })
     await setPolicy(USER.sub, defaultPolicy())
     await setPolicy(ADMIN.sub, defaultPolicy())
     await setLike(USER.sub, 'movie', 550, 'Fight Club')
@@ -125,9 +123,11 @@ describe('DELETE /api/account/self', () => {
     const invite = serverDb().raw.prepare(`SELECT revoked_at FROM invites WHERE issued_by = ?`).get(USER.sub) as { revoked_at: string | null }
     expect(invite.revoked_at).not.toBeNull()
     expect(serverDb().raw.prepare(`SELECT COUNT(*) AS n FROM user_api_keys WHERE sub = ?`).get(USER.sub)).toEqual({ n: 0 })
-    expect(iptvDb().stmts.getFavorites.all(USER.sub)).toEqual([])
-    expect(iptvDb().stmts.getHistory.all(USER.sub, 10)).toEqual([])
-    expect(iptvDb().stmts.getFavorites.all(ADMIN.sub)).toHaveLength(1)
+    // Playlist tokens, favorites and history: one erase call for this member only.
+    expect(iptvStub.calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      `DELETE /internal/members/${encodeURIComponent(USER.sub)}`,
+    ])
+    expect(iptvStub.calls[0].headers.authorization).toMatch(/^Bearer /)
     expect(Object.keys(await getAllPolicies())).toEqual([ADMIN.sub])
     expect((await getUserFeedback(USER.sub)).movie.liked).toEqual([])
     expect((await getWatchlist(USER.sub)).movie).toEqual([])

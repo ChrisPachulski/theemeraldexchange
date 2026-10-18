@@ -109,6 +109,20 @@ jobs:
           done
           echo "transcoder ✓"
 
+      - name: iptv boots (no provider configured) and answers /healthz
+        run: |
+          B="${{ steps.img.outputs.base }}"
+          docker run -d --name iptv --network host \
+            -e IPTV_HOST=0.0.0.0 -e IPTV_PORT=8004 \
+            -e STREAM_TOKEN_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')" \
+            -e INTERNAL_PRINCIPAL_SECRET="$(head -c 48 /dev/urandom | base64 | tr -d '\n')" \
+            "$B-iptv:$TAG"
+          for i in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8004/healthz && break || sleep 2
+            [ "$i" = 60 ] && { docker logs iptv; exit 1; }
+          done
+          echo "iptv ✓"
+
       - name: recommender boots and answers /health
         run: |
           B="${{ steps.img.outputs.base }}"

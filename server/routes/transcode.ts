@@ -214,7 +214,7 @@ transcode.all('/*', async (c) => {
  *     variant grey-boxes the session; the I-frame playlist silently drops
  *     AVPlayer's scrubbing thumbnails.
  *
- *  Mirrors the URI-attribute rewrite in `server/services/iptvHlsRewrite.ts`
+ *  Mirrors the IPTV URI-attribute rewrite (`crates/iptv/src/hls.rs`)
  *  (tag-agnostic, both quote styles, all occurrences) rather than a hardcoded
  *  tag list, so a new rendition tag needs no change here. The transcoder emits
  *  relative names with no query, so a plain `?t=` is always correct. Exported

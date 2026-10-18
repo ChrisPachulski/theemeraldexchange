@@ -1,0 +1,222 @@
+{
+ "why": "Full mock sync shared by gen-epg-goldens.ts (TS stack) and the Rust sync test: panel catalog, provider XMLTV and two external feeds (ext-b is served gzipped), two syncs.",
+ "now": "2026-10-15T03:20:00.000Z",
+ "live_categories": [
+  {
+   "category_id": 1,
+   "category_name": "US",
+   "parent_id": 0
+  }
+ ],
+ "live_streams": [
+  {
+   "stream_id": 5866,
+   "num": 5866,
+   "name": "US Showtime West (S)",
+   "epg_channel_id": "showtimewest.us",
+   "category_id": 1
+  },
+  {
+   "stream_id": 400124927,
+   "num": 400124927,
+   "name": "US: SHOWTIME WEST",
+   "epg_channel_id": null,
+   "category_id": 1
+  },
+  {
+   "stream_id": 200163566,
+   "num": 200163566,
+   "name": "US: Showtime",
+   "epg_channel_id": "showtime.us",
+   "category_id": 1
+  },
+  {
+   "stream_id": 200163548,
+   "num": 200163548,
+   "name": "US: Cinemax Classics",
+   "epg_channel_id": "cinemaxclassics.us",
+   "category_id": 1
+  },
+  {
+   "stream_id": 200168129,
+   "num": 200168129,
+   "name": "US: FOX 13 Memphis (WHBQ)",
+   "epg_channel_id": "fox.us",
+   "category_id": 1
+  },
+  {
+   "stream_id": 200168495,
+   "num": 200168495,
+   "name": "US: MY 38 Boston (WSBK)",
+   "epg_channel_id": "aljazeera.arabic.net",
+   "category_id": 1
+  },
+  {
+   "stream_id": 200168388,
+   "num": 200168388,
+   "name": "US: FOX 13 Seattle (KCPQ)",
+   "epg_channel_id": "aljazeera.arabic.net",
+   "category_id": 1
+  },
+  {
+   "stream_id": 7,
+   "num": 7,
+   "name": "US: Al Jazeera Arabic",
+   "epg_channel_id": "aljazeera.arabic.net",
+   "category_id": 1
+  },
+  {
+   "stream_id": 200168199,
+   "num": 200168199,
+   "name": "US: ABC 3 Mobile (WEAR)",
+   "epg_channel_id": "dubai.ae",
+   "category_id": 1
+  },
+  {
+   "stream_id": 36206,
+   "num": 36206,
+   "name": "US CMT (A)",
+   "epg_channel_id": "cmt.us",
+   "category_id": 1
+  },
+  {
+   "stream_id": 67730,
+   "num": 67730,
+   "name": "US CMT (East) (H)",
+   "epg_channel_id": "cmt.us",
+   "category_id": 1
+  },
+  {
+   "stream_id": 30800,
+   "num": 30800,
+   "name": "US CMT (S)",
+   "epg_channel_id": "cmt.east.us",
+   "category_id": 1
+  },
+  {
+   "stream_id": 1,
+   "num": 1,
+   "name": "UK: CMT",
+   "epg_channel_id": "cmt.uk",
+   "category_id": 1
+  },
+  {
+   "stream_id": 200168354,
+   "num": 200168354,
+   "name": "US: NBC 11 Minneapolis (KARE)",
+   "epg_channel_id": "dubai.ae",
+   "category_id": 1
+  },
+  {
+   "stream_id": 2,
+   "num": 2,
+   "name": "US: NBC 2 Orlando (WESH)",
+   "epg_channel_id": "wesh-ld.us_locals1",
+   "category_id": 1
+  },
+  {
+   "stream_id": 3,
+   "num": 3,
+   "name": "US NBC 2 (WESH) Orlando (H)",
+   "epg_channel_id": null,
+   "category_id": 1
+  },
+  {
+   "stream_id": 4,
+   "num": 4,
+   "name": "US: FOX 7 Miami (WSVN)",
+   "epg_channel_id": null,
+   "category_id": 1
+  },
+  {
+   "stream_id": 100,
+   "num": 100,
+   "name": "US: ESPN",
+   "epg_channel_id": "espn.us",
+   "category_id": 1
+  },
+  {
+   "stream_id": 200,
+   "num": 200,
+   "name": "US: CNN",
+   "epg_channel_id": null,
+   "category_id": 1
+  },
+  {
+   "stream_id": 8,
+   "num": 8,
+   "name": "US: HGTV West",
+   "epg_channel_id": "hgtvwest.us",
+   "category_id": 1
+  },
+  {
+   "stream_id": 9,
+   "num": 9,
+   "name": "CINEBOX: ACTION",
+   "epg_channel_id": null,
+   "category_id": 1
+  },
+  {
+   "stream_id": 10,
+   "num": 10,
+   "name": "US: Oxygen (West)",
+   "epg_channel_id": null,
+   "category_id": 1
+  },
+  {
+   "stream_id": 11,
+   "num": 11,
+   "name": "US: X",
+   "epg_channel_id": "x.us",
+   "category_id": 1
+  },
+  {
+   "stream_id": 12,
+   "num": 12,
+   "name": "US: Starz Encore Suspense",
+   "epg_channel_id": "starzencoresuspense.us",
+   "category_id": 1
+  },
+  {
+   "stream_id": 13,
+   "num": 13,
+   "name": "US: Outdoor Channel",
+   "epg_channel_id": "outdoorchannel.us",
+   "category_id": 1
+  },
+  {
+   "stream_id": 14,
+   "num": 14,
+   "name": "US: DISNEY JR EAST HD",
+   "epg_channel_id": null,
+   "category_id": 1
+  },
+  {
+   "stream_id": 15,
+   "num": 15,
+   "name": "CA: Disney Junior",
+   "epg_channel_id": null,
+   "category_id": 1
+  }
+ ],
+ "external_paths": [
+  "/ext-a.xml",
+  "/ext-b.xml.gz"
+ ],
+ "syncs": [
+  {
+   "provider_xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv generator-info-name=\"scenario\">\n<channel id=\"showtime.us\"><display-name>Showtime</display-name></channel>\n<channel id=\"showtime2west.us\"><display-name>Showtime 2 West</display-name></channel>\n<channel id=\"showtimewest.us\"><display-name>Showtime West</display-name></channel>\n<channel id=\"cmt.us\"></channel>\n<channel id=\"cmt.uk\"></channel>\n<channel id=\"cmt.hd.us2\"><display-name>CMT</display-name></channel>\n<channel id=\"nbckare.us\"></channel>\n<channel id=\"nbckare11minneapolis.us\"></channel>\n<channel id=\"dubai.ae\"><display-name>Dubai TV</display-name></channel>\n<channel id=\"aljazeera.arabic.net\"><display-name>Al Jazeera Arabic</display-name></channel>\n<channel id=\"fox.us\"><display-name>FOX</display-name></channel>\n<channel id=\"outdoorchannel.us\"><display-name>Outdoor Channel</display-name></channel>\n<channel id=\"cinemaxclassics.us\"><display-name>Cinemax Classics</display-name></channel>\n<channel id=\"hgtv.us\"><display-name>HGTV</display-name></channel>\n<channel id=\"oxygen.us\"><display-name>Oxygen</display-name></channel>\n<channel id=\"oxygenwest.us\"></channel>\n<channel id=\"starzencoresuspense.us\"><display-name>Starz Encore Suspense</display-name></channel>\n<channel id=\"espn.us\"><display-name>ESPN</display-name></channel>\n<channel id=\"x.us\"><display-name>X</display-name></channel>\n<channel id=\"disneyjunior.us\"></channel>\n<channel id=\"disneyjunior.ca\"></channel>\n<programme start=\"20261015000000 +0000\" stop=\"20261015021500 +0000\" channel=\"showtime.us\"><title>V for Vendetta</title></programme>\n<programme start=\"20261015021500 +0000\" stop=\"20261015041500 +0000\" channel=\"showtime.us\"><title>Patriot Games</title></programme>\n<programme start=\"20261015023900 +0000\" stop=\"20261015040100 +0000\" channel=\"cinemaxclassics.us\"><title>Godzilla vs. Megalon</title></programme>\n<programme start=\"20261015040100 +0000\" stop=\"20261015052300 +0000\" channel=\"cinemaxclassics.us\"><title>Godzilla Raids Again</title></programme>\n<programme start=\"20261015040000 +0100\" stop=\"20261015050000 +0100\" channel=\"hgtv.us\"><title>Fixer Upper</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015050000 +0000\" channel=\"x.us\"><title>Old movie</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015050000 +0000\" channel=\"showtime2west.us\"><title>The Return</title></programme>\n<programme start=\"20261015000000 +0000\" stop=\"20261015040000 +0000\" channel=\"fox.us\"><title>No Match Today</title></programme>\n<programme start=\"20261015020000 +0000\" stop=\"20261015100000 +0000\" channel=\"fox.us\"><title>SIGN OFF</title></programme>\n<programme start=\"20261015020500 +0000\" stop=\"20261015060500 +0000\" channel=\"outdoorchannel.us\"><title>Channel Off Air</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015033000 +0000\" channel=\"outdoorchannel.us\"><title>Guns &amp; Ammo TV</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"cmt.us\"><title>CMT Music</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"cmt.uk\"><title>UK Hits</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"cmt.hd.us2\"><title>Hot 20</title></programme>\n<programme start=\"20261014050000 +0000\" stop=\"20261014060000 +0000\" channel=\"nbckare11minneapolis.us\"><title>KARE 11 News at 10</title></programme>\n<programme start=\"20261016110000 +0000\" stop=\"20261016120000 +0000\" channel=\"nbckare.us\"><title>KARE 11 Sunrise</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"dubai.ae\"><title>Shark Tank :Season 4</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015033000 +0000\" channel=\"aljazeera.arabic.net\"><title>Provider</title></programme>\n<programme start=\"20261015020000 +0000\" stop=\"20261015030000 +0000\" channel=\"hgtv.us\"><title>House Hunters</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"oxygen.us\"><title>Snapped</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"oxygenwest.us\"><title>Snapped West</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015042600 +0000\" channel=\"starzencoresuspense.us\"><title>Unknown</title><desc><![CDATA[When five men awake in a locked warehouse, none of them can remember his identity.]]></desc></programme>\n<programme start=\"20261013120000 +0000\" stop=\"20261013130000 +0000\" channel=\"espn.us\"><title>Ancient</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"disneyjunior.us\"><title>Bluey</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"disneyjunior.ca\"><title>Bluey CA</title></programme>\n<programme start=\"20261023000000 +0000\" stop=\"20261023010000 +0000\" channel=\"showtime.us\"><title>Beyond the horizon</title></programme>\n</tv>\n",
+   "external": {
+    "/ext-a.xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv generator-info-name=\"scenario\">\n<channel id=\"external.espn\"><display-name>ESPN</display-name></channel>\n<channel id=\"showtimewest.us\"><display-name>Showtime West</display-name></channel>\n<channel id=\"aljazeera.arabic.net\"><display-name>Al Jazeera Arabic</display-name></channel>\n<channel id=\"wesh-dt.us_locals1\"><display-name>WESH-DT</display-name></channel>\n<channel id=\"wesh-ld.us_locals1\"><display-name>WESH-LD</display-name></channel>\n<channel id=\"wsvn-dt.us_locals1\"><display-name>WSVN-DT</display-name></channel>\n<channel id=\"wsvn-dt2.us_locals1\"><display-name>WSVN-DT2</display-name></channel>\n<channel id=\"dubai.ae\"><display-name>Dubai TV</display-name></channel>\n<channel id=\"unwanted.zz\"><display-name>Nobody Here</display-name></channel>\n<programme start=\"20261015030000 +0000\" stop=\"20261015050000 +0000\" channel=\"showtimewest.us\"><title>Real West</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"external.espn\"><title>Current external game</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"aljazeera.arabic.net\"><title>External</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"wesh-ld.us_locals1\"><title>WESH 2 News</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"wsvn-dt.us_locals1\"><title>7 News</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015050000 +0000\" channel=\"wsvn-dt2.us_locals1\"><title>Cozi</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"dubai.ae\"><title>Dubai Tonight</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"unwanted.zz\"><title>Nobody</title></programme>\n</tv>\n",
+    "/ext-b.xml.gz": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv generator-info-name=\"scenario\">\n<channel id=\"cnn.us\"><display-name>CNN</display-name></channel>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"cnn.us\"><title>CNN Newsroom</title></programme>\n</tv>\n"
+   }
+  },
+  {
+   "provider_xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv generator-info-name=\"scenario\">\n<channel id=\"showtime.us\"><display-name>Showtime</display-name></channel>\n<channel id=\"showtime2west.us\"><display-name>Showtime 2 West</display-name></channel>\n<channel id=\"showtimewest.us\"><display-name>Showtime West</display-name></channel>\n<channel id=\"cmt.us\"></channel>\n<channel id=\"cmt.uk\"></channel>\n<channel id=\"cmt.hd.us2\"><display-name>CMT</display-name></channel>\n<channel id=\"nbckare.us\"></channel>\n<channel id=\"nbckare11minneapolis.us\"></channel>\n<channel id=\"dubai.ae\"><display-name>Dubai TV</display-name></channel>\n<channel id=\"aljazeera.arabic.net\"><display-name>Al Jazeera Arabic</display-name></channel>\n<channel id=\"fox.us\"><display-name>FOX</display-name></channel>\n<channel id=\"outdoorchannel.us\"><display-name>Outdoor Channel</display-name></channel>\n<channel id=\"cinemaxclassics.us\"><display-name>Cinemax Classics</display-name></channel>\n<channel id=\"hgtv.us\"><display-name>HGTV</display-name></channel>\n<channel id=\"oxygen.us\"><display-name>Oxygen</display-name></channel>\n<channel id=\"oxygenwest.us\"></channel>\n<channel id=\"starzencoresuspense.us\"><display-name>Starz Encore Suspense</display-name></channel>\n<channel id=\"espn.us\"><display-name>ESPN</display-name></channel>\n<channel id=\"x.us\"><display-name>X</display-name></channel>\n<channel id=\"disneyjunior.us\"></channel>\n<channel id=\"disneyjunior.ca\"></channel>\n<programme start=\"20261015000000 +0000\" stop=\"20261015021500 +0000\" channel=\"showtime.us\"><title>V for Vendetta</title></programme>\n<programme start=\"20261015021500 +0000\" stop=\"20261015041500 +0000\" channel=\"showtime.us\"><title>Sleeping Dogs</title></programme>\n<programme start=\"20261015015600 +0000\" stop=\"20261015033200 +0000\" channel=\"cinemaxclassics.us\"><title>Just Friends</title></programme>\n<programme start=\"20261015033200 +0000\" stop=\"20261015045800 +0000\" channel=\"cinemaxclassics.us\"><title>Son of Godzilla</title></programme>\n<programme start=\"20261015045800 +0000\" stop=\"20261015064500 +0000\" channel=\"cinemaxclassics.us\"><title>The Usual Suspects</title></programme>\n<programme start=\"20261014231000 -0400\" stop=\"20261015000000 -0400\" channel=\"hgtv.us\"><title>Love It or List It</title><desc>Moved ten minutes</desc></programme>\n<programme start=\"20261015033000 +0000\" stop=\"20261015053000 +0000\" channel=\"x.us\"><title>Rescheduled movie</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015050000 +0000\" channel=\"showtime2west.us\"><title>The Return</title></programme>\n<programme start=\"20261015000000 +0000\" stop=\"20261015040000 +0000\" channel=\"fox.us\"><title>No Match Today</title></programme>\n<programme start=\"20261015020000 +0000\" stop=\"20261015100000 +0000\" channel=\"fox.us\"><title>SIGN OFF</title></programme>\n<programme start=\"20261015020500 +0000\" stop=\"20261015060500 +0000\" channel=\"outdoorchannel.us\"><title>Channel Off Air</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015033000 +0000\" channel=\"outdoorchannel.us\"><title>Guns &amp; Ammo TV</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"cmt.us\"><title>CMT Music</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"cmt.uk\"><title>UK Hits</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"cmt.hd.us2\"><title>Hot 20</title></programme>\n<programme start=\"20261014050000 +0000\" stop=\"20261014060000 +0000\" channel=\"nbckare11minneapolis.us\"><title>KARE 11 News at 10</title></programme>\n<programme start=\"20261016110000 +0000\" stop=\"20261016120000 +0000\" channel=\"nbckare.us\"><title>KARE 11 Sunrise</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"dubai.ae\"><title>Shark Tank :Season 4</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015033000 +0000\" channel=\"aljazeera.arabic.net\"><title>Provider</title></programme>\n<programme start=\"20261015020000 +0000\" stop=\"20261015030000 +0000\" channel=\"hgtv.us\"><title>House Hunters</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"oxygen.us\"><title>Snapped</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"oxygenwest.us\"><title>Snapped West</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015042600 +0000\" channel=\"starzencoresuspense.us\"><title>Unknown</title><desc><![CDATA[When five men awake in a locked warehouse, none of them can remember his identity.]]></desc></programme>\n<programme start=\"20261013120000 +0000\" stop=\"20261013130000 +0000\" channel=\"espn.us\"><title>Ancient</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"disneyjunior.us\"><title>Bluey</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"disneyjunior.ca\"><title>Bluey CA</title></programme>\n<programme start=\"20261023000000 +0000\" stop=\"20261023010000 +0000\" channel=\"showtime.us\"><title>Beyond the horizon</title></programme>\n</tv>\n",
+   "external": {
+    "/ext-a.xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv generator-info-name=\"scenario\">\n<channel id=\"external.espn\"><display-name>ESPN</display-name></channel>\n<channel id=\"showtimewest.us\"><display-name>Showtime West</display-name></channel>\n<channel id=\"aljazeera.arabic.net\"><display-name>Al Jazeera Arabic</display-name></channel>\n<channel id=\"wesh-dt.us_locals1\"><display-name>WESH-DT</display-name></channel>\n<channel id=\"wesh-ld.us_locals1\"><display-name>WESH-LD</display-name></channel>\n<channel id=\"wsvn-dt.us_locals1\"><display-name>WSVN-DT</display-name></channel>\n<channel id=\"wsvn-dt2.us_locals1\"><display-name>WSVN-DT2</display-name></channel>\n<channel id=\"dubai.ae\"><display-name>Dubai TV</display-name></channel>\n<channel id=\"unwanted.zz\"><display-name>Nobody Here</display-name></channel>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"external.espn\"><title>Current external game</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"aljazeera.arabic.net\"><title>External</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"wesh-ld.us_locals1\"><title>WESH 2 News</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"wsvn-dt.us_locals1\"><title>7 News</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015050000 +0000\" channel=\"wsvn-dt2.us_locals1\"><title>Cozi</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"dubai.ae\"><title>Dubai Tonight</title></programme>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"unwanted.zz\"><title>Nobody</title></programme>\n</tv>\n",
+    "/ext-b.xml.gz": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<tv generator-info-name=\"scenario\">\n<channel id=\"cnn.us\"><display-name>CNN</display-name></channel>\n<programme start=\"20261015030000 +0000\" stop=\"20261015040000 +0000\" channel=\"cnn.us\"><title>CNN Newsroom</title></programme>\n</tv>\n"
+   }
+  }
+ ]
+}

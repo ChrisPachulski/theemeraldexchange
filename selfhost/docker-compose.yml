@@ -7,6 +7,7 @@
 #   backend      — API + the web app served same-origin at http://<host>:3001
 #   media-core   — library scanner/server (point MEDIA_PATH at your files)
 #   transcoder   — HLS transcoding (CPU by default; VAAPI opt-in below)
+#   iptv         — live TV, guide and DVR (idle until XTREAM_* are set)
 #   recommender  — local-first recommendations (your taste never leaves the box)
 #
 # Optional capabilities are compose profiles (set COMPOSE_PROFILES in .env):
@@ -88,11 +89,8 @@ services:
       # Richer metadata/discovery (free key from themoviedb.org)
       TMDB_READ_ACCESS_TOKEN: "${TMDB_READ_ACCESS_TOKEN:-}"
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
-      # Live TV (Xtream/IPTV provider) — Live tab hides when unset
-      XTREAM_HOST: "${XTREAM_HOST:-}"
-      XTREAM_USERNAME: "${XTREAM_USERNAME:-}"
-      XTREAM_PASSWORD: "${XTREAM_PASSWORD:-}"
-      IPTV_DB_PATH: "/app/data/iptv.db"
+      # Live TV + DVR are served by the iptv service below.
+      IPTV_SERVICE_URL: "http://iptv:8004"
       # Media library + local recommendations: on by default (the point of
       # the product). MEDIA_PATH is set in .env by install.sh.
       USE_MEDIA_CORE: "1"
@@ -133,6 +131,38 @@ services:
       TMDB_API_KEY: "${TMDB_API_KEY:-}"
       MEDIA_TRANSCODER_URL: "http://transcoder:8003"
       RUST_LOG: "media_core=info"
+
+  iptv:
+    image: ghcr.io/chrispachulski/theemeraldexchange-iptv:latest
+    container_name: emerald-iptv
+    restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: "${IPTV_MEMORY_LIMIT:-768m}"
+    cpus: "${IPTV_CPUS:-1.5}"
+    pids_limit: "${IPTV_PIDS_LIMIT:-256}"
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      # iptv.db, DVR recordings and nightly iptv.db snapshots.
+      - iptv-data:/data
+    environment:
+      NODE_ENV: production
+      # Live TV (Xtream/IPTV provider) — Live tab hides when unset
+      XTREAM_HOST: "${XTREAM_HOST:-}"
+      XTREAM_USERNAME: "${XTREAM_USERNAME:-}"
+      XTREAM_PASSWORD: "${XTREAM_PASSWORD:-}"
+      STREAM_TOKEN_SECRET: "${STREAM_TOKEN_SECRET}"
+      INTERNAL_PRINCIPAL_SECRET: "${INTERNAL_PRINCIPAL_SECRET}"
+      MEDIA_INTERNAL_PRINCIPAL_MODE: "enforce"
+      USE_LOCAL_RECOMMENDER: "1"
+      RECOMMENDER_URL: "http://recommender:8000"
+      RECOMMENDER_EVENT_SECRET: "${RECOMMENDER_EVENT_SECRET}"
+      RUST_LOG: "iptv=info"
 
   transcoder:
     image: ghcr.io/chrispachulski/theemeraldexchange-transcoder:latest
@@ -227,6 +257,7 @@ services:
 volumes:
   backend-data:
   media-core-db:
+  iptv-data:
   recommender-db:
   transcoder-scratch:
   tailscale-state:
