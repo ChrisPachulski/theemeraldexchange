@@ -77,6 +77,9 @@ pub fn open(path: &Path) -> Result<(impl ImageDecoder, u32), ArtworkError> {
     if size > MAX_SOURCE_BYTES {
         return Err(too_large());
     }
+    if is_webp(path)? && !webp_frames_fit(&std::fs::read(path)?) {
+        return Err(too_large());
+    }
     let mut reader =
         ImageReader::new(BufReader::new(std::fs::File::open(path)?)).with_guessed_format()?;
     let mut limits = Limits::default();
@@ -95,6 +98,72 @@ pub fn open(path: &Path) -> Result<(impl ImageDecoder, u32), ArtworkError> {
     limits.max_alloc = Some(cost << 20);
     decoder.set_limits(limits)?;
     Ok((decoder, cost as u32))
+}
+
+fn is_webp(path: &Path) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut head = [0u8; 12];
+    let n = std::fs::File::open(path)?.read(&mut head)?;
+    Ok(n == 12 && &head[..4] == b"RIFF" && &head[8..] == b"WEBP")
+}
+
+/// Whether every frame in a WebP fits its VP8X canvas. The decode is priced
+/// from the canvas, but image-webp decodes a VP8 frame at the frame's own
+/// size (never limited) before comparing the two, so a 1x1 canvas around a
+/// 16000x16000 frame would allocate hundreds of MiB. The format requires
+/// frames to fit the canvas, so no valid file is refused.
+fn webp_frames_fit(bytes: &[u8]) -> bool {
+    fn u24(b: &[u8]) -> u32 {
+        u32::from(b[0]) | u32::from(b[1]) << 8 | u32::from(b[2]) << 16
+    }
+    // Every chunk's frame size, descending into ANMF frames.
+    fn frames(mut b: &[u8], out: &mut Vec<(u32, u32)>, canvas: &mut Option<(u32, u32)>) -> bool {
+        while b.len() >= 8 {
+            let (fourcc, len) = (
+                &b[..4],
+                u32::from_le_bytes(b[4..8].try_into().unwrap()) as usize,
+            );
+            let Some(payload) = b.get(8..8 + len) else {
+                return false;
+            };
+            match fourcc {
+                b"VP8X" if len >= 10 => {
+                    *canvas = Some((u24(&payload[4..]) + 1, u24(&payload[7..]) + 1))
+                }
+                b"VP8 " if len >= 10 => {
+                    if payload[3..6] != [0x9d, 0x01, 0x2a] {
+                        return false;
+                    }
+                    let dim = |i: usize| {
+                        u32::from(u16::from_le_bytes([payload[i], payload[i + 1]]) & 0x3fff)
+                    };
+                    out.push((dim(6), dim(8)));
+                }
+                b"VP8L" if len >= 5 => {
+                    let bits = u32::from_le_bytes(payload[1..5].try_into().unwrap());
+                    out.push(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1));
+                }
+                b"ANMF" if len >= 16 => {
+                    out.push((u24(&payload[6..]) + 1, u24(&payload[9..]) + 1));
+                    if !frames(&payload[16..], out, canvas) {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+            b = b.get(8 + len + (len & 1)..).unwrap_or_default();
+        }
+        true
+    }
+    let (mut out, mut canvas) = (vec![], None);
+    if !frames(bytes.get(12..).unwrap_or_default(), &mut out, &mut canvas) {
+        return false;
+    }
+    match canvas {
+        Some((w, h)) => out.iter().all(|&(fw, fh)| fw <= w && fh <= h),
+        // A simple-format file is priced from its only frame.
+        None => out.len() <= 1,
+    }
 }
 
 /// Finish an [`open`]ed decode: the image as stored plus its EXIF
@@ -716,7 +785,9 @@ async fn fetch(http: &reqwest::Client, url: &str) -> Result<Vec<u8>, FetchError>
 }
 
 /// Fetch the poster of every movie and show that has no `images` row yet, in
-/// batches of [`PREFETCH_BATCH`] through the shared fetch slots. Runs after
+/// batches of [`PREFETCH_BATCH`], one fetch at a time: the fetch slots are
+/// shared with on-screen requests, which must never queue behind a batch
+/// (the gateway gives media-core 15 s to first byte). Runs after
 /// each scan; posters outside the library are fetched on first request.
 /// Best-effort: failures are logged and the file is retried on a later pass
 /// (a 404 only after its cooldown).
@@ -742,20 +813,15 @@ pub async fn prefetch_library(state: &crate::AppState) {
         };
         let Some(last) = batch.last() else { break };
         after = last.clone();
-        let mut jobs = tokio::task::JoinSet::new();
         for path in &batch {
-            let file = path.trim_start_matches('/').to_string();
-            if !valid_tmdb_name(&file) {
+            let file = path.trim_start_matches('/');
+            if !valid_tmdb_name(file) {
                 continue;
             }
-            let (db, store) = (state.db.clone(), state.artwork.clone());
-            let base = state.config.tmdb_image_base.clone();
-            jobs.spawn(async move { tmdb_original(&db, &store, &base, &file).await });
-        }
-        while let Some(done) = jobs.join_next().await {
-            match done {
-                Ok(Ok(_)) => fetched += 1,
-                _ => failed += 1,
+            let base = &state.config.tmdb_image_base;
+            match tmdb_original(&state.db, &state.artwork, base, file).await {
+                Ok(_) => fetched += 1,
+                Err(_) => failed += 1,
             }
         }
         if (batch.len() as i64) < PREFETCH_BATCH {
@@ -771,8 +837,9 @@ pub async fn prefetch_library(state: &crate::AppState) {
 const BACKFILL_BATCH: i64 = 200;
 
 /// Describe (blurhash, width, height) every album cover, audiobook cover and
-/// photo that has no `images` row yet, in batches of [`BACKFILL_BATCH`]
-/// through the 2-permit pool. Runs after each scan, after the poster
+/// photo that has no `images` row yet, in batches of [`BACKFILL_BATCH`], one
+/// decode at a time so a pool permit is always left for on-screen requests.
+/// Runs after each scan, after the poster
 /// prefetch (TMDB posters are described right after their fetch). A file
 /// that cannot be read or decoded is stamped failed and left until a rescan
 /// changes it ([`invalidate`]).
@@ -805,33 +872,26 @@ pub async fn backfill(state: &crate::AppState) {
             break;
         };
         (after_kind, after_id) = (kind.clone(), *id);
-        let mut jobs = tokio::task::JoinSet::new();
         for (kind, id, path) in &batch {
-            let (db, store) = (state.db.clone(), state.artwork.clone());
-            let (key, path) = (format!("{kind}/{id}"), path.clone());
-            jobs.spawn(async move {
-                let result = store
-                    .pool
-                    .run_decoded(path.into(), |img, o| describe(&img, o))
-                    .await;
-                let ok = result.is_ok();
-                let written = match result {
-                    Ok(d) => mark_fetched(&db, &key, Some(d)).await,
-                    Err(e) => {
-                        tracing::debug!(key, "blurhash backfill failed: {e}");
-                        mark_failed(&db, &key).await
-                    }
-                };
-                if let Err(e) = written {
-                    tracing::warn!(key, "blurhash backfill write failed: {e}");
+            let key = format!("{kind}/{id}");
+            let result = state
+                .artwork
+                .pool
+                .run_decoded(path.into(), |img, o| describe(&img, o))
+                .await;
+            let written = match result {
+                Ok(d) => {
+                    described += 1;
+                    mark_fetched(&state.db, &key, Some(d)).await
                 }
-                ok
-            });
-        }
-        while let Some(done) = jobs.join_next().await {
-            match done {
-                Ok(true) => described += 1,
-                _ => failed += 1,
+                Err(e) => {
+                    failed += 1;
+                    tracing::debug!(key, "blurhash backfill failed: {e}");
+                    mark_failed(&state.db, &key).await
+                }
+            };
+            if let Err(e) = written {
+                tracing::warn!(key, "blurhash backfill write failed: {e}");
             }
         }
         if (batch.len() as i64) < BACKFILL_BATCH {
@@ -985,6 +1045,56 @@ mod tests {
             matches!(err, ArtworkError::Decode(ImageError::Limits(_))),
             "{err}"
         );
+    }
+
+    /// A WebP whose VP8X canvas says 1x1 around a VP8 keyframe header that
+    /// says 16000x16000 (about 366 MiB of planes, which image-webp allocates
+    /// before it compares the two).
+    fn webp_frame_bigger_than_canvas() -> Vec<u8> {
+        let chunk = |fourcc: &[u8], payload: Vec<u8>| {
+            let mut c = fourcc.to_vec();
+            c.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+            c.extend_from_slice(&payload);
+            c
+        };
+        // Flags, 3 reserved bytes, canvas width-1 and height-1 (24-bit LE).
+        let vp8x = chunk(b"VP8X", vec![0; 10]);
+        let mut frame = vec![0x10, 0, 0, 0x9d, 0x01, 0x2a];
+        frame.extend_from_slice(&16_000u16.to_le_bytes());
+        frame.extend_from_slice(&16_000u16.to_le_bytes());
+        frame.extend_from_slice(&[0; 32]);
+        let vp8 = chunk(b"VP8 ", frame);
+        let mut out = b"RIFF".to_vec();
+        out.extend_from_slice(&(4 + vp8x.len() as u32 + vp8.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"WEBP");
+        out.extend_from_slice(&vp8x);
+        out.extend_from_slice(&vp8);
+        out
+    }
+
+    #[test]
+    fn a_webp_frame_larger_than_its_canvas_is_refused_before_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("lie.webp");
+        std::fs::write(&path, webp_frame_bigger_than_canvas()).unwrap();
+        let err = open(&path)
+            .err()
+            .expect("refused at open, before the planes");
+        assert!(
+            matches!(err, ArtworkError::Decode(ImageError::Limits(_))),
+            "{err}"
+        );
+
+        // A real WebP (frame == canvas) still opens and decodes.
+        let mut real = Vec::new();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut real)
+            .encode(&[9; 40 * 30 * 3], 40, 30, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        assert!(webp_frames_fit(&real));
+        let path = dir.path().join("real.webp");
+        std::fs::write(&path, real).unwrap();
+        let (decoder, _) = open(&path).unwrap();
+        assert_eq!(decode(decoder).unwrap().0.width(), 40);
     }
 
     /// A 1x1 PNG whose iCCP profile inflates to `icc_len` zero bytes.

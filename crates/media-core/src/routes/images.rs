@@ -1147,4 +1147,44 @@ mod tests {
         crate::run_extra_passes(&state, "test").await;
         assert_eq!(fake.total(), 3, "a second pass fetches nothing");
     }
+
+    /// The prefetch keeps one fetch in flight, so an on-screen poster that
+    /// misses the cache never queues behind a whole background batch.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn a_cold_request_does_not_wait_behind_the_prefetch() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fake = FakeOrigin {
+            delay: Duration::from_millis(400),
+            ..Default::default()
+        };
+        fake.route("onscreen.jpg", 200, "image/jpeg", png(20, 30));
+        for n in 0..40 {
+            fake.route(&format!("lib{n}.jpg"), 200, "image/jpeg", png(20, 30));
+        }
+        let state = tmdb_state(tmp.path(), fake.start().await, u64::MAX).await;
+        for n in 0..40 {
+            sqlx::query(
+                "INSERT INTO shows (title, added_at, poster_path) VALUES ('S', '2026-01-01', ?)",
+            )
+            .bind(format!("/lib{n}.jpg"))
+            .execute(&state.db.pool)
+            .await
+            .unwrap();
+        }
+        let app = crate::build_router(state.clone());
+        let prefetch = tokio::spawn({
+            let state = state.clone();
+            async move { crate::artwork::prefetch_library(&state).await }
+        });
+        while fake.total() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        let started = std::time::Instant::now();
+        assert_eq!(get_tmdb(&app, "onscreen.jpg", 342).await, StatusCode::OK);
+        let waited = started.elapsed();
+        // One origin round trip plus slack; a queued batch would be ~8 s.
+        assert!(waited < Duration::from_millis(1500), "waited {waited:?}");
+        prefetch.abort();
+    }
 }
