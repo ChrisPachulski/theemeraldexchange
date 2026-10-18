@@ -24,6 +24,9 @@ docker run --rm --user 10001:10001 \
 
 secret() { head -c 48 /dev/urandom | base64 | tr -d '\n'; }
 DATA="$(mktemp -d)"
+# mktemp gives 0700 owned by the runner user; root without DAC caps could not
+# even list it. A fresh docker volume or mkdir'd bind dir is 0755.
+chmod 755 "$DATA"
 NAME="recommender-check-$$"
 trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true' EXIT
 
