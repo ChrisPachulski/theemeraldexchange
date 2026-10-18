@@ -786,6 +786,26 @@ mod tests {
         );
     }
 
+    // test_watched_feedback.py: watched is a positive engagement signal, and
+    // the /score FeedbackEntry accepts it and rejects an unknown signal.
+    #[test]
+    fn watched_is_a_positive_engagement_signal() {
+        use crate::context::{ENGAGEMENT_FEEDBACK_SIGNALS, POSITIVE_FEEDBACK_SIGNALS};
+        assert!(ENGAGEMENT_FEEDBACK_SIGNALS.contains(&"watched"));
+        assert!(POSITIVE_FEEDBACK_SIGNALS.contains(&"watched"));
+        let s = |signal: &str| {
+            score(&body(json!({
+                "sub": SUB, "kind": "movie",
+                "feedback": [{"tmdb_id": 1, "signal": signal}],
+            })))
+        };
+        assert_eq!(
+            s("watched").ok().unwrap().feedback.unwrap(),
+            [(1, "watched")]
+        );
+        assert!(s("bingewatched").is_err());
+    }
+
     // test_sub_validation.py: valid and invalid subs on every sub-carrying model.
     #[test]
     fn subs_are_validated() {
