@@ -35,6 +35,8 @@ import {
 } from './fixtures.js'
 
 const SAMPLE_PATH = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'sample.mp4')
+const PLACEHOLDER_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 3"><rect width="2" height="3" fill="#24332c"/></svg>'
 
 // media-core clamps `limit` to 1..=200 and defaults to 50 when omitted; the
 // SPA's fetchAllPages relies on that contract (src/lib/api/media.ts). Mirror
@@ -158,6 +160,15 @@ export async function handle(req: Request): Promise<Response> {
     const playable = Number.isFinite(id) ? findPlayable(m[1], id) : null
     if (!playable) return json({ error: 'not_found' }, 404)
     return streamSample(req.headers.get('range'))
+  }
+
+  // ── Artwork ─────────────────────────────────────────────────────────
+  //
+  // media-core answers /images/{kind}/{id}?w= with a resized WebP. The mock
+  // has no artwork, so every poster, cover and photo is one flat SVG tile
+  // (the gateway does not forward a redirect, so TMDB art cannot be relayed).
+  if (method === 'GET' && /^\/api\/media\/images\/[^/]+\/[^/]+$/.test(path)) {
+    return new Response(PLACEHOLDER_SVG, { headers: { 'content-type': 'image/svg+xml' } })
   }
 
   // ── Everything else: loud 404 ───────────────────────────────────────

@@ -59,12 +59,43 @@ pub fn router(state: AppState) -> Router {
 }
 
 /// /api/media and /api/transcode only with USE_MEDIA_CORE: without
-/// media-core there is nothing to hand off to.
+/// media-core there is nothing to hand off to, except that TMDB artwork
+/// (posters across discovery and the watchlist) still loads, from the CDN.
 fn media_routes(state: &AppState) -> Router<AppState> {
     if !state.config.use_media_core {
-        return Router::new();
+        return Router::new().route("/api/media/images/tmdb/{name}", get(tmdb_cdn));
     }
     crate::proxy::media::router().merge(crate::proxy::transcode::router())
+}
+
+/// `GET /api/media/images/tmdb/{name}?w=` without media-core: a redirect to
+/// the TMDB CDN at the smallest size covering `w`, so the browser loads it
+/// straight from TMDB as it did before media-core held the artwork. The
+/// name is checked as media-core checks it (`^[A-Za-z0-9]{1,64}\.(jpg|png)$`).
+async fn tmdb_cdn(
+    axum::extract::Path(name): axum::extract::Path<String>,
+    uri: axum::http::Uri,
+) -> Response {
+    let valid = name.split_once('.').is_some_and(|(stem, ext)| {
+        (1..=64).contains(&stem.len())
+            && stem.bytes().all(|b| b.is_ascii_alphanumeric())
+            && matches!(ext, "jpg" | "png")
+    });
+    if !valid {
+        return not_found().await;
+    }
+    let pairs = crate::arr::shared::query_pairs(&uri);
+    let w = crate::arr::shared::query_first(&pairs, "w").and_then(|w| w.parse::<u32>().ok());
+    let size = match w.unwrap_or(500) {
+        0..=92 => "w92",
+        93..=185 => "w185",
+        186..=342 => "w342",
+        343..=500 => "w500",
+        501..=780 => "w780",
+        _ => "original",
+    };
+    axum::response::Redirect::temporary(&format!("https://image.tmdb.org/t/p/{size}/{name}"))
+        .into_response()
 }
 
 /// Fallbacks and layers around `routes`.

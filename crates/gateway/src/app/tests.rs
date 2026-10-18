@@ -166,6 +166,36 @@ async fn unknown_paths_and_wrong_methods_are_the_json_404() {
 }
 
 #[tokio::test]
+async fn tmdb_art_redirects_to_the_cdn_without_media_core() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = router(state_in(&dir, &[]).await);
+    for (path, want) in [
+        ("/api/media/images/tmdb/abc.jpg?w=342", "w342/abc.jpg"),
+        ("/api/media/images/tmdb/abc.jpg?w=200", "w342/abc.jpg"),
+        ("/api/media/images/tmdb/Ab9.png?w=92", "w92/Ab9.png"),
+        ("/api/media/images/tmdb/abc.jpg?w=1280", "original/abc.jpg"),
+        ("/api/media/images/tmdb/abc.jpg", "w500/abc.jpg"),
+    ] {
+        let r = send(&app, get_req(path)).await;
+        assert_eq!(r.status, StatusCode::TEMPORARY_REDIRECT, "{path}");
+        assert_eq!(
+            r.headers[header::LOCATION],
+            format!("https://image.tmdb.org/t/p/{want}"),
+            "{path}"
+        );
+    }
+    for path in [
+        "/api/media/images/tmdb/a.gif",
+        "/api/media/images/tmdb/a%2F..%2Fb.jpg",
+        "/api/media/images/album/7",
+        "/api/media/movies",
+    ] {
+        let r = send(&app, get_req(path)).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{path}");
+    }
+}
+
+#[tokio::test]
 async fn the_spa_never_answers_api_paths_or_writes() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(dir.path().join("dist")).unwrap();

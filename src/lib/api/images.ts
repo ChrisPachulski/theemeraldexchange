@@ -4,6 +4,7 @@ import { apiUrl } from './base'
 // Artwork through media-core's GET /api/media/images/{kind}/{id}?w=: resized
 // WebP behind the session cookie. TMDB art is fetched by the server, never
 // hotlinked; the server snaps `w` up to its ladder (92 185 342 500 780 1280 1920).
+// Without media-core the backend redirects the tmdb kind to the TMDB CDN.
 
 /** Widths a poster tile's srcset offers. */
 export const POSTER_WIDTHS = [185, 342, 500]

@@ -200,8 +200,9 @@ each caused a real "library invisible / nothing plays" incident:
   runs idle and the SPA shows no local library.
 - **Artwork store.** Every poster, cover and photo thumbnail is served by
   media-core (`GET /api/media/images/{tmdb|album|audiobook|photo}/{id}?w=`)
-  as a resized lossy WebP; the SPA no longer loads `image.tmdb.org`, so a
-  host without `USE_MEDIA_CORE=1` shows letter tiles instead of posters. The
+  as a resized lossy WebP; the SPA never names `image.tmdb.org` itself. On a
+  host without `USE_MEDIA_CORE=1` the backend answers the `tmdb` kind with a
+  redirect to the TMDB CDN, so discovery and watchlist posters still load. The
   store lives on the media-core `/data` volume: `/data/images` holds the
   resized variants and the TMDB originals (each fetched once), kept under
   `MEDIA_IMAGE_CACHE_MB` (default 2048) by LRU eviction and rebuilt on demand;

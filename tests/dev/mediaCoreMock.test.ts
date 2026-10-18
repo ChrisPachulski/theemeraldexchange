@@ -97,6 +97,14 @@ describe('media-core mock', () => {
     expect(buf.byteLength).toBe(100)
   })
 
+  it('serves a placeholder for every artwork route', async () => {
+    for (const path of ['/api/media/images/tmdb/abc.jpg?w=342', '/api/media/images/album/3']) {
+      const res = await app.request(path)
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toBe('image/svg+xml')
+    }
+  })
+
   it('404s an unknown stream id and an unimplemented route loudly', async () => {
     const missing = await app.request('/api/media/stream/movie/424242')
     expect(missing.status).toBe(404)

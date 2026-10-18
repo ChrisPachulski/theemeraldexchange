@@ -199,7 +199,7 @@ npm run dev:media-mock        # localhost:8095, run alongside npm run dev
 ```
 
 A fixture-backed stub that speaks media-core's HTTP surface (12 movies, 3 shows, a seeded watch
-store; direct-play only). Backend wiring: `USE_MEDIA_CORE=1`,
+store; direct-play only; every artwork route answers a flat placeholder tile). Backend wiring: `USE_MEDIA_CORE=1`,
 `MEDIA_CORE_URL=http://127.0.0.1:8095`, and any 32+ char `INTERNAL_PRINCIPAL_SECRET`
 placeholder — the gateway's media proxy fails closed (502 `principal_mint_failed`) without
 one; the mock ignores its value. Builds the library UI without the Rust binary
