@@ -30,7 +30,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
  && cp /build/target/release/eex-recommender /usr/local/bin/eex-recommender
 
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim@sha256:96e378d7e6531ac9a15ad505478fcc2e69f371b10f5cdf87857c4b8188404716 AS runtime
+FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS runtime
 
 WORKDIR /srv
 
