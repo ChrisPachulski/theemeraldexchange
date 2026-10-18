@@ -44,6 +44,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/limits", get(limits))
         .route("/api/version", get(version))
+        .merge(crate::routes::router())
         .with_state(state.clone())
         .merge(auth::router(state.auth.clone()));
     edge(routes, &state)

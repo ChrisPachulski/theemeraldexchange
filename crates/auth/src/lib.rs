@@ -31,6 +31,7 @@ pub use db::ensure_server_id;
 pub use device_tokens::spawn_sweep;
 pub use members::{effective_role, member_status, revoke_self};
 pub use reconcile::{Principal, Rejection, RequireAdmin, RequireAuth, authenticate};
+pub use signin::json_body;
 
 use std::sync::Arc;
 
@@ -219,23 +220,36 @@ pub(crate) fn iso(t: chrono::DateTime<chrono::Utc>) -> String {
     t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-pub(crate) fn now_iso() -> String {
+pub fn now_iso() -> String {
     iso(chrono::Utc::now())
 }
 
 /// JS whitespace (`String#trim`, regex `\s`): Unicode White_Space minus
 /// U+0085, plus U+FEFF.
-pub(crate) fn js_space(c: char) -> bool {
+pub fn js_space(c: char) -> bool {
     c == '\u{feff}' || (c.is_whitespace() && c != '\u{85}')
 }
 
-pub(crate) fn js_trim(s: &str) -> &str {
+pub fn js_trim(s: &str) -> &str {
     s.trim_matches(js_space)
 }
 
 /// JS `String#length`: UTF-16 code units.
-pub(crate) fn js_len(s: &str) -> usize {
+pub fn js_len(s: &str) -> usize {
     s.encode_utf16().count()
+}
+
+/// JS `s.slice(0, n)` in UTF-16 code units; a surrogate pair split at the
+/// cut is dropped whole (JS keeps the lone high surrogate).
+pub fn js_slice(s: &str, n: usize) -> &str {
+    let mut units = 0;
+    for (i, c) in s.char_indices() {
+        units += c.len_utf16();
+        if units > n {
+            return &s[..i];
+        }
+    }
+    s
 }
 
 /// The provider namespace of a sub (`apple`, `workos`, ...).

@@ -6,11 +6,17 @@
 pub mod app;
 pub mod config;
 pub mod principal;
+pub mod recommender;
+pub mod routes;
+pub mod stores;
+pub mod syncplay;
 pub mod telemetry;
 pub mod upstream;
 
 #[cfg(test)]
 mod edge_goldens;
+#[cfg(test)]
+mod store_goldens;
 #[cfg(test)]
 mod testutil;
 
@@ -33,6 +39,13 @@ pub struct AppState {
     pub upstream: Upstream,
     /// The built SPA (./dist), when SERVE_SPA serves it same-origin.
     pub spa_dir: Option<PathBuf>,
+    /// The per-user JSON stores.
+    pub stores: Arc<stores::Stores>,
+    /// Serializes the two-store feedback writes per title.
+    pub item_locks: Arc<routes::ItemLocks>,
+    pub syncplay: Arc<syncplay::Syncplay>,
+    /// server.db's server_id for internal principals, once resolved.
+    pub server_id: Arc<tokio::sync::OnceCell<String>>,
 }
 
 impl AppState {
@@ -41,6 +54,10 @@ impl AppState {
             auth: AuthState::new(pool, config.auth.clone()),
             spa_dir: config.auth.serve_spa.then(|| PathBuf::from("./dist")),
             upstream: Upstream::default(),
+            stores: Arc::new(stores::Stores::new(&config)),
+            item_locks: Arc::default(),
+            syncplay: Arc::default(),
+            server_id: Arc::default(),
             config: Arc::new(config),
         }
     }

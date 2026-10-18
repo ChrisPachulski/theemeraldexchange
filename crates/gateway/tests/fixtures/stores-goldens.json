@@ -1,0 +1,1636 @@
+{
+  "env": {
+    "SESSION_SECRET": "stores-goldens-session-secret-0123456789abcdef",
+    "STREAM_TOKEN_SECRET": "stores-goldens-stream-secret-0123456789abcdef",
+    "DEVICE_TOKEN_SECRET": "stores-goldens-device-secret-0123456789abcdef",
+    "INTERNAL_PRINCIPAL_SECRET": "stores-goldens-internal-secret-0123456789abcdef",
+    "ALLOWED_ORIGINS": "https://app.example",
+    "SERVE_SPA": "0",
+    "USE_LOCAL_RECOMMENDER": "1",
+    "RECOMMENDER_EVENT_SECRET": "stores-goldens-recommender-secret"
+  },
+  "members": {
+    "alice": {
+      "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+      "username": "alice",
+      "role": "user"
+    },
+    "bob": {
+      "sub": "google:1234567890",
+      "username": "bob",
+      "role": "user"
+    },
+    "admin": {
+      "sub": "local:01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      "username": "admin",
+      "role": "admin"
+    }
+  },
+  "files": {
+    "feedback": "fb/feedback.json",
+    "rejections": "rej/rejections.json",
+    "watchlist": "wl/watchlist.json",
+    "policies": "pol/policies.json"
+  },
+  "seeds": {
+    "feedback": "{\n  \"google:1234567890\": {\n    \"tv\": {\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ],\n      \"liked\": []\n    },\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": []\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        10,\n        {\n          \"id\": 11,\n          \"title\": \" Spaced\\nTitle \"\n        }\n      ],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": []\n    }\n  }\n}\n",
+    "rejections": "{\n  \"tv\": [\n    400\n  ],\n  \"movie\": [\n    {\n      \"id\": 500,\n      \"title\": \"Seeded\"\n    }\n  ]\n}\n",
+    "watchlist": "{\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": [\n      {\n        \"id\": 1,\n        \"title\": \"Old\",\n        \"added_at\": \"2024-01-01T00:00:00.000Z\"\n      }\n    ],\n    \"tv\": [\n      {\n        \"id\": 2,\n        \"title\": \"New\",\n        \"added_at\": \"2025-06-01T00:00:00.000Z\",\n        \"poster_path\": \"/n.jpg\"\n      }\n    ]\n  }\n}\n",
+    "policies": "{\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"maxContentRating\": \"BOGUS\",\n    \"allowedSections\": {\n      \"live\": false\n    },\n    \"kid\": \"yes\"\n  },\n  \"workos:user_01E4ZCR3C56J083X43JQXF3JK5\": {\n    \"maxContentRating\": \"PG\",\n    \"allowedSections\": null,\n    \"kid\": true\n  }\n}\n"
+  },
+  "steps": [
+    {
+      "name": "feedback unauthenticated",
+      "path": "/api/feedback",
+      "request_body": null,
+      "status": 401,
+      "body": "{\"error\":\"unauthenticated\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "alice reads normalized seed",
+      "as": "alice",
+      "path": "/api/feedback",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"movie\":{\"liked\":[{\"id\":10,\"title\":\"\"},{\"id\":11,\"title\":\"Spaced Title\"}],\"disliked\":[]},\"tv\":{\"liked\":[],\"disliked\":[]}}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "alice like movie 42",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":42,\"title\":\"Sinners\",\"signal\":\"like\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 10,\n          \"title\": \"\"\n        },\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        }\n      ],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": []\n    }\n  }\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "movie",
+            "tmdb_id": 42,
+            "signal": "like"
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice like movie 10",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":10,\"title\":\"Heat\",\"signal\":\"like\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        }\n      ],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": []\n    }\n  }\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "movie",
+            "tmdb_id": 10,
+            "signal": "like"
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice dislike tv 99",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"tv\",\"tmdbId\":99,\"title\":\"Pokémon\",\"signal\":\"dislike\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        }\n      ],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ]\n    }\n  }\n}\n",
+        "rejections": "{\n  \"movie\": [\n    {\n      \"id\": 500,\n      \"title\": \"Seeded\"\n    }\n  ],\n  \"tv\": [\n    {\n      \"id\": 400,\n      \"title\": \"\"\n    },\n    {\n      \"id\": 99,\n      \"title\": \"Pokémon\"\n    }\n  ]\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "tv",
+            "tmdb_id": 99,
+            "signal": "dislike"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/events/rejection",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "kind": "tv",
+            "tmdb_id": 99
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice like tv 99",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"tv\",\"tmdbId\":99,\"title\":\"\",\"signal\":\"like\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        }\n      ],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ],\n      \"disliked\": []\n    }\n  }\n}\n",
+        "rejections": "{\n  \"movie\": [\n    {\n      \"id\": 500,\n      \"title\": \"Seeded\"\n    }\n  ],\n  \"tv\": [\n    {\n      \"id\": 400,\n      \"title\": \"\"\n    }\n  ]\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback/clear",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "tv",
+            "tmdb_id": 99,
+            "signal": "dislike"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "tv",
+            "tmdb_id": 99,
+            "signal": "like"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/events/rejection/clear",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "kind": "tv",
+            "tmdb_id": 99
+          }
+        }
+      ]
+    },
+    {
+      "name": "bob dislike movie 201",
+      "as": "bob",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":201,\"title\":\"Shared\",\"signal\":\"dislike\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        }\n      ],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ],\n      \"disliked\": []\n    }\n  }\n}\n",
+        "rejections": "{\n  \"movie\": [\n    {\n      \"id\": 500,\n      \"title\": \"Seeded\"\n    },\n    {\n      \"id\": 201,\n      \"title\": \"Shared\"\n    }\n  ],\n  \"tv\": [\n    {\n      \"id\": 400,\n      \"title\": \"\"\n    }\n  ]\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "google:1234567890",
+            "kind": "movie",
+            "tmdb_id": 201,
+            "signal": "dislike"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/events/rejection",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "kind": "movie",
+            "tmdb_id": 201
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice dislike movie 201",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":201,\"title\":\"Shared\",\"signal\":\"dislike\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        }\n      ],\n      \"disliked\": [\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ],\n      \"disliked\": []\n    }\n  }\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "movie",
+            "tmdb_id": 201,
+            "signal": "dislike"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/events/rejection",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "kind": "movie",
+            "tmdb_id": 201
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice like movie 201",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":201,\"title\":\"Shared\",\"signal\":\"like\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        },\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ],\n      \"disliked\": []\n    }\n  }\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback/clear",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "movie",
+            "tmdb_id": 201,
+            "signal": "dislike"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "movie",
+            "tmdb_id": 201,
+            "signal": "like"
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice DELETE movie/201/dislike",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/feedback/movie/201/dislike",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        }\n      ],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ],\n      \"disliked\": []\n    }\n  }\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback/clear",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "movie",
+            "tmdb_id": 201,
+            "signal": "like"
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice dislike movie 7",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":7,\"title\":\"Seven\",\"signal\":\"dislike\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        }\n      ],\n      \"disliked\": [\n        {\n          \"id\": 7,\n          \"title\": \"Seven\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ],\n      \"disliked\": []\n    }\n  }\n}\n",
+        "rejections": "{\n  \"movie\": [\n    {\n      \"id\": 500,\n      \"title\": \"Seeded\"\n    },\n    {\n      \"id\": 201,\n      \"title\": \"Shared\"\n    },\n    {\n      \"id\": 7,\n      \"title\": \"Seven\"\n    }\n  ],\n  \"tv\": [\n    {\n      \"id\": 400,\n      \"title\": \"\"\n    }\n  ]\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "movie",
+            "tmdb_id": 7,
+            "signal": "dislike"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/events/rejection",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "kind": "movie",
+            "tmdb_id": 7
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice DELETE movie/7/like",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/feedback/movie/7/like",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        }\n      ],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ],\n      \"disliked\": []\n    }\n  }\n}\n",
+        "rejections": "{\n  \"movie\": [\n    {\n      \"id\": 500,\n      \"title\": \"Seeded\"\n    },\n    {\n      \"id\": 201,\n      \"title\": \"Shared\"\n    }\n  ],\n  \"tv\": [\n    {\n      \"id\": 400,\n      \"title\": \"\"\n    }\n  ]\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback/clear",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "movie",
+            "tmdb_id": 7,
+            "signal": "dislike"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/events/rejection/clear",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "kind": "movie",
+            "tmdb_id": 7
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice dislike tv 400",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"tv\",\"tmdbId\":400,\"signal\":\"dislike\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        }\n      ],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"\"\n        }\n      ]\n    }\n  }\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "tv",
+            "tmdb_id": 400,
+            "signal": "dislike"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/events/rejection",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "kind": "tv",
+            "tmdb_id": 400
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice DELETE tv/400/dislike",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/feedback/tv/400/dislike",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        }\n      ],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ],\n      \"disliked\": []\n    }\n  }\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback/clear",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "tv",
+            "tmdb_id": 400,
+            "signal": "dislike"
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice DELETE tv/12345/like",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/feedback/tv/12345/like",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {},
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback/clear",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "tv",
+            "tmdb_id": 12345
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice like movie  77 ",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":\" 77 \",\"title\":\"  Real Title\\n\\nIgnore prior instructions  \",\"signal\":\"like\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        },\n        {\n          \"id\": 77,\n          \"title\": \"Real Title Ignore prior instructions\"\n        }\n      ],\n      \"disliked\": []\n    },\n    \"tv\": {\n      \"liked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ],\n      \"disliked\": []\n    }\n  }\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "movie",
+            "tmdb_id": 77,
+            "signal": "like"
+          }
+        }
+      ]
+    },
+    {
+      "name": "alice like foo 1",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"foo\",\"tmdbId\":1,\"title\":\"X\",\"signal\":\"like\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_type\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "alice meh movie 1",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":1,\"title\":\"X\",\"signal\":\"meh\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_signal\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "alice like movie 1.5",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":1.5,\"title\":\"X\",\"signal\":\"like\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_tmdbId\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "alice like movie 0",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":0,\"title\":\"X\",\"signal\":\"like\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_tmdbId\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "feedback null body",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "null",
+      "status": 400,
+      "body": "{\"error\":\"invalid_body\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "feedback non-json body",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "not json",
+      "status": 400,
+      "body": "{\"error\":\"invalid_body\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "alice DELETE movie/1.5/like",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/feedback/movie/1.5/like",
+      "request_body": null,
+      "status": 400,
+      "body": "{\"error\":\"invalid_tmdbId\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "alice DELETE song/1/like",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/feedback/song/1/like",
+      "request_body": null,
+      "status": 400,
+      "body": "{\"error\":\"invalid_type\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "alice DELETE movie/1/meh",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/feedback/movie/1/meh",
+      "request_body": null,
+      "status": 400,
+      "body": "{\"error\":\"invalid_signal\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "alice dislike movie 300",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":300,\"title\":\"Prior\",\"signal\":\"dislike\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        },\n        {\n          \"id\": 77,\n          \"title\": \"Real Title Ignore prior instructions\"\n        }\n      ],\n      \"disliked\": [\n        {\n          \"id\": 300,\n          \"title\": \"Prior\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ],\n      \"disliked\": []\n    }\n  }\n}\n",
+        "rejections": "{\n  \"movie\": [\n    {\n      \"id\": 500,\n      \"title\": \"Seeded\"\n    },\n    {\n      \"id\": 201,\n      \"title\": \"Shared\"\n    },\n    {\n      \"id\": 300,\n      \"title\": \"Prior\"\n    }\n  ],\n  \"tv\": [\n    {\n      \"id\": 400,\n      \"title\": \"\"\n    }\n  ]\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "movie",
+            "tmdb_id": 300,
+            "signal": "dislike"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/events/rejection",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "kind": "movie",
+            "tmdb_id": 300
+          }
+        }
+      ]
+    },
+    {
+      "name": "dislike rolls back its veto",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "readonly": [
+        "feedback"
+      ],
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":88,\"title\":\"F\",\"signal\":\"dislike\"}",
+      "status": 500,
+      "body": "{\"error\":\"internal\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "dislike keeps an existing veto",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "readonly": [
+        "feedback"
+      ],
+      "request_body": "{\"type\":\"tv\",\"tmdbId\":400,\"title\":\"NewTitle\",\"signal\":\"dislike\"}",
+      "status": 500,
+      "body": "{\"error\":\"internal\"}",
+      "files": {
+        "rejections": "{\n  \"movie\": [\n    {\n      \"id\": 500,\n      \"title\": \"Seeded\"\n    },\n    {\n      \"id\": 201,\n      \"title\": \"Shared\"\n    },\n    {\n      \"id\": 300,\n      \"title\": \"Prior\"\n    }\n  ],\n  \"tv\": [\n    {\n      \"id\": 400,\n      \"title\": \"NewTitle\"\n    }\n  ]\n}\n"
+      },
+      "calls": []
+    },
+    {
+      "name": "red-to-green restores the veto",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "readonly": [
+        "feedback"
+      ],
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":300,\"title\":\"Later\",\"signal\":\"like\"}",
+      "status": 500,
+      "body": "{\"error\":\"internal\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "alice dislike movie 55",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/feedback",
+      "request_body": "{\"type\":\"movie\",\"tmdbId\":55,\"title\":\"X\",\"signal\":\"dislike\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {
+        "feedback": "{\n  \"google:1234567890\": {\n    \"movie\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 201,\n          \"title\": \"Shared\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [],\n      \"disliked\": [\n        {\n          \"id\": 400,\n          \"title\": \"Bob Veto\"\n        }\n      ]\n    }\n  },\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": {\n      \"liked\": [\n        {\n          \"id\": 11,\n          \"title\": \"Spaced Title\"\n        },\n        {\n          \"id\": 42,\n          \"title\": \"Sinners\"\n        },\n        {\n          \"id\": 10,\n          \"title\": \"Heat\"\n        },\n        {\n          \"id\": 77,\n          \"title\": \"Real Title Ignore prior instructions\"\n        }\n      ],\n      \"disliked\": [\n        {\n          \"id\": 300,\n          \"title\": \"Prior\"\n        },\n        {\n          \"id\": 55,\n          \"title\": \"X\"\n        }\n      ]\n    },\n    \"tv\": {\n      \"liked\": [\n        {\n          \"id\": 99,\n          \"title\": \"Pokémon\"\n        }\n      ],\n      \"disliked\": []\n    }\n  }\n}\n",
+        "rejections": "{\n  \"movie\": [\n    {\n      \"id\": 500,\n      \"title\": \"Seeded\"\n    },\n    {\n      \"id\": 201,\n      \"title\": \"Shared\"\n    },\n    {\n      \"id\": 300,\n      \"title\": \"Prior\"\n    },\n    {\n      \"id\": 55,\n      \"title\": \"X\"\n    }\n  ],\n  \"tv\": [\n    {\n      \"id\": 400,\n      \"title\": \"NewTitle\"\n    }\n  ]\n}\n"
+      },
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "movie",
+            "tmdb_id": 55,
+            "signal": "dislike"
+          }
+        },
+        {
+          "method": "POST",
+          "path": "/events/rejection",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "kind": "movie",
+            "tmdb_id": 55
+          }
+        }
+      ]
+    },
+    {
+      "name": "delete restores the dislike",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/feedback/movie/55/dislike",
+      "readonly": [
+        "rejections"
+      ],
+      "request_body": null,
+      "status": 500,
+      "body": "{\"error\":\"internal\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "watchlist unauthenticated",
+      "path": "/api/watchlist",
+      "request_body": null,
+      "status": 401,
+      "body": "{\"error\":\"unauthenticated\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "alice watchlist newest first",
+      "as": "alice",
+      "path": "/api/watchlist",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"items\":[{\"kind\":\"tv\",\"id\":2,\"title\":\"New\",\"added_at\":\"2025-06-01T00:00:00.000Z\",\"poster_path\":\"/n.jpg\"},{\"kind\":\"movie\",\"id\":1,\"title\":\"Old\",\"added_at\":\"2024-01-01T00:00:00.000Z\"}]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "watchlist add",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/watchlist/movie/42",
+      "request_body": "{\"title\":\"  Sinners \",\"poster_path\":\"/s.jpg\"}",
+      "status": 200,
+      "body": "{\"items\":[{\"kind\":\"movie\",\"id\":42,\"title\":\"Sinners\",\"added_at\":\"<now>\",\"poster_path\":\"/s.jpg\"},{\"kind\":\"tv\",\"id\":2,\"title\":\"New\",\"added_at\":\"2025-06-01T00:00:00.000Z\",\"poster_path\":\"/n.jpg\"},{\"kind\":\"movie\",\"id\":1,\"title\":\"Old\",\"added_at\":\"2024-01-01T00:00:00.000Z\"}]}",
+      "files": {
+        "watchlist": "{\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": [\n      {\n        \"id\": 1,\n        \"title\": \"Old\",\n        \"added_at\": \"2024-01-01T00:00:00.000Z\"\n      },\n      {\n        \"id\": 42,\n        \"title\": \"Sinners\",\n        \"added_at\": \"<now>\",\n        \"poster_path\": \"/s.jpg\"\n      }\n    ],\n    \"tv\": [\n      {\n        \"id\": 2,\n        \"title\": \"New\",\n        \"added_at\": \"2025-06-01T00:00:00.000Z\",\n        \"poster_path\": \"/n.jpg\"\n      }\n    ]\n  }\n}\n"
+      },
+      "calls": []
+    },
+    {
+      "name": "watchlist re-add drops poster",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/watchlist/movie/42",
+      "request_body": "{\"title\":\"Sinners (2025)\"}",
+      "status": 200,
+      "body": "{\"items\":[{\"kind\":\"movie\",\"id\":42,\"title\":\"Sinners (2025)\",\"added_at\":\"<now>\"},{\"kind\":\"tv\",\"id\":2,\"title\":\"New\",\"added_at\":\"2025-06-01T00:00:00.000Z\",\"poster_path\":\"/n.jpg\"},{\"kind\":\"movie\",\"id\":1,\"title\":\"Old\",\"added_at\":\"2024-01-01T00:00:00.000Z\"}]}",
+      "files": {
+        "watchlist": "{\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": [\n      {\n        \"id\": 1,\n        \"title\": \"Old\",\n        \"added_at\": \"2024-01-01T00:00:00.000Z\"\n      },\n      {\n        \"id\": 42,\n        \"title\": \"Sinners (2025)\",\n        \"added_at\": \"<now>\"\n      }\n    ],\n    \"tv\": [\n      {\n        \"id\": 2,\n        \"title\": \"New\",\n        \"added_at\": \"2025-06-01T00:00:00.000Z\",\n        \"poster_path\": \"/n.jpg\"\n      }\n    ]\n  }\n}\n"
+      },
+      "calls": []
+    },
+    {
+      "name": "watchlist update seeded",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/watchlist/movie/1",
+      "request_body": "{\"title\":\"Old\\tRenamed\",\"poster_path\":\"/o.jpg\"}",
+      "status": 200,
+      "body": "{\"items\":[{\"kind\":\"movie\",\"id\":42,\"title\":\"Sinners (2025)\",\"added_at\":\"<now>\"},{\"kind\":\"tv\",\"id\":2,\"title\":\"New\",\"added_at\":\"2025-06-01T00:00:00.000Z\",\"poster_path\":\"/n.jpg\"},{\"kind\":\"movie\",\"id\":1,\"title\":\"Old Renamed\",\"added_at\":\"2024-01-01T00:00:00.000Z\",\"poster_path\":\"/o.jpg\"}]}",
+      "files": {
+        "watchlist": "{\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": [\n      {\n        \"id\": 1,\n        \"title\": \"Old Renamed\",\n        \"added_at\": \"2024-01-01T00:00:00.000Z\",\n        \"poster_path\": \"/o.jpg\"\n      },\n      {\n        \"id\": 42,\n        \"title\": \"Sinners (2025)\",\n        \"added_at\": \"<now>\"\n      }\n    ],\n    \"tv\": [\n      {\n        \"id\": 2,\n        \"title\": \"New\",\n        \"added_at\": \"2025-06-01T00:00:00.000Z\",\n        \"poster_path\": \"/n.jpg\"\n      }\n    ]\n  }\n}\n"
+      },
+      "calls": []
+    },
+    {
+      "name": "watchlist bad kind",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/watchlist/foo/1",
+      "request_body": "{\"title\":\"X\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_kind\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "watchlist bad id",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/watchlist/movie/1.5",
+      "request_body": "{\"title\":\"X\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_id\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "watchlist blank title",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/watchlist/movie/3",
+      "request_body": "{\"title\":\"   \"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_title\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "watchlist long title",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/watchlist/movie/3",
+      "request_body": "{\"title\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_title\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "watchlist bad poster",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/watchlist/movie/3",
+      "request_body": "{\"title\":\"X\",\"poster_path\":5}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_poster_path\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "watchlist no body",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/watchlist/movie/3",
+      "request_body": null,
+      "status": 400,
+      "body": "{\"error\":\"invalid_title\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "watchlist 413",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/watchlist/movie/3",
+      "request_body": "{\"title\":\"X\",\"pad\":\"pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\"}",
+      "status": 413,
+      "body": "{\"error\":\"body_too_large\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "watchlist delete",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/watchlist/movie/42",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"items\":[{\"kind\":\"tv\",\"id\":2,\"title\":\"New\",\"added_at\":\"2025-06-01T00:00:00.000Z\",\"poster_path\":\"/n.jpg\"},{\"kind\":\"movie\",\"id\":1,\"title\":\"Old Renamed\",\"added_at\":\"2024-01-01T00:00:00.000Z\",\"poster_path\":\"/o.jpg\"}]}",
+      "files": {
+        "watchlist": "{\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"movie\": [\n      {\n        \"id\": 1,\n        \"title\": \"Old Renamed\",\n        \"added_at\": \"2024-01-01T00:00:00.000Z\",\n        \"poster_path\": \"/o.jpg\"\n      }\n    ],\n    \"tv\": [\n      {\n        \"id\": 2,\n        \"title\": \"New\",\n        \"added_at\": \"2025-06-01T00:00:00.000Z\",\n        \"poster_path\": \"/n.jpg\"\n      }\n    ]\n  }\n}\n"
+      },
+      "calls": []
+    },
+    {
+      "name": "watchlist delete absent",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/watchlist/tv/999",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"items\":[{\"kind\":\"tv\",\"id\":2,\"title\":\"New\",\"added_at\":\"2025-06-01T00:00:00.000Z\",\"poster_path\":\"/n.jpg\"},{\"kind\":\"movie\",\"id\":1,\"title\":\"Old Renamed\",\"added_at\":\"2024-01-01T00:00:00.000Z\",\"poster_path\":\"/o.jpg\"}]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "watchlist delete bad id",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/watchlist/movie/0",
+      "request_body": null,
+      "status": 400,
+      "body": "{\"error\":\"invalid_id\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "bob watchlist empty",
+      "as": "bob",
+      "path": "/api/watchlist",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"items\":[]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "policy unauthenticated",
+      "path": "/api/policy",
+      "request_body": null,
+      "status": 401,
+      "body": "{\"error\":\"unauthenticated\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "alice policy normalized",
+      "as": "alice",
+      "path": "/api/policy",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"maxContentRating\":null,\"allowedSections\":{\"live\":false,\"downloads\":true,\"arr\":true},\"kid\":false}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "bob policy open",
+      "as": "bob",
+      "path": "/api/policy",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"maxContentRating\":null,\"allowedSections\":null,\"kid\":false}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "policies listing non-admin",
+      "as": "bob",
+      "path": "/api/users/policies",
+      "request_body": null,
+      "status": 403,
+      "body": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "policies listing",
+      "as": "admin",
+      "path": "/api/users/policies",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"policies\":{\"apple:000001.0123456789abcdef0123456789abcdef.0001\":{\"maxContentRating\":null,\"allowedSections\":{\"live\":false,\"downloads\":true,\"arr\":true},\"kid\":false},\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\":{\"maxContentRating\":\"PG\",\"allowedSections\":null,\"kid\":true}}}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "policy set non-admin",
+      "as": "bob",
+      "method": "PUT",
+      "path": "/api/users/google:1234567890/policy",
+      "request_body": "{}",
+      "status": 403,
+      "body": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "policy set",
+      "as": "admin",
+      "method": "PUT",
+      "path": "/api/users/google:1234567890/policy",
+      "request_body": "{\"kid\":false,\"allowedSections\":{\"arr\":true,\"live\":true,\"downloads\":false},\"maxContentRating\":\"TV-14\"}",
+      "status": 200,
+      "body": "{\"maxContentRating\":\"TV-14\",\"allowedSections\":{\"live\":true,\"downloads\":false,\"arr\":true},\"kid\":false}",
+      "files": {
+        "policies": "{\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"maxContentRating\": null,\n    \"allowedSections\": {\n      \"live\": false,\n      \"downloads\": true,\n      \"arr\": true\n    },\n    \"kid\": false\n  },\n  \"workos:user_01E4ZCR3C56J083X43JQXF3JK5\": {\n    \"maxContentRating\": \"PG\",\n    \"allowedSections\": null,\n    \"kid\": true\n  },\n  \"google:1234567890\": {\n    \"maxContentRating\": \"TV-14\",\n    \"allowedSections\": {\n      \"live\": true,\n      \"downloads\": false,\n      \"arr\": true\n    },\n    \"kid\": false\n  }\n}\n"
+      },
+      "calls": []
+    },
+    {
+      "name": "policy unknown key",
+      "as": "admin",
+      "method": "PUT",
+      "path": "/api/users/google:1234567890/policy",
+      "request_body": "{\"kid\":false,\"wat\":1}",
+      "status": 400,
+      "body": "{\"error\":\"unknown_key\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "policy unknown section",
+      "as": "admin",
+      "method": "PUT",
+      "path": "/api/users/google:1234567890/policy",
+      "request_body": "{\"allowedSections\":{\"live\":true,\"downloads\":true,\"arr\":true,\"extra\":true}}",
+      "status": 400,
+      "body": "{\"error\":\"unknown_section_key\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "policy bad rating",
+      "as": "admin",
+      "method": "PUT",
+      "path": "/api/users/google:1234567890/policy",
+      "request_body": "{\"maxContentRating\":\"X18\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_maxContentRating\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "policy bad kid",
+      "as": "admin",
+      "method": "PUT",
+      "path": "/api/users/google:1234567890/policy",
+      "request_body": "{\"kid\":\"yes\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_kid\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "policy sections array",
+      "as": "admin",
+      "method": "PUT",
+      "path": "/api/users/google:1234567890/policy",
+      "request_body": "{\"allowedSections\":[]}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_allowedSections\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "policy array body",
+      "as": "admin",
+      "method": "PUT",
+      "path": "/api/users/google:1234567890/policy",
+      "request_body": "[]",
+      "status": 400,
+      "body": "{\"error\":\"invalid_body\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "policy 413",
+      "as": "admin",
+      "method": "PUT",
+      "path": "/api/users/google:1234567890/policy",
+      "request_body": "{\"pad\":\"pppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\"}",
+      "status": 413,
+      "body": "{\"error\":\"body_too_large\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "policy clear alice",
+      "as": "admin",
+      "method": "PUT",
+      "path": "/api/users/apple:000001.0123456789abcdef0123456789abcdef.0001/policy",
+      "request_body": "{}",
+      "status": 200,
+      "body": "{\"maxContentRating\":null,\"allowedSections\":null,\"kid\":false}",
+      "files": {
+        "policies": "{\n  \"apple:000001.0123456789abcdef0123456789abcdef.0001\": {\n    \"maxContentRating\": null,\n    \"allowedSections\": null,\n    \"kid\": false\n  },\n  \"workos:user_01E4ZCR3C56J083X43JQXF3JK5\": {\n    \"maxContentRating\": \"PG\",\n    \"allowedSections\": null,\n    \"kid\": true\n  },\n  \"google:1234567890\": {\n    \"maxContentRating\": \"TV-14\",\n    \"allowedSections\": {\n      \"live\": true,\n      \"downloads\": false,\n      \"arr\": true\n    },\n    \"kid\": false\n  }\n}\n"
+      },
+      "calls": []
+    },
+    {
+      "name": "policies after",
+      "as": "admin",
+      "path": "/api/users/policies",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"policies\":{\"apple:000001.0123456789abcdef0123456789abcdef.0001\":{\"maxContentRating\":null,\"allowedSections\":null,\"kid\":false},\"workos:user_01E4ZCR3C56J083X43JQXF3JK5\":{\"maxContentRating\":\"PG\",\"allowedSections\":null,\"kid\":true},\"google:1234567890\":{\"maxContentRating\":\"TV-14\",\"allowedSections\":{\"live\":true,\"downloads\":false,\"arr\":true},\"kid\":false}}}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "key unauthenticated",
+      "path": "/api/settings/anthropic-key",
+      "request_body": null,
+      "status": 401,
+      "body": "{\"error\":\"unauthenticated\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "key unset",
+      "as": "alice",
+      "path": "/api/settings/anthropic-key",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"set\":false}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "key put unbound",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/settings/anthropic-key",
+      "key_of": "alice",
+      "request_body": "{\"key\":\"sk-ant-api03-golden-key-ZZZZ\"}",
+      "status": 409,
+      "body": "{\"error\":\"principal_changed\"}",
+      "files": {},
+      "calls": [],
+      "stored_key": null
+    },
+    {
+      "name": "key put wrong principal",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/settings/anthropic-key",
+      "headers": {
+        "X-EEX-Expected-Sub": "google:1234567890"
+      },
+      "key_of": "alice",
+      "request_body": "{\"key\":\"sk-ant-api03-golden-key-ZZZZ\"}",
+      "status": 409,
+      "body": "{\"error\":\"principal_changed\"}",
+      "files": {},
+      "calls": [],
+      "stored_key": null
+    },
+    {
+      "name": "key put",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/settings/anthropic-key",
+      "headers": {
+        "X-EEX-Expected-Sub": "apple:000001.0123456789abcdef0123456789abcdef.0001"
+      },
+      "key_of": "alice",
+      "request_body": "{\"key\":\"  sk-ant-api03-golden-key-ZZZZ\\n\"}",
+      "status": 200,
+      "body": "{\"set\":true,\"last4\":\"ZZZZ\"}",
+      "files": {},
+      "calls": [],
+      "stored_key": "sk-ant-api03-golden-key-ZZZZ"
+    },
+    {
+      "name": "key get",
+      "as": "alice",
+      "path": "/api/settings/anthropic-key",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"set\":true,\"last4\":\"ZZZZ\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "key put invalid",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/settings/anthropic-key",
+      "headers": {
+        "X-EEX-Expected-Sub": "apple:000001.0123456789abcdef0123456789abcdef.0001"
+      },
+      "key_of": "alice",
+      "request_body": "{\"key\":\"sk-ant-has space\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_key\",\"hint\":\"expected an sk-ant-… Anthropic API key\"}",
+      "files": {},
+      "calls": [],
+      "stored_key": "sk-ant-api03-golden-key-ZZZZ"
+    },
+    {
+      "name": "key put 413",
+      "as": "alice",
+      "method": "PUT",
+      "path": "/api/settings/anthropic-key",
+      "headers": {
+        "X-EEX-Expected-Sub": "apple:000001.0123456789abcdef0123456789abcdef.0001"
+      },
+      "request_body": "{\"key\":\"sk-ant-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}",
+      "status": 413,
+      "body": "{\"error\":\"body_too_large\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "key bob unset",
+      "as": "bob",
+      "path": "/api/settings/anthropic-key",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"set\":false}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "key delete unbound",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/settings/anthropic-key",
+      "key_of": "alice",
+      "request_body": null,
+      "status": 409,
+      "body": "{\"error\":\"principal_changed\"}",
+      "files": {},
+      "calls": [],
+      "stored_key": "sk-ant-api03-golden-key-ZZZZ"
+    },
+    {
+      "name": "key delete",
+      "as": "alice",
+      "method": "DELETE",
+      "path": "/api/settings/anthropic-key",
+      "headers": {
+        "X-EEX-Expected-Sub": "apple:000001.0123456789abcdef0123456789abcdef.0001"
+      },
+      "key_of": "alice",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"set\":false}",
+      "files": {},
+      "calls": [],
+      "stored_key": null
+    },
+    {
+      "name": "syncplay unauthenticated",
+      "path": "/api/syncplay/groups",
+      "request_body": null,
+      "status": 401,
+      "body": "{\"error\":\"unauthenticated\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay create",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/syncplay/groups",
+      "request_body": "{\"media_kind\":\"movie\",\"media_id\":7}",
+      "status": 200,
+      "body": "{\"id\":\"<g1>\",\"host_sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"media_kind\":\"movie\",\"media_id\":7,\"paused\":true,\"position_secs\":0,\"version\":1,\"members\":[{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"alice\"}]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay listing",
+      "as": "bob",
+      "path": "/api/syncplay/groups",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"items\":[{\"id\":\"<g1>\",\"host_sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"media_kind\":\"movie\",\"media_id\":7,\"paused\":true,\"position_secs\":0,\"version\":1,\"members\":[{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"alice\"}],\"member_count\":1}]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay join",
+      "as": "bob",
+      "method": "POST",
+      "path": "/api/syncplay/groups/{g1}/join",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"id\":\"<g1>\",\"host_sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"media_kind\":\"movie\",\"media_id\":7,\"paused\":true,\"position_secs\":0,\"version\":2,\"members\":[{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"alice\"},{\"sub\":\"google:1234567890\",\"username\":\"bob\"}]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay play",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/syncplay/groups/{g1}/command",
+      "request_body": "{\"type\":\"play\",\"position_secs\":30}",
+      "status": 200,
+      "body": "{\"id\":\"<g1>\",\"host_sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"media_kind\":\"movie\",\"media_id\":7,\"paused\":false,\"position_secs\":30,\"version\":3,\"members\":[{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"alice\"},{\"sub\":\"google:1234567890\",\"username\":\"bob\"}]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay pause",
+      "as": "bob",
+      "method": "POST",
+      "path": "/api/syncplay/groups/{g1}/command",
+      "request_body": "{\"type\":\"pause\",\"position_secs\":41.25}",
+      "status": 200,
+      "body": "{\"id\":\"<g1>\",\"host_sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"media_kind\":\"movie\",\"media_id\":7,\"paused\":true,\"position_secs\":41.25,\"version\":4,\"members\":[{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"alice\"},{\"sub\":\"google:1234567890\",\"username\":\"bob\"}]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay seek",
+      "as": "bob",
+      "method": "POST",
+      "path": "/api/syncplay/groups/{g1}/command",
+      "request_body": "{\"type\":\"seek\",\"position_secs\":-5}",
+      "status": 200,
+      "body": "{\"id\":\"<g1>\",\"host_sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"media_kind\":\"movie\",\"media_id\":7,\"paused\":true,\"position_secs\":0,\"version\":5,\"members\":[{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"alice\"},{\"sub\":\"google:1234567890\",\"username\":\"bob\"}]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay poll",
+      "as": "bob",
+      "path": "/api/syncplay/groups/{g1}",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"id\":\"<g1>\",\"host_sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"media_kind\":\"movie\",\"media_id\":7,\"paused\":true,\"position_secs\":0,\"version\":5,\"members\":[{\"sub\":\"apple:000001.0123456789abcdef0123456789abcdef.0001\",\"username\":\"alice\"},{\"sub\":\"google:1234567890\",\"username\":\"bob\"}]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay non-member",
+      "as": "admin",
+      "path": "/api/syncplay/groups/{g1}",
+      "request_body": null,
+      "status": 403,
+      "body": "{\"error\":\"not_member\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay non-member command",
+      "as": "admin",
+      "method": "POST",
+      "path": "/api/syncplay/groups/{g1}/command",
+      "request_body": "{\"type\":\"play\"}",
+      "status": 403,
+      "body": "{\"error\":\"not_member\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay unknown",
+      "as": "alice",
+      "path": "/api/syncplay/groups/nope",
+      "request_body": null,
+      "status": 404,
+      "body": "{\"error\":\"not_found\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay bad kind",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/syncplay/groups",
+      "request_body": "{\"media_kind\":\"song\",\"media_id\":1}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_media_kind\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay bad id",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/syncplay/groups",
+      "request_body": "{\"media_kind\":\"episode\",\"media_id\":-1}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_media_id\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay seek no position",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/syncplay/groups/{g1}/command",
+      "request_body": "{\"type\":\"seek\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_position\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay bad position",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/syncplay/groups/{g1}/command",
+      "request_body": "{\"type\":\"play\",\"position_secs\":\"soon\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_position\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay host leaves",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/syncplay/groups/{g1}/leave",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay rehosted",
+      "as": "bob",
+      "path": "/api/syncplay/groups/{g1}",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"id\":\"<g1>\",\"host_sub\":\"google:1234567890\",\"media_kind\":\"movie\",\"media_id\":7,\"paused\":true,\"position_secs\":0,\"version\":6,\"members\":[{\"sub\":\"google:1234567890\",\"username\":\"bob\"}]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay second group",
+      "as": "admin",
+      "method": "POST",
+      "path": "/api/syncplay/groups",
+      "request_body": "{\"media_kind\":\"episode\",\"media_id\":3}",
+      "status": 200,
+      "body": "{\"id\":\"<g2>\",\"host_sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"media_kind\":\"episode\",\"media_id\":3,\"paused\":true,\"position_secs\":0,\"version\":1,\"members\":[{\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"username\":\"admin\"}]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay two groups",
+      "as": "alice",
+      "path": "/api/syncplay/groups",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"items\":[{\"id\":\"<g1>\",\"host_sub\":\"google:1234567890\",\"media_kind\":\"movie\",\"media_id\":7,\"paused\":true,\"position_secs\":0,\"version\":6,\"members\":[{\"sub\":\"google:1234567890\",\"username\":\"bob\"}],\"member_count\":1},{\"id\":\"<g2>\",\"host_sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"media_kind\":\"episode\",\"media_id\":3,\"paused\":true,\"position_secs\":0,\"version\":1,\"members\":[{\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"username\":\"admin\"}],\"member_count\":1}]}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay last leaves",
+      "as": "bob",
+      "method": "POST",
+      "path": "/api/syncplay/groups/{g1}/leave",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay gone",
+      "as": "bob",
+      "path": "/api/syncplay/groups/{g1}",
+      "request_body": null,
+      "status": 404,
+      "body": "{\"error\":\"not_found\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "syncplay leave gone",
+      "as": "bob",
+      "method": "POST",
+      "path": "/api/syncplay/groups/{g1}/leave",
+      "request_body": null,
+      "status": 404,
+      "body": "{\"error\":\"not_found\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "event unauthenticated",
+      "method": "POST",
+      "path": "/api/recommender/event",
+      "request_body": "{\"kind\":\"movie\",\"tmdbId\":1,\"signal\":\"clicked\"}",
+      "status": 401,
+      "body": "{\"error\":\"unauthenticated\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "event click",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/recommender/event",
+      "request_body": "{\"kind\":\"movie\",\"tmdbId\":12345,\"signal\":\"clicked\"}",
+      "status": 200,
+      "body": "{\"ok\":true}",
+      "files": {},
+      "calls": [
+        {
+          "method": "POST",
+          "path": "/events/feedback",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": {
+            "sub": "apple:000001.0123456789abcdef0123456789abcdef.0001",
+            "kind": "movie",
+            "tmdb_id": 12345,
+            "signal": "clicked"
+          }
+        }
+      ]
+    },
+    {
+      "name": "event string id",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/recommender/event",
+      "request_body": "{\"kind\":\"movie\",\"tmdbId\":\"123\",\"signal\":\"clicked\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_tmdbId\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "event bad kind",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/recommender/event",
+      "request_body": "{\"kind\":\"audio\",\"tmdbId\":1,\"signal\":\"clicked\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_kind\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "event bad signal",
+      "as": "alice",
+      "method": "POST",
+      "path": "/api/recommender/event",
+      "request_body": "{\"kind\":\"tv\",\"tmdbId\":1,\"signal\":\"like\"}",
+      "status": 400,
+      "body": "{\"error\":\"invalid_signal\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "metrics non-admin",
+      "as": "alice",
+      "path": "/api/recommender/metrics",
+      "request_body": null,
+      "status": 403,
+      "body": "{\"error\":\"forbidden\",\"reason\":\"admin_only\"}",
+      "files": {},
+      "calls": []
+    },
+    {
+      "name": "metrics",
+      "as": "admin",
+      "path": "/api/recommender/metrics",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"window_days\":30,\"impressions\":10,\"rates\":{\"added\":0.25,\"clicked\":0.5}}",
+      "files": {},
+      "calls": [
+        {
+          "method": "GET",
+          "path": "/metrics/funnel?window_days=30",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": null
+        }
+      ]
+    },
+    {
+      "name": "metrics clamped",
+      "as": "admin",
+      "path": "/api/recommender/metrics?windowDays=1000",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"window_days\":365,\"impressions\":10,\"rates\":{\"added\":0.25,\"clicked\":0.5}}",
+      "files": {},
+      "calls": [
+        {
+          "method": "GET",
+          "path": "/metrics/funnel?window_days=365",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": null
+        }
+      ]
+    },
+    {
+      "name": "metrics floored",
+      "as": "admin",
+      "path": "/api/recommender/metrics?windowDays=7.9",
+      "request_body": null,
+      "status": 200,
+      "body": "{\"window_days\":7,\"impressions\":10,\"rates\":{\"added\":0.25,\"clicked\":0.5}}",
+      "files": {},
+      "calls": [
+        {
+          "method": "GET",
+          "path": "/metrics/funnel?window_days=7",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": null
+        }
+      ]
+    },
+    {
+      "name": "metrics unavailable",
+      "as": "admin",
+      "path": "/api/recommender/metrics",
+      "rec_fail": [
+        "/metrics/funnel",
+        500,
+        "boom"
+      ],
+      "request_body": null,
+      "status": 502,
+      "body": "{\"error\":\"metrics_unavailable\",\"detail\":\"funnel metrics 500: boom\"}",
+      "files": {},
+      "calls": [
+        {
+          "method": "GET",
+          "path": "/metrics/funnel?window_days=30",
+          "secret": "stores-goldens-recommender-secret",
+          "bearer": true,
+          "body": null
+        }
+      ]
+    }
+  ]
+}

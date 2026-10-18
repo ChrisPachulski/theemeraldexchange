@@ -23,7 +23,7 @@ media-core = { path = "../media-core" }
 # Internal principals and the telemetry scrubber.
 emerald-contracts = { path = "../emerald-contracts" }
 axum = { version = "0.8", features = ["json"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync", "fs"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.7", features = ["cors", "fs"] }
 http-body-util = "0.1"
@@ -31,6 +31,8 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde.workspace = true
+# Insertion-ordered maps: the JSON stores keep their files' key order.
+indexmap = { version = "2", features = ["serde"] }
 serde_json.workspace = true
 regex.workspace = true
 ulid.workspace = true

@@ -107,3 +107,183 @@ pub fn capture_logs() {
 pub fn logs() -> String {
     LOGS.with(|l| String::from_utf8(l.borrow().clone()).unwrap())
 }
+
+/// State with server.db and the four JSON stores under `dir`.
+pub async fn user_state(dir: &tempfile::TempDir, extra: &[(&str, &str)]) -> AppState {
+    let p = |name: &str| dir.path().join(name).to_str().unwrap().to_string();
+    let paths = [
+        ("USER_FEEDBACK_PATH", p("feedback.json")),
+        ("REJECTIONS_PATH", p("rejections.json")),
+        ("USER_WATCHLIST_PATH", p("watchlist.json")),
+        ("USER_POLICIES_PATH", p("policies.json")),
+    ];
+    let mut env: Vec<(&str, &str)> = paths.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    env.extend_from_slice(extra);
+    state_in(dir, &env).await
+}
+
+/// An active member row (what an invite redeem writes).
+pub async fn add_member(st: &AppState, sub: &str, username: &str, role: &str) {
+    sqlx::query(
+        "INSERT INTO members (sub, display_name, role, auth_mode, invited_by, joined_at, revoked_at) \
+         VALUES (?, ?, ?, ?, NULL, ?, NULL)",
+    )
+    .bind(sub)
+    .bind(username)
+    .bind(role)
+    .bind(sub.split(':').next().unwrap())
+    .bind(auth::now_iso())
+    .execute(&st.auth.pool)
+    .await
+    .unwrap();
+}
+
+/// `eex.session=...` for `sub`; the role comes from its members row.
+pub fn cookie(st: &AppState, sub: &str, username: &str) -> String {
+    let session = auth::session::Session {
+        sub: sub.into(),
+        username: username.into(),
+        role: auth::Role::User,
+        auth_mode: auth::AuthMode::parse(sub.split(':').next().unwrap()).unwrap(),
+    };
+    let token = auth::session::mint(
+        &st.auth.session_key,
+        &session,
+        chrono::Utc::now().timestamp(),
+    );
+    format!("eex.session={token}")
+}
+
+/// A member with a cookie, in one call.
+pub async fn member(st: &AppState, sub: &str, username: &str, role: &str) -> String {
+    add_member(st, sub, username, role).await;
+    cookie(st, sub, username)
+}
+
+/// A request with an optional cookie and JSON body.
+pub fn json_req(
+    method: &str,
+    path: &str,
+    cookie: Option<&str>,
+    body: Option<&serde_json::Value>,
+) -> Request<Body> {
+    let mut b = Request::builder().method(method).uri(path);
+    if let Some(c) = cookie {
+        b = b.header("cookie", c);
+    }
+    match body {
+        Some(v) => b
+            .header("content-type", "application/json")
+            .body(Body::from(v.to_string()))
+            .unwrap(),
+        None => b.body(Body::empty()).unwrap(),
+    }
+}
+
+pub const ALICE: &str = "apple:000001.0123456789abcdef0123456789abcdef.0001";
+pub const BOB: &str = "google:1234567890";
+pub const CAROL: &str = "workos:user_01E4ZCR3C56J083X43JQXF3JK5";
+pub const ADMIN: &str = "local:01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+/// One request the fake recommender saw.
+#[derive(Clone, Debug)]
+pub struct RecCall {
+    pub method: String,
+    /// Path and query.
+    pub path: String,
+    pub secret: Option<String>,
+    pub bearer: Option<String>,
+    pub body: serde_json::Value,
+}
+
+/// A local stand-in for the recommender sidecar: records every call and
+/// answers 200 `{}`; GET /metrics/funnel echoes its window, and the status
+/// for any path can be overridden.
+#[derive(Clone)]
+pub struct FakeRecommender {
+    pub url: String,
+    calls: std::sync::Arc<std::sync::Mutex<Vec<RecCall>>>,
+    status: std::sync::Arc<std::sync::Mutex<HashMap<String, (u16, String)>>>,
+}
+
+impl FakeRecommender {
+    pub async fn start() -> FakeRecommender {
+        let fake = FakeRecommender {
+            url: String::new(),
+            calls: Default::default(),
+            status: Default::default(),
+        };
+        let state = fake.clone();
+        let app = Router::new().fallback(move |req: Request<Body>| {
+            let state = state.clone();
+            async move { state.handle(req).await }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        FakeRecommender { url, ..fake }
+    }
+
+    async fn handle(&self, req: Request<Body>) -> axum::response::Response {
+        use axum::response::IntoResponse;
+        let (secret, bearer) = {
+            let header = |k: &str| {
+                req.headers()
+                    .get(k)
+                    .map(|v| v.to_str().unwrap().to_string())
+            };
+            (
+                header("x-recommender-secret"),
+                header("authorization").map(|v| v.trim_start_matches("Bearer ").to_string()),
+            )
+        };
+        let method = req.method().to_string();
+        let path = req.uri().path_and_query().unwrap().to_string();
+        let bytes = axum::body::to_bytes(req.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+        self.calls.lock().unwrap().push(RecCall {
+            method,
+            path: path.clone(),
+            secret,
+            bearer,
+            body,
+        });
+        let route = path.split('?').next().unwrap().to_string();
+        if let Some((code, text)) = self.status.lock().unwrap().get(&route).cloned() {
+            return (StatusCode::from_u16(code).unwrap(), text).into_response();
+        }
+        if route == "/metrics/funnel" {
+            let wd = path.split("window_days=").nth(1).unwrap_or("?");
+            let text = format!(
+                r#"{{"window_days":{wd},"impressions":10,"rates":{{"added":0.25,"clicked":0.5}}}}"#
+            );
+            return ([("content-type", "application/json")], text).into_response();
+        }
+        ([("content-type", "application/json")], "{}").into_response()
+    }
+
+    /// Answer `path` with this status and body from now on.
+    pub fn fail(&self, path: &str, status: u16, body: &str) {
+        self.status
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), (status, body.to_string()));
+    }
+
+    /// Wait for the fire-and-forget mirrors to land (no new call for 100 ms),
+    /// then take what arrived.
+    pub async fn settle(&self) -> Vec<RecCall> {
+        let mut seen = usize::MAX;
+        loop {
+            let n = self.calls.lock().unwrap().len();
+            if n == seen {
+                break;
+            }
+            seen = n;
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        std::mem::take(&mut *self.calls.lock().unwrap())
+    }
+}

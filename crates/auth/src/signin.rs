@@ -326,7 +326,7 @@ pub(crate) async fn read_body(
 }
 
 /// [`read_body`] under `limit` bytes, without an outcome.
-pub(crate) async fn json_body(body: Body, limit: usize) -> std::result::Result<Value, Response> {
+pub async fn json_body(body: Body, limit: usize) -> std::result::Result<Value, Response> {
     match axum::body::to_bytes(body, limit).await {
         Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or(Value::Null)),
         Err(_) => Err(error(

@@ -116,6 +116,11 @@ pub struct Upstream {
 }
 
 impl Upstream {
+    /// The shared client, for requests [`Upstream::fetch`] then sends.
+    pub fn client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
     /// Send `req` and read the body, all inside `timeout`. Never errors.
     pub async fn fetch(
         &self,
