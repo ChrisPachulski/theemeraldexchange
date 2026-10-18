@@ -1135,7 +1135,17 @@ async fn live_ts(
             Ok(u) => u,
             Err(_) => return internal("xtream_bad_host"),
         };
-        match fetch_guarded(&streams.http, target, None, false).await {
+        // A superseded lease drops its dial before headers arrive, so a
+        // retune never holds a second provider socket next to the new one.
+        let dial = tokio::select! {
+            biased;
+            () = lease.stop.cancelled() => {
+                release();
+                return json_error(StatusCode::GONE, "session_gone");
+            }
+            r = fetch_guarded(&streams.http, target, None, false) => r,
+        };
+        match dial {
             Ok(res) if res.status().is_success() => {
                 dialed = Some((feed, res));
                 break;

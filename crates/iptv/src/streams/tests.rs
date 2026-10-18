@@ -954,6 +954,63 @@ async fn a_provider_body_error_releases_the_reservation() {
     assert_eq!(t.tracker().size(), 0);
 }
 
+#[tokio::test]
+async fn a_retune_drops_the_superseded_dial_before_its_headers_arrive() {
+    // A panel that accepts the live dial and never answers: (open, accepted).
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let host = format!("http://{}", l.local_addr().unwrap());
+    test_public(&host);
+    let open = Arc::new(AtomicUsize::new(0));
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let (o, a) = (open.clone(), accepted.clone());
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _) = l.accept().await.unwrap();
+            o.fetch_add(1, Ordering::SeqCst);
+            a.fetch_add(1, Ordering::SeqCst);
+            let o = o.clone();
+            tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+                let mut buf = [0u8; 1024];
+                while matches!(sock.read(&mut buf).await, Ok(n) if n > 0) {}
+                o.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
+    });
+    let t = setup_with(
+        Router::new(),
+        &[
+            ("XTREAM_HOST", host.as_str()),
+            ("IPTV_MAX_UPSTREAM_CONNECTIONS", "1"),
+        ],
+    )
+    .await;
+    let uri = format!(
+        "/api/iptv/stream/live/10.ts?t={}",
+        token(StreamKind::Live, "10", "plex:42")
+    );
+    let mut reqs = Vec::new();
+    for n in 1..=3 {
+        let (app, uri) = (t.app.clone(), uri.clone());
+        reqs.push(tokio::spawn(async move {
+            let req = Request::builder()
+                .uri(uri)
+                .header(header::AUTHORIZATION, bearer("plex:42", "admin"))
+                .body(Body::empty())
+                .unwrap();
+            app.oneshot(req).await.unwrap()
+        }));
+        until("the dial", || accepted.load(Ordering::SeqCst) == n).await;
+    }
+    until("one provider socket", || open.load(Ordering::SeqCst) == 1).await;
+    for r in reqs.drain(..2) {
+        let res = r.await.unwrap();
+        assert_eq!(res.status(), StatusCode::GONE);
+    }
+    assert_eq!(t.tracker().size(), 1, "the live retune keeps its one slot");
+    reqs[0].abort();
+}
+
 /// One chunk, a beat, then a transport error.
 fn async_stream_error() -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>> {
     futures_util::stream::unfold(0, |n| async move {
