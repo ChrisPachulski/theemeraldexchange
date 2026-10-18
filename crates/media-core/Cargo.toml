@@ -44,7 +44,7 @@ http-body = "1"
 # Artwork pipeline: decode (EXIF orientation), SIMD resize, lossy WebP via
 # libwebp (image's own WebP encoder is lossless-only), blurhash placeholders.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "tiff", "bmp"] }
-fast_image_resize = "6"
+fast_image_resize = { version = "6", features = ["image"] }
 webp = { version = "0.3", default-features = false }
 blurhash = { version = "0.2", default-features = false }
 # Scan-time cover art: the tag picture (ID3v2, MP4 covr, FLAC/Vorbis) read

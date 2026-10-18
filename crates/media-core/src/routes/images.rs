@@ -2,7 +2,10 @@
 //! (albums.art_path), `audiobook` (audiobooks.art_path), `photo`
 //! (photos.path) or `tmdb` (id = a TMDB file name, fetched once from the
 //! origin). The width snaps up to the artwork ladder; variants are cached
-//! under `<data>/images/cache/{kind}/{id}/{w}.webp`.
+//! under `<data>/images/cache/tmdb/{file}/{w}.webp` and, for local kinds,
+//! `<data>/images/cache/{kind}/{id}/{version}/{w}.webp`, where the version is
+//! the source file's mtime and size: a cover replaced in place gets new
+//! variants on its next request, whatever its art_path says.
 
 use super::*;
 use crate::artwork::{self, ArtworkError};
@@ -14,11 +17,6 @@ const LOCAL_CACHE: &str = "private, max-age=86400";
 /// TMDB file names are content-addressed: a name never changes its bytes.
 const TMDB_CACHE: &str = "private, max-age=31536000, immutable";
 
-enum Source {
-    Local(String),
-    Tmdb,
-}
-
 #[derive(Debug, Deserialize)]
 pub(super) struct ImageQuery {
     w: Option<u32>,
@@ -29,18 +27,21 @@ pub(super) async fn get_image(
     Path((kind, id)): Path<(String, String)>,
     Query(q): Query<ImageQuery>,
 ) -> AppResult<axum::response::Response> {
-    let (id, source, cache_control) = if kind == "tmdb" {
+    let w = artwork::snap_width(q.w.unwrap_or(DEFAULT_WIDTH));
+    let (key, local, cache_control) = if kind == "tmdb" {
         if !artwork::valid_tmdb_name(&id) {
             return Err(AppError::BadRequest("invalid tmdb image name".into()));
         }
-        (id, Source::Tmdb, TMDB_CACHE)
+        (format!("tmdb/{id}/{w}.webp"), None, TMDB_CACHE)
     } else {
-        let (id, path) = local_source(&state, &kind, &id).await?;
-        (id, Source::Local(path), LOCAL_CACHE)
+        let (id, path, version) = local_source(&state, &kind, &id).await?;
+        let key = format!("{kind}/{id}/{version}/{w}.webp");
+        (
+            key,
+            Some((format!("{kind}/{id}"), version, path)),
+            LOCAL_CACHE,
+        )
     };
-
-    let w = artwork::snap_width(q.w.unwrap_or(DEFAULT_WIDTH));
-    let key = format!("{kind}/{id}/{w}.webp");
     // A hit reads on the plain blocking pool, not the 2-permit CPU pool, so it
     // never queues behind builds.
     let hit = {
@@ -52,11 +53,12 @@ pub(super) async fn get_image(
     let bytes = match hit {
         Some(bytes) => bytes,
         None => {
-            let original = match source {
-                Source::Local(path) => tokio::fs::read(&path)
-                    .await
-                    .map_err(|_| AppError::NotFound)?,
-                Source::Tmdb => artwork::tmdb_original(
+            let path = match local {
+                Some((dir, version, path)) => {
+                    drop_stale_versions(&state, dir, version).await?;
+                    path.into()
+                }
+                None => artwork::tmdb_original(
                     &state.db,
                     &state.artwork,
                     &state.config.tmdb_image_base,
@@ -77,17 +79,19 @@ pub(super) async fn get_image(
             state
                 .artwork
                 .pool
-                .run(move || -> Result<Vec<u8>, ArtworkError> {
-                    let webp = artwork::variant(&artwork::decode(&original)?, w)?;
+                .run_decoded(path, move |img, orientation| {
+                    let webp = artwork::variant(&img, orientation, w)?;
                     if let Err(e) = store.put(&key, &webp) {
                         tracing::warn!(key, "image cache write failed: {e}");
                     }
                     Ok(webp)
                 })
                 .await
-                .map_err(|e| AppError::Internal(e.to_string()))?
                 .map_err(|e| match e {
                     ArtworkError::Decode(_) => AppError::Unsupported(e.to_string()),
+                    ArtworkError::Io(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        AppError::NotFound
+                    }
                     e => AppError::Internal(e.to_string()),
                 })?
         }
@@ -102,10 +106,37 @@ pub(super) async fn get_image(
         .into_response())
 }
 
-/// The normalised id and source path of a local image, checked to sit inside
-/// its kind's roots (on hits too, so a removed row or file stops serving its
-/// cache).
-async fn local_source(state: &AppState, kind: &str, id: &str) -> AppResult<(String, String)> {
+/// On a miss: if `{kind}/{id}` holds variants of another source version, the
+/// source changed in place, so drop them and the `images` row (the next
+/// backfill describes the new picture), as the photo scan does on a change.
+async fn drop_stale_versions(state: &AppState, dir: String, version: String) -> AppResult<()> {
+    let stale = {
+        let (store, dir) = (state.artwork.clone(), dir.clone());
+        tokio::task::spawn_blocking(move || {
+            store
+                .cache_path(&dir)
+                .and_then(|d| std::fs::read_dir(d).ok())
+                .is_some_and(|mut entries| {
+                    entries.any(|e| e.is_ok_and(|e| e.file_name() != version.as_str()))
+                })
+        })
+        .await
+        .map_err(|e| AppError::Internal(e.to_string()))?
+    };
+    if stale {
+        artwork::invalidate(&state.db, &state.artwork, &dir).await?;
+    }
+    Ok(())
+}
+
+/// The normalised id, source path and source version (mtime and size) of a
+/// local image, checked to sit inside its kind's roots (on hits too, so a
+/// removed row or file stops serving its cache).
+async fn local_source(
+    state: &AppState,
+    kind: &str,
+    id: &str,
+) -> AppResult<(String, String, String)> {
     let (sql, mut roots) = match kind {
         "album" => (
             "SELECT art_path FROM albums WHERE id = ?",
@@ -135,7 +166,19 @@ async fn local_source(state: &AppState, kind: &str, id: &str) -> AppResult<(Stri
         tracing::warn!(kind, path = %source, "refusing to serve image outside roots");
         return Err(AppError::NotFound);
     }
-    Ok((id.to_string(), source))
+    let meta = tokio::fs::metadata(&source)
+        .await
+        .map_err(|_| AppError::NotFound)?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    Ok((
+        id.to_string(),
+        source,
+        format!("{mtime:x}-{:x}", meta.len()),
+    ))
 }
 
 #[cfg(test)]
@@ -236,6 +279,25 @@ mod tests {
         (status, body.to_vec())
     }
 
+    /// The one cached `{w}.webp` variant of a local image, whatever its
+    /// source version.
+    fn variant_file(
+        tmp: &std::path::Path,
+        kind: &str,
+        id: i64,
+        w: u32,
+    ) -> Option<std::path::PathBuf> {
+        let name = format!("{w}.webp");
+        let found: Vec<_> = walkdir::WalkDir::new(tmp.join(format!("images/cache/{kind}/{id}")))
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name() == name.as_str())
+            .map(|e| e.into_path())
+            .collect();
+        assert!(found.len() <= 1, "{found:?}");
+        found.into_iter().next()
+    }
+
     fn webp_dims(bytes: &[u8]) -> (u32, u32) {
         assert_eq!(&bytes[12..16], b"VP8 ", "lossy WebP");
         let img = image::load_from_memory_with_format(bytes, ImageFormat::WebP).unwrap();
@@ -274,9 +336,7 @@ mod tests {
         assert_eq!(s, StatusCode::OK);
         assert_eq!(webp_dims(&b), (500, 750));
 
-        let cached = tmp
-            .path()
-            .join(format!("images/cache/album/{album}/342.webp"));
+        let cached = variant_file(tmp.path(), "album", album, 342).unwrap();
         let inode = std::fs::metadata(&cached).unwrap().ino();
 
         // Hold both pool permits: a build now waits, a cache hit must not.
@@ -366,6 +426,107 @@ mod tests {
                 .0,
             StatusCode::UNSUPPORTED_MEDIA_TYPE
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_miss_opens_its_source_only_once_it_holds_a_pool_permit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = state_in(tmp.path()).await;
+        let shot = tmp.path().join("photos/queued.png");
+        std::fs::write(&shot, png(300, 200)).unwrap();
+        let id = photo(&state, &shot).await;
+        let pool = state.artwork.pool.clone();
+        let app = crate::build_router(state);
+
+        // Hold both permits so the request queues at the pool.
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let release_rx = Arc::new(std::sync::Mutex::new(release_rx));
+        let mut holders = Vec::new();
+        for _ in 0..artwork::POOL_PERMITS {
+            let (pool, rx) = (pool.clone(), release_rx.clone());
+            holders.push(tokio::spawn(async move {
+                pool.run(move || {
+                    let _ = rx.lock().unwrap().recv();
+                })
+                .await
+                .unwrap()
+            }));
+        }
+        let queued = || pool.probe.queued.load(std::sync::atomic::Ordering::SeqCst);
+        let held = artwork::POOL_PERMITS as u64;
+        while queued() < held {
+            tokio::task::yield_now().await;
+        }
+        let request = tokio::spawn({
+            let app = app.clone();
+            async move {
+                get(&app, format!("/api/media/images/photo/{id}?w=92"))
+                    .await
+                    .0
+            }
+        });
+        let waited = tokio::time::timeout(Duration::from_secs(5), async {
+            while queued() < held + 1 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(waited.is_ok(), "the miss reached the pool");
+
+        // The source goes away while the request waits. Had the request read
+        // it before queueing, the bytes would already be in memory and it
+        // would answer 200.
+        std::fs::remove_file(&shot).unwrap();
+        for _ in 0..artwork::POOL_PERMITS {
+            release_tx.send(()).unwrap();
+        }
+        for h in holders {
+            h.await.unwrap();
+        }
+        assert_eq!(request.await.unwrap(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn a_cover_replaced_in_place_gets_new_variants_and_a_new_blurhash() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = state_in(tmp.path()).await;
+        let cover = tmp.path().join("music/cover.png");
+        std::fs::write(&cover, png(400, 400)).unwrap();
+        let album = album_with_art(&state, "LP", Some(&cover)).await;
+        crate::artwork::backfill(&state).await;
+        let app = crate::build_router(state.clone());
+        let key = format!("album/{album}");
+        let row = || image_row(&state, &key);
+        assert!(row().await.is_some());
+
+        let (s, old) = get(&app, format!("/api/media/images/album/{album}?w=92")).await;
+        assert_eq!(s, StatusCode::OK);
+        let old_file = variant_file(tmp.path(), "album", album, 92).unwrap();
+
+        // Same path (art_path is unchanged), new picture and size.
+        let solid = image::RgbImage::from_pixel(500, 500, image::Rgb([200, 10, 10]));
+        std::fs::write(
+            &cover,
+            encode(&DynamicImage::ImageRgb8(solid), ImageFormat::Png),
+        )
+        .unwrap();
+
+        let (s, new) = get(&app, format!("/api/media/images/album/{album}?w=92")).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_ne!(
+            new, old,
+            "the replaced cover is served, not the old variant"
+        );
+        let red = image::load_from_memory_with_format(&new, ImageFormat::WebP)
+            .unwrap()
+            .to_rgb8();
+        let px = red.get_pixel(46, 46).0;
+        assert!(px[0] > 150 && px[1] < 60, "{px:?}");
+        assert!(!old_file.exists(), "the stale variant is dropped");
+        assert!(variant_file(tmp.path(), "album", album, 92).is_some());
+        assert!(row().await.is_none(), "the stale blurhash row is dropped");
+        crate::artwork::backfill(&state).await;
+        assert!(row().await.is_some());
     }
 
     #[tokio::test]

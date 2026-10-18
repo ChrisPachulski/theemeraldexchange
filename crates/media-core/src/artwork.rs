@@ -6,18 +6,22 @@
 //!
 //! CPU work runs through [`Pool`], a constant 2-permit gate around
 //! `spawn_blocking`, so image decoding never takes more than two of the NAS's
-//! six threads away from Plex.
+//! six threads away from Plex. Decodes also share a memory budget
+//! ([`MEMORY_BUDGET_MIB`]) sized against media-core's 768m container limit:
+//! a source is opened only inside the pool, priced from its header, and
+//! decoded once its price fits.
 
 use std::collections::HashMap;
-use std::io::Cursor;
+use std::io::BufReader;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, SystemTime};
 
-use fast_image_resize::images::{Image, ImageRef};
-use fast_image_resize::{PixelType, Resizer};
-use image::{DynamicImage, ImageDecoder, ImageReader};
+use fast_image_resize::Resizer;
+use image::error::{LimitError, LimitErrorKind};
+use image::metadata::Orientation;
+use image::{DynamicImage, ImageDecoder, ImageError, ImageReader};
 use tokio::sync::Semaphore;
 
 /// Served widths. A request snaps up to the next rung so the cache holds at
@@ -27,6 +31,15 @@ pub const WIDTHS: [u32; 7] = [92, 185, 342, 500, 780, 1280, 1920];
 pub const POOL_PERMITS: usize = 2;
 /// Lossy WebP quality.
 pub const WEBP_QUALITY: f32 = 80.0;
+/// Memory all in-flight decodes may hold together, in MiB. A decode costs its
+/// file plus three times its decoded size (pixels, plus a progressive JPEG's
+/// coefficient planes); one that costs more than the whole budget is refused.
+// ponytail: refuses sources past ~27 MP RGB (24 MP cameras fit). Raise the
+// budget with media-core's mem_limit if larger photos need thumbnails.
+pub const MEMORY_BUDGET_MIB: u32 = 256;
+/// Largest source file opened at all: a JPEG decoder holds its whole file,
+/// and it is read before the decode is priced.
+pub const MAX_SOURCE_BYTES: u64 = 64 << 20;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ArtworkError {
@@ -44,16 +57,58 @@ pub enum ArtworkError {
     Pool(String),
 }
 
-/// Decode any supported format, rotating/flipping per the EXIF orientation so
-/// a portrait phone photo comes out portrait.
-pub fn decode(bytes: &[u8]) -> Result<DynamicImage, ArtworkError> {
-    let mut decoder = ImageReader::new(Cursor::new(bytes))
+fn too_large() -> ArtworkError {
+    ArtworkError::Decode(ImageError::Limits(LimitError::from_kind(
+        LimitErrorKind::InsufficientMemory,
+    )))
+}
+
+/// Open `path` for decoding (any supported format, sniffed from content) and
+/// price the decode in MiB of [`MEMORY_BUDGET_MIB`]. Only the header is
+/// parsed, except that a JPEG decoder reads its whole file here.
+pub fn open(path: &Path) -> Result<(impl ImageDecoder, u32), ArtworkError> {
+    let size = std::fs::metadata(path)?.len();
+    if size > MAX_SOURCE_BYTES {
+        return Err(too_large());
+    }
+    let decoder = ImageReader::new(BufReader::new(std::fs::File::open(path)?))
         .with_guessed_format()?
         .into_decoder()?;
+    let cost = size
+        .saturating_add(decoder.total_bytes().saturating_mul(3))
+        .div_ceil(1 << 20);
+    if cost > u64::from(MEMORY_BUDGET_MIB) {
+        return Err(too_large());
+    }
+    Ok((decoder, cost as u32))
+}
+
+/// Finish an [`open`]ed decode: the image as stored plus its EXIF
+/// orientation, which [`variant`] and [`describe`] apply to their small
+/// output instead of copying the full-size pixels.
+pub fn decode(mut decoder: impl ImageDecoder) -> Result<(DynamicImage, Orientation), ArtworkError> {
     let orientation = decoder.orientation()?;
-    let mut img = DynamicImage::from_decoder(decoder)?;
-    img.apply_orientation(orientation);
-    Ok(img)
+    Ok((DynamicImage::from_decoder(decoder)?, orientation))
+}
+
+/// Whether `orientation` turns the image a quarter, swapping width and height.
+fn swaps_axes(orientation: Orientation) -> bool {
+    matches!(
+        orientation,
+        Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH
+    )
+}
+
+/// Width and height as displayed once `orientation` is applied.
+fn oriented_dims(img: &DynamicImage, orientation: Orientation) -> (u32, u32) {
+    if swaps_axes(orientation) {
+        (img.height(), img.width())
+    } else {
+        (img.width(), img.height())
+    }
 }
 
 /// The smallest ladder width at or above `w` (the largest rung beyond it).
@@ -65,9 +120,15 @@ pub fn snap_width(w: u32) -> u32 {
         .unwrap_or(WIDTHS[WIDTHS.len() - 1])
 }
 
-/// Resize to the snapped width (never upscaling) and encode lossy WebP.
-pub fn variant(img: &DynamicImage, w: u32) -> Result<Vec<u8>, ArtworkError> {
-    let (src_w, src_h) = (img.width(), img.height());
+/// Resize to the snapped display width (never upscaling), apply
+/// `orientation`, and encode lossy WebP. The resize reads the decoded pixels
+/// in place, whatever their type; only the small result is converted.
+pub fn variant(
+    img: &DynamicImage,
+    orientation: Orientation,
+    w: u32,
+) -> Result<Vec<u8>, ArtworkError> {
+    let (src_w, src_h) = oriented_dims(img, orientation);
     if src_w == 0 || src_h == 0 {
         return Err(ArtworkError::Resize("empty image".into()));
     }
@@ -75,28 +136,27 @@ pub fn variant(img: &DynamicImage, w: u32) -> Result<Vec<u8>, ArtworkError> {
     let dst_h = ((u64::from(src_h) * u64::from(dst_w) + u64::from(src_w) / 2) / u64::from(src_w))
         .max(1) as u32;
 
-    let alpha = img.color().has_alpha();
-    let (pixels, pixel_type) = if alpha {
-        (img.to_rgba8().into_raw(), PixelType::U8x4)
+    let (rw, rh) = if swaps_axes(orientation) {
+        (dst_h, dst_w)
     } else {
-        (img.to_rgb8().into_raw(), PixelType::U8x3)
+        (dst_w, dst_h)
     };
-    let src = ImageRef::new(src_w, src_h, &pixels, pixel_type)
-        .map_err(|e| ArtworkError::Resize(e.to_string()))?;
-    let mut dst = Image::new(dst_w, dst_h, pixel_type);
+    let mut small = DynamicImage::new(rw, rh, img.color());
     Resizer::new()
-        .resize(&src, &mut dst, None)
+        .resize(img, &mut small, None)
         .map_err(|e| ArtworkError::Resize(e.to_string()))?;
+    small.apply_orientation(orientation);
 
-    let encoder = if alpha {
-        webp::Encoder::from_rgba(dst.buffer(), dst_w, dst_h)
+    let webp = if img.color().has_alpha() {
+        webp::Encoder::from_rgba(&small.into_rgba8(), dst_w, dst_h)
+            .encode_simple(false, WEBP_QUALITY)
+            .map(|m| m.to_vec())
     } else {
-        webp::Encoder::from_rgb(dst.buffer(), dst_w, dst_h)
+        webp::Encoder::from_rgb(&small.into_rgb8(), dst_w, dst_h)
+            .encode_simple(false, WEBP_QUALITY)
+            .map(|m| m.to_vec())
     };
-    let webp = encoder
-        .encode_simple(false, WEBP_QUALITY)
-        .map_err(|e| ArtworkError::Encode(format!("{e:?}")))?;
-    Ok(webp.to_vec())
+    webp.map_err(|e| ArtworkError::Encode(format!("{e:?}")))
 }
 
 /// A 4x3-component blurhash of the image, computed on a 32px thumbnail.
@@ -106,16 +166,23 @@ pub fn blurhash(img: &DynamicImage) -> Result<String, ArtworkError> {
         .map_err(|e| ArtworkError::Blurhash(e.to_string()))
 }
 
-/// Blurhash and oriented size of an original.
-pub fn describe(bytes: &[u8]) -> Result<(String, u32, u32), ArtworkError> {
-    let img = decode(bytes)?;
-    Ok((blurhash(&img)?, img.width(), img.height()))
+/// Blurhash and oriented size of a decoded original.
+pub fn describe(
+    img: &DynamicImage,
+    orientation: Orientation,
+) -> Result<(String, u32, u32), ArtworkError> {
+    let (w, h) = oriented_dims(img, orientation);
+    let mut thumb = img.thumbnail(32, 32);
+    thumb.apply_orientation(orientation);
+    Ok((blurhash(&thumb)?, w, h))
 }
 
-/// At most [`POOL_PERMITS`] blocking jobs at once.
+/// At most [`POOL_PERMITS`] blocking jobs at once, and decodes within
+/// [`MEMORY_BUDGET_MIB`].
 #[derive(Clone)]
 pub struct Pool {
     permits: Arc<Semaphore>,
+    memory: Arc<Semaphore>,
     /// Jobs inside the pool right now, the peak and the total, for tests.
     #[cfg(test)]
     pub(crate) probe: Arc<Probe>,
@@ -125,6 +192,8 @@ pub struct Pool {
 #[derive(Default)]
 pub(crate) struct Probe {
     inside: AtomicU64,
+    /// Calls that have asked for a permit, waiting or not.
+    pub(crate) queued: AtomicU64,
     pub(crate) peak: AtomicU64,
     pub(crate) runs: AtomicU64,
 }
@@ -133,6 +202,7 @@ impl Default for Pool {
     fn default() -> Self {
         Self {
             permits: Arc::new(Semaphore::new(POOL_PERMITS)),
+            memory: Arc::new(Semaphore::new(MEMORY_BUDGET_MIB as usize)),
             #[cfg(test)]
             probe: Arc::default(),
         }
@@ -148,6 +218,8 @@ impl Pool {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
+        #[cfg(test)]
+        self.probe.queued.fetch_add(1, Ordering::SeqCst);
         let permit = self
             .permits
             .clone()
@@ -171,6 +243,30 @@ impl Pool {
         })
         .await
         .map_err(|e| ArtworkError::Pool(e.to_string()))
+    }
+
+    /// Decode `path` inside the pool and run `f` on the image and its EXIF
+    /// orientation. The source is opened only once a CPU permit is held, and
+    /// decoded only once its [`open`] price fits in the memory budget, so
+    /// queued requests hold no image bytes.
+    pub async fn run_decoded<T, F>(&self, path: PathBuf, f: F) -> Result<T, ArtworkError>
+    where
+        F: FnOnce(DynamicImage, Orientation) -> Result<T, ArtworkError> + Send + 'static,
+        T: Send + 'static,
+    {
+        let (memory, rt) = (self.memory.clone(), tokio::runtime::Handle::current());
+        self.run(move || {
+            let (decoder, cost) = open(&path)?;
+            // Blocking here holds a CPU permit: under memory pressure decodes
+            // run one at a time, which is the point.
+            let _memory = rt
+                .block_on(memory.acquire_many(cost))
+                .map_err(|e| ArtworkError::Pool(e.to_string()))?;
+            let (img, orientation) = decode(decoder)?;
+            f(img, orientation)
+        })
+        .await
+        .and_then(|r| r)
     }
 }
 
@@ -429,29 +525,32 @@ fn now_stamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-/// The TMDB original `file` (a name [`valid_tmdb_name`] accepts): read from
-/// `orig/tmdb/`, or fetched once from `base` and stored there. Requests for
-/// one file queue on its lock, so concurrent misses make one origin hit.
+/// The path of the TMDB original `file` (a name [`valid_tmdb_name`]
+/// accepts) under `orig/tmdb/`, fetched once from `base` if it is not stored.
+/// Requests for one file queue on its lock, so concurrent misses make one
+/// origin hit. The bytes are not returned: callers decode through
+/// [`Pool::run_decoded`], so they never sit in memory waiting for the pool.
+// ponytail: the cap could evict the original between this call and the
+// caller's decode (the file was just touched, so only a cache churning its
+// whole cap in that window does); that request fails and the next refetches.
 pub async fn tmdb_original(
     db: &crate::db::Db,
     store: &Arc<Store>,
     base: &str,
     file: &str,
-) -> Result<Vec<u8>, FetchError> {
+) -> Result<PathBuf, FetchError> {
     let key = format!("tmdb/{file}");
     let lock = store.origin.lock_for(&key);
     let _guard = lock.lock().await;
 
     let stored = {
         let (store, key) = (store.clone(), key.clone());
-        tokio::task::spawn_blocking(move || {
-            store.get_orig(&key).and_then(|p| std::fs::read(p).ok())
-        })
-        .await
-        .map_err(|e| ArtworkError::Pool(e.to_string()))?
+        tokio::task::spawn_blocking(move || store.get_orig(&key))
+            .await
+            .map_err(|e| ArtworkError::Pool(e.to_string()))?
     };
-    if let Some(bytes) = stored {
-        return Ok(bytes);
+    if let Some(path) = stored {
+        return Ok(path);
     }
     let cutoff = (chrono::Utc::now() - chrono::Duration::days(NEGATIVE_TTL_DAYS))
         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -465,6 +564,8 @@ pub async fn tmdb_original(
         return Err(FetchError::NotFound);
     }
 
+    // The slot is held until the body is on disk, so at most FETCH_SLOTS
+    // fetched bodies are ever in memory.
     let fetched = {
         let _slot = store
             .origin
@@ -472,22 +573,29 @@ pub async fn tmdb_original(
             .acquire()
             .await
             .map_err(|e| ArtworkError::Pool(e.to_string()))?;
-        fetch(&store.origin.http, &format!("{base}/{file}")).await
+        match fetch(&store.origin.http, &format!("{base}/{file}")).await {
+            Ok(bytes) => {
+                let (st, k) = (store.clone(), key.clone());
+                let stored = tokio::task::spawn_blocking(move || st.put_orig(&k, &bytes))
+                    .await
+                    .map_err(|e| ArtworkError::Pool(e.to_string()))??;
+                Ok(stored)
+            }
+            Err(e) => Err(e),
+        }
     };
     match fetched {
-        Ok(bytes) => {
-            let (st, k, b) = (store.clone(), key.clone(), bytes.clone());
-            tokio::task::spawn_blocking(move || st.put_orig(&k, &b))
-                .await
-                .map_err(|e| ArtworkError::Pool(e.to_string()))??;
+        Ok(path) => {
             // The placeholder is computed once, right after the fetch.
-            let b = bytes.clone();
-            let described = store.pool.run(move || describe(&b)).await?;
+            let described = store
+                .pool
+                .run_decoded(path.clone(), |img, o| describe(&img, o))
+                .await;
             if let Err(e) = &described {
                 tracing::warn!(key, "tmdb image blurhash failed: {e}");
             }
             mark_fetched(db, &key, described.ok()).await?;
-            Ok(bytes)
+            Ok(path)
         }
         Err(FetchError::NotFound) => {
             mark_failed(db, &key).await?;
@@ -690,9 +798,8 @@ pub async fn backfill(state: &crate::AppState) {
             jobs.spawn(async move {
                 let result = store
                     .pool
-                    .run(move || describe(&std::fs::read(path)?))
-                    .await
-                    .and_then(|r| r);
+                    .run_decoded(path.into(), |img, o| describe(&img, o))
+                    .await;
                 let ok = result.is_ok();
                 let written = match result {
                     Ok(d) => mark_fetched(&db, &key, Some(d)).await,
@@ -727,6 +834,7 @@ pub async fn backfill(state: &crate::AppState) {
 pub(crate) mod fixtures {
     use super::*;
     use image::{ImageFormat, Rgb, RgbImage};
+    use std::io::Cursor;
 
     pub(crate) fn gradient(w: u32, h: u32) -> RgbImage {
         RgbImage::from_fn(w, h, |x, y| {
@@ -785,7 +893,7 @@ mod tests {
     #[test]
     fn variant_snaps_width_keeps_aspect_and_is_lossy_webp() {
         let img = DynamicImage::ImageRgb8(gradient(600, 900));
-        let out = variant(&img, 300).unwrap();
+        let out = variant(&img, Orientation::NoTransforms, 300).unwrap();
         assert_eq!(&out[..4], b"RIFF");
         assert_eq!(&out[8..12], b"WEBP");
         assert_eq!(&out[12..16], b"VP8 ", "lossy bitstream, not VP8L");
@@ -795,34 +903,100 @@ mod tests {
     #[test]
     fn variant_never_upscales() {
         let img = DynamicImage::ImageRgb8(gradient(120, 80));
-        assert_eq!(webp_dims(&variant(&img, 1280).unwrap()), (120, 80));
+        assert_eq!(
+            webp_dims(&variant(&img, Orientation::NoTransforms, 1280).unwrap()),
+            (120, 80)
+        );
     }
 
     #[test]
     fn variant_keeps_alpha() {
         let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(200, 100, Rgba([10, 20, 30, 0])));
-        let out = variant(&img, 92).unwrap();
+        let out = variant(&img, Orientation::NoTransforms, 92).unwrap();
         let back = image::load_from_memory_with_format(&out, ImageFormat::WebP).unwrap();
         assert!(back.color().has_alpha());
         assert_eq!((back.width(), back.height()), (92, 46));
     }
 
+    /// [`open`] + [`decode`] of `bytes` written to a temp file.
+    fn decode_bytes(bytes: &[u8]) -> Result<(DynamicImage, Orientation), ArtworkError> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("src");
+        std::fs::write(&path, bytes).unwrap();
+        decode(open(&path)?.0)
+    }
+
     #[test]
     fn decode_reads_png() {
         let png = encode(&DynamicImage::ImageRgb8(gradient(40, 20)), ImageFormat::Png);
-        let img = decode(&png).unwrap();
+        let (img, _) = decode_bytes(&png).unwrap();
         assert_eq!((img.width(), img.height()), (40, 20));
     }
 
     #[test]
-    fn decode_applies_exif_orientation_6() {
-        let img = decode(&jpeg_with_orientation_6(64, 32)).unwrap();
-        assert_eq!((img.width(), img.height()), (32, 64));
+    fn exif_orientation_6_is_applied_to_the_variant_and_the_description() {
+        let (img, o) = decode_bytes(&jpeg_with_orientation_6(400, 200)).unwrap();
+        assert_eq!(o, Orientation::Rotate90);
+        assert_eq!((img.width(), img.height()), (400, 200), "stored, unrotated");
+        assert_eq!(webp_dims(&variant(&img, o, 150).unwrap()), (185, 370));
+        let (_, w, h) = describe(&img, o).unwrap();
+        assert_eq!((w, h), (200, 400));
     }
 
     #[test]
     fn decode_rejects_garbage() {
-        assert!(decode(b"not an image").is_err());
+        assert!(decode_bytes(b"not an image").is_err());
+    }
+
+    /// A 54-byte BMP header declaring a 20000x20000 24-bit image (1.2 GB of
+    /// pixels) and carrying no pixel data.
+    fn huge_bmp_header() -> Vec<u8> {
+        let mut b = b"BM".to_vec();
+        for v in [54u32 + 1_200_000_000, 0, 54, 40, 20_000, 20_000] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        // Planes 1, 24 bits per pixel, then compression through important
+        // colours all zero.
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&24u16.to_le_bytes());
+        b.extend_from_slice(&[0; 24]);
+        b
+    }
+
+    #[test]
+    fn a_decode_priced_over_the_memory_budget_is_refused_from_its_header() {
+        let err =
+            decode_bytes(&huge_bmp_header()).expect_err("refused before any pixel is allocated");
+        assert!(
+            matches!(err, ArtworkError::Decode(ImageError::Limits(_))),
+            "{err}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn decodes_wait_for_the_memory_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.png");
+        std::fs::write(
+            &path,
+            encode(&DynamicImage::ImageRgb8(gradient(64, 64)), ImageFormat::Png),
+        )
+        .unwrap();
+        let pool = Pool::default();
+        let all = pool
+            .memory
+            .clone()
+            .acquire_many_owned(MEMORY_BUDGET_MIB)
+            .await
+            .unwrap();
+        let job = tokio::spawn({
+            let pool = pool.clone();
+            async move { pool.run_decoded(path, |img, _| Ok(img.width())).await }
+        });
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!job.is_finished(), "no decode while the budget is spent");
+        drop(all);
+        assert_eq!(job.await.unwrap().unwrap(), 64);
     }
 
     #[test]
