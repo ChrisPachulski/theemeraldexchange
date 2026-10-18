@@ -1,6 +1,8 @@
-// Maps a server 403 `reason` from a login path to human copy. A valid
-// identity that presents no redeemed invite gets `no_invite`: "your identity
-// is fine, but you're not on the allowlist."
+// Maps a server 403 `reason` from either login path to human copy.
+// The new parallel model rejects a valid identity that presents no
+// redeemed invite with `no_invite`; the legacy Plex path used
+// `not_a_server_member`. Both mean "your identity is fine, but you're
+// not on the allowlist."
 export function deniedMessage(reason: unknown): string {
   switch (reason) {
     case 'no_invite':
@@ -14,6 +16,8 @@ export function deniedMessage(reason: unknown): string {
       return 'WorkOS rejected the sign-in. Try again.'
     case 'workos_unavailable':
       return 'WorkOS is unreachable right now. Try again in a moment.'
+    case 'not_a_server_member':
+      return "You aren't a member of this Plex server."
     default:
       return 'Access denied.'
   }

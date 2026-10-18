@@ -1,6 +1,6 @@
 /* Tab-screen chrome.
    Three fixed-position clusters share one horizontal band at the top of
-   the viewport: brand left, tab pills centered, UserMenu right.
+   the viewport: brand left, tab pills centered, Watch + UserMenu right.
    The pill for whichever tab the user is *on* is hidden so the chrome
    only ever offers the navigation actions that change something. */
 
@@ -128,7 +128,7 @@
   outline-offset: 2px;
 }
 
-/* Top-right cluster — UserMenu, mirrors HomeNav's right cluster. */
+/* Top-right cluster — Watch + UserMenu, mirrors HomeNav's right cluster. */
 .top-nav__right {
   position: fixed;
   top: var(--pod-inset, 16px);
@@ -139,8 +139,60 @@
   gap: var(--s-2);
 }
 
+.top-nav__watch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text);
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-pod);
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.top-nav__watch:hover {
+  background: color-mix(in oklch, var(--surface) 60%, transparent);
+}
+
+.top-nav__watch:hover .top-nav__watch-arrow {
+  color: var(--emerald);
+  transform: translateX(2px);
+}
+
+.top-nav__watch-glyph {
+  color: var(--emerald);
+  flex-shrink: 0;
+  /* Slight upward optical adjustment so the gem sits on the type baseline. */
+  transform: translateY(-1px);
+}
+
+.top-nav__watch-arrow {
+  font-family: var(--font-mono);
+  font-size: var(--t-xs);
+  letter-spacing: 0;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition:
+    color var(--dur-fast) var(--ease),
+    transform var(--dur-fast) var(--ease);
+}
+
 @media (max-width: 720px) {
   .top-nav__brand-sub {
+    display: none;
+  }
+
+  .top-nav__watch-label,
+  .top-nav__watch-arrow {
     display: none;
   }
 

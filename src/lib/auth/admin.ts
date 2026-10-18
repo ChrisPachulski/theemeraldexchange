@@ -1,7 +1,7 @@
 import { apiUrl } from '../api/base'
 import { throwApiError } from '../api/errors'
 import type { Policy } from '../parentalGate'
-import type { Role } from './types'
+import type { AuthMode, Role } from './types'
 
 // ── Admin allowlist API — invites + members ────────────────────────
 //
@@ -43,8 +43,7 @@ export type MemberView = {
   sub: string
   display_name: string | null
   role: Role
-  /** members.auth_mode as stored (a pre-re-key row may still say 'plex'). */
-  auth_mode: string
+  auth_mode: AuthMode
   invited_by: string | null
   joined_at: string
   revoked_at: string | null

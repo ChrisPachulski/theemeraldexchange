@@ -53,11 +53,14 @@ export default defineConfig({
       // global floor averaged server/** in; the SPA-only figure is the new
       // base), `npx vitest run --coverage`:
       //   src/**    62.04 stmts / 55.60 branches / 49.61 fns / 64.82 lines
+      // Re-measured 2026-10-18 after the Plex sign-in, Play in Plex and Users
+      // tab came back with their tests:
+      //   src/**    63.22 stmts / 56.19 branches / 50.67 fns / 65.99 lines
       thresholds: {
-        statements: 61,
+        statements: 62,
         branches: 55,
-        functions: 49,
-        lines: 64,
+        functions: 50,
+        lines: 65,
       },
     },
   },

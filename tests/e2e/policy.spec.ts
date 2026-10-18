@@ -110,8 +110,8 @@ test('an open member keeps every title, the strip, and Add', async ({ page }) =>
   await expect(page.getByRole('button', { name: /Mystery Film/ })).toBeVisible()
 })
 
-test('there is no Users tab; a stale #/users link lands home', async ({ page }) => {
-  await setup(page, ADMIN_USER, OPEN)
+test('Users shows only for a Plex-backed admin session', async ({ page }) => {
+  await setup(page, { ...ADMIN_USER, sub: 'apple:owner' }, OPEN)
 
   await page.goto('/#/')
   const sections = page.getByRole('navigation', { name: 'Sections' })
@@ -119,8 +119,22 @@ test('there is no Users tab; a stale #/users link lands home', async ({ page }) 
   await expect(sections.getByRole('button', { name: 'Users' })).toHaveCount(0)
 
   await page.goto('/#/users')
-  await expect(page).toHaveURL(/#\/users$/)
-  await expect(sections.getByRole('button', { name: 'Movies' })).toBeVisible()
+  await expect(page).toHaveURL(/#\/home$/)
+})
+
+test('a Plex admin without a Plex token is pointed at Invites & members', async ({ page }) => {
+  await setup(page, ADMIN_USER, OPEN)
+  await page.route('**/api/users', (route) =>
+    route.fulfill(json({ error: 'no_plex_token', message: 'Re-authenticate.' }, 409)),
+  )
+
+  await page.goto('/#/')
+  await expect(page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Users' })).toBeVisible()
+
+  await page.goto('/#/users')
+  await expect(page.getByText('Not available on this sign-in.')).toBeVisible({ timeout: 15_000 })
+  await expect(page.getByText(/Manage members from Invites & members/)).toBeVisible()
+  await expect(page.getByRole('button', { name: /Sign out/ })).toHaveCount(0)
 })
 
 test('the Restrictions editor never offers Save after a failed read, then saves a full policy', async ({ page }) => {

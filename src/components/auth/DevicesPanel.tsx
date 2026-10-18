@@ -146,8 +146,8 @@ export function DevicesPanel() {
 
       {!q.isLoading && devices.length === 0 && (
         <p className="devices-panel__empty">
-          Nothing paired yet. Open the EmeraldTV / EmeraldiOS app and open the
-          link it displays while signed in here to pair it.
+          Nothing paired yet. Open the EmeraldTV / EmeraldiOS app and visit{' '}
+          <code>plex.tv/link</code> with the code it displays to add this server.
         </p>
       )}
 

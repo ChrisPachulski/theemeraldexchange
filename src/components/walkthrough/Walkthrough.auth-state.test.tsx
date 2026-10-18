@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Walkthrough } from './Walkthrough'
 
 const auth = vi.hoisted(() => ({
-  activeSignIn: null as 'apple' | null,
+  activeSignIn: null as 'plex' | 'apple' | null,
+  signIn: vi.fn(),
   appleSignIn: vi.fn(),
 }))
 
@@ -14,7 +15,8 @@ vi.mock('../../lib/auth', () => ({
     ...auth,
     signInState: auth.activeSignIn ? 'pending' : 'idle',
     signInError: null,
-    authMethods: { apple: true, google: false, workos: true },
+    discoveredServers: null,
+    authMethods: { plex: true, apple: true, google: false, workos: true },
   }),
 }))
 
@@ -41,12 +43,24 @@ describe('Walkthrough provider-specific progress', () => {
     vi.clearAllMocks()
   })
 
-  it('offers no Plex sign-in', () => {
+  it('does not label Plex as waiting during an Apple sign-in', () => {
+    auth.activeSignIn = 'apple'
+
     const html = renderToStaticMarkup(<Walkthrough />)
 
-    expect(html).not.toMatch(/plex/i)
+    expect(count(html, '>Sign in with Plex<')).toBe(2)
+    expect(html).not.toContain('Waiting for Plex…')
+  })
+
+  it('shows Plex progress in both blocks without relabeling Apple', () => {
+    auth.activeSignIn = 'plex'
+
+    const html = renderToStaticMarkup(<Walkthrough />)
+
+    expect(count(html, '>Waiting for Plex…<')).toBe(2)
     // Native SIWA button + the WorkOS Apple link, in both blocks.
     expect(count(html, '>Sign in with Apple<')).toBe(4)
+    expect(html).not.toContain('Signing in…')
   })
 
   it('renders the WorkOS Google, Apple and email links in both blocks', () => {

@@ -9,6 +9,13 @@ import {
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useFeedback } from './useUserFeedback'
+import { usePlexLinks } from './usePlexLinks'
+
+// usePlexLinks only fetches for a Plex-authed session; give it one.
+vi.mock('../auth', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../auth')>()),
+  useAuth: () => ({ user: { sub: 'plex:1', auth_mode: 'plex' } }),
+}))
 
 function wrapper(errors: unknown[]) {
   const client = new QueryClient({
@@ -42,5 +49,77 @@ describe('protected hook fetchers', () => {
     renderHook(() => useFeedback(), { wrapper: wrapper(errors) })
 
     await waitFor(() => expect(errors[0]).toMatchObject({ status: 401 }))
+  })
+
+  it('preserves both Plex endpoint 401s before their degraded fallbacks', async () => {
+    const errors: unknown[] = []
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify({ error: 'unauthenticated' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    renderHook(() => usePlexLinks(), { wrapper: wrapper(errors) })
+
+    await waitFor(() => {
+      expect(errors).toHaveLength(2)
+      expect(errors).toEqual([
+        expect.objectContaining({ status: 401 }),
+        expect.objectContaining({ status: 401 }),
+      ])
+    })
+  })
+
+  it('keeps Plex links in degraded search mode for upstream 5xx failures', async () => {
+    const errors: unknown[] = []
+    vi.mocked(fetch).mockImplementation(() =>
+      Promise.resolve(new Response(null, { status: 502 })),
+    )
+
+    const { result } = renderHook(() => usePlexLinks(), {
+      wrapper: wrapper(errors),
+    })
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(errors).toEqual([])
+    expect(result.current.linkFor('movie', { title: 'The Matrix' })).toContain(
+      'search?query=The%20Matrix',
+    )
+  })
+
+  it('keeps the Plex search fallback on 409 no_plex_token without expiring the session', async () => {
+    const listener = vi.fn()
+    window.addEventListener('exchange:session-expired', listener)
+    const errors: unknown[] = []
+    vi.mocked(fetch).mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/plex/library-links')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: 'no_plex_token' }), {
+            status: 409,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify({ serverId: 'server-1' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+    })
+
+    const { result } = renderHook(() => usePlexLinks(), {
+      wrapper: wrapper(errors),
+    })
+
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.linkFor('movie', { tmdbId: 603, title: 'The Matrix' })).toContain(
+      'search?query=The%20Matrix',
+    )
+    expect(errors).toEqual([])
+    expect(listener).not.toHaveBeenCalled()
+    window.removeEventListener('exchange:session-expired', listener)
   })
 })

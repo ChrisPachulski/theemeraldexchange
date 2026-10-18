@@ -46,6 +46,8 @@ function fmtDate(iso: string | null): string {
 
 function providerLabel(mode: MemberView['auth_mode']): string {
   switch (mode) {
+    case 'plex':
+      return 'Plex'
     case 'apple':
       return 'Apple'
     case 'google':

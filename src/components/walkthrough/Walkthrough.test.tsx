@@ -4,8 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Walkthrough } from './Walkthrough'
 import { AuthProvider } from '../../lib/auth'
 
-// SSR markup checks for the public login page: the invite-code field and the
-// Sign in with Apple affordance, without breaking the WebGL brand mark.
+// SSR markup checks for the public login page. The parallel-auth model
+// adds an invite-code field and a Sign in with Apple affordance alongside
+// the existing Plex button — without breaking the WebGL brand mark.
 
 function render(initialInviteCode = ''): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -29,17 +30,19 @@ afterEach(() => {
 })
 
 describe('Walkthrough sign-in', () => {
-  it('shows the invite-code field and no Apple control without an Apple client id', () => {
+  it('keeps the Plex button and adds the invite-code field', () => {
     vi.stubEnv('VITE_APPLE_CLIENT_ID', '')
     const html = render()
+    expect(html).toContain('Sign in with Plex')
     expect(html).toContain('Invite code')
+    // Plex-only deploy (no Apple client id) shows no Apple control.
     expect(html).not.toContain('Sign in with Apple')
-    expect(html).not.toMatch(/sign in with plex/i)
   })
 
-  it('renders the Apple button when Apple is configured', () => {
+  it('renders the Apple button alongside Plex when Apple is configured', () => {
     vi.stubEnv('VITE_APPLE_CLIENT_ID', 'com.theemeraldexchange.web')
     const html = render()
+    expect(html).toContain('Sign in with Plex')
     expect(html).toContain('Sign in with Apple')
   })
 

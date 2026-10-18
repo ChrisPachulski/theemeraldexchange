@@ -208,7 +208,11 @@ test('posters load from the server image route, never from TMDB', async ({ page 
     await expect(img).toHaveAttribute('srcset', new RegExp(`/api/media/images/tmdb/${file}\\?w=500 500w`))
   }
   const pick = page.locator('section.trending', { has: page.getByRole('heading', { name: 'Movies picked for you' }) })
-  await expect(pick.getByRole('button', { name: /^Inception/ }).locator('img')).toHaveAttribute('src', /\/api\/media\/images\/tmdb\/inception\.jpg\?w=342$/)
+  const inception = pick.getByRole('button', { name: /^Inception/ }).locator('img')
+  await expect(inception).toHaveAttribute('src', /\/api\/media\/images\/tmdb\/inception\.jpg\?w=342$/)
+  // The poster is loading="lazy" and sits just below the 720 px fold once the
+  // shelves above it render, so bring it into view before waiting on its fetch.
+  await inception.scrollIntoViewIfNeeded()
   await expect.poll(() => served.some((p) => p === '/api/media/images/tmdb/inception.jpg')).toBe(true)
 
   // The detail's poster and backdrop take the same route.

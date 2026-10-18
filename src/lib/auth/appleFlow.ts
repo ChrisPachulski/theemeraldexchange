@@ -104,6 +104,7 @@ export async function runAppleSignIn(
       ) {
         return false
       }
+      d.setDiscoveredServers(null)
       d.setSignInState('idle')
       return true
     }

@@ -49,6 +49,9 @@ describe('authModeFromUser', () => {
   it('infers google from the sub prefix', () => {
     expect(authModeFromUser({ sub: 'google:member-42' })).toBe('google')
   })
+  it('infers plex from the sub prefix', () => {
+    expect(authModeFromUser({ sub: 'plex:42' })).toBe('plex')
+  })
   it('infers workos from the sub prefix', () => {
     expect(authModeFromUser({ sub: 'workos:user_01HZY3Q6D0AXTW5V6XWXQ2B3C4' })).toBe('workos')
   })
@@ -60,6 +63,9 @@ describe('deniedMessage', () => {
   })
   it('maps not_authorized to the same invitation copy', () => {
     expect(deniedMessage('not_authorized')).toMatch(/invite code/i)
+  })
+  it('keeps the plex-server-member copy', () => {
+    expect(deniedMessage('not_a_server_member')).toMatch(/plex server/i)
   })
   it('falls back to a generic message for unknown reasons', () => {
     expect(deniedMessage(undefined)).toBe('Access denied.')

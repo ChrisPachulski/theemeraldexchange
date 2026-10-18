@@ -1,7 +1,7 @@
-import type { ActiveSignIn, SignInState } from './types'
+import type { ActiveSignIn, AuthCtx, SignInState } from './types'
 
 /**
- * Everything a provider sign-in flow (Apple) needs from AuthProvider.
+ * Everything a provider sign-in flow (plex/apple) needs from AuthProvider.
  *
  * The flows were lifted out of the provider closure verbatim; passing the
  * closure's refs and setters through one object keeps them pure module
@@ -28,11 +28,18 @@ export type SignInFlowDeps = {
     provider: Exclude<ActiveSignIn, null>,
     attemptId: number,
   ) => Promise<boolean>
+  /** Tear down Plex poll timers and the popup. */
+  stopPolling: (clearActive?: boolean) => void
   setSignInState: (state: SignInState) => void
   setSignInError: (error: string | null) => void
   setSignOutError: (error: string | null) => void
+  setDiscoveredServers: (servers: AuthCtx['discoveredServers']) => void
   signInInFlightRef: { current: boolean }
   activeSignInRef: { current: ActiveSignIn }
   activeSignInAttemptRef: { current: number | null }
   activeSignInAbortRef: { current: AbortController | null }
+  popupRef: { current: Window | null }
+  pollRef: { current: number | null }
+  pollAbortRef: { current: AbortController | null }
+  pollGenerationRef: { current: number }
 }

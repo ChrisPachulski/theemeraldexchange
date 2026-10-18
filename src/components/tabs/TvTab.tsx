@@ -26,6 +26,7 @@ import { useSonarrEpisodes } from '../../lib/hooks/useSonarrEpisodes'
 import { useSuggestionStrip } from '../../lib/hooks/useSuggestionStrip'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useRatingGate, useSectionAccess } from '../../lib/hooks/usePolicy'
+import { usePlexLinks } from '../../lib/hooks/usePlexLinks'
 import { resumePosition, useLocalShowIndex, useMediaEpisodes, useMediaWatch } from '../../lib/hooks/useMediaLibrary'
 import { MediaPlayer } from '../media/MediaPlayer'
 import { episodeLabel } from '../media/EpisodePicker'
@@ -151,6 +152,7 @@ export function TvTab() {
   const confirm = useConfirm()
   const qc = useQueryClient()
   const { isAdmin } = useAuth()
+  const { linkFor: plexLinkFor } = usePlexLinks()
 
   const [adding, setAdding] = useState<SeriesSearchResult | null>(null)
   const [pickedViewing, setViewing] = useState<SeriesSearchResult | Series | null>(null)
@@ -668,6 +670,19 @@ export function TvTab() {
         castLoading={cast.isLoading}
         inLibrary={viewing !== null && 'id' in viewing}
         canRemove={isAdmin}
+        playUrl={
+          // No play affordance for an in-library show with zero downloaded
+          // episodes — Plex can't have it either, and the title-search
+          // fallback link would render a dead "Play in Plex" button.
+          viewing && viewingAvailability === 'playable'
+            ? plexLinkFor('tv', {
+                tmdbId: viewing.tmdbId ?? null,
+                tvdbId: viewing.tvdbId,
+                imdbId: viewing.imdbId ?? null,
+                title: viewing.title,
+              })
+            : null
+        }
         unavailableNote={
           viewingAvailability === 'not_released'
             ? 'Not aired yet'

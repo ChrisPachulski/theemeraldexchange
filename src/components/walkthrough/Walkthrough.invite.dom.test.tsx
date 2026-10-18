@@ -10,9 +10,11 @@ vi.mock('../../lib/auth', () => ({
   inviteCodeError: () => null,
   deniedMessage: () => 'denied',
   useAuth: () => ({
+    signIn: vi.fn(),
     activeSignIn: null,
     signInError: null,
-    authMethods: { apple: false, google: false, workos: true },
+    discoveredServers: null,
+    authMethods: { plex: true, apple: false, google: false, workos: true },
   }),
 }))
 vi.mock('../atmosphere/Kraken', () => ({ Kraken: () => null }))

@@ -1,6 +1,8 @@
 import { Suspense, lazy } from 'react'
 import type { Route } from '../../lib/router'
 import { useNavTransition } from '../../lib/navTransition'
+import { useAuth } from '../../lib/auth'
+import { isPlexUser } from '../../lib/hooks/usePlexLinks'
 import { useLimits } from '../../lib/hooks/useLimits'
 import { useRatingGate, useSectionAccess } from '../../lib/hooks/usePolicy'
 import './HomeTab.css'
@@ -14,6 +16,7 @@ const HomeShelves = lazy(() =>
 type Entry = {
   route: Route
   label: string
+  adminOnly?: boolean
   section?: 'live' | 'downloads'
   /** Default-off Limits key: shown only when the server reports that library. */
   library?: 'youtubeEnabled' | 'musicEnabled'
@@ -28,6 +31,8 @@ const ENTRIES: Entry[] = [
   { route: 'music', label: 'Music', library: 'musicEnabled' },
   { route: 'live', label: 'Live', section: 'live' },
   { route: 'downloads', label: 'Downloader', section: 'downloads' },
+  // Plex-backed admin sessions only, as in TopNav.
+  { route: 'users', label: 'Users', adminOnly: true },
 ]
 
 type Panel = {
@@ -59,13 +64,21 @@ const PANELS: Panel[] = [
   },
 ]
 
+// A Plex member can also watch in Plex itself, so their last step says so.
+const PLEX_READY_STEP =
+  "When it's ready, open the title and hit Play, or hit Watch up top to watch it in Plex (tell Plex on your device to rescan if it hasn't shown up yet)."
+
 export function HomeTab() {
   const { transitionTo } = useNavTransition()
+  const { isAdmin, user } = useAuth()
+  const plexUser = isPlexUser(user)
+  const plexAdmin = isAdmin && plexUser
   const sections = useSectionAccess()
   const ratingGate = useRatingGate()
   const limits = useLimits()
   const entries = ENTRIES.filter(
     (e) =>
+      (!e.adminOnly || plexAdmin) &&
       (!e.section || sections[e.section]) &&
       (!e.unrated || !ratingGate.capped) &&
       (!e.library || limits.data?.[e.library] === true),
@@ -84,7 +97,7 @@ export function HomeTab() {
             {p.body && <p className="home__panel-body">{p.body}</p>}
             {p.steps && (
               <ol className="home__panel-steps">
-                {p.steps.map((s, i) => (
+                {(plexUser ? [...p.steps.slice(0, -1), PLEX_READY_STEP] : p.steps).map((s, i) => (
                   <li key={i} className="home__panel-step">
                     <span className="home__panel-step-num">{i + 1}</span>
                     <span className="home__panel-step-body">{s}</span>

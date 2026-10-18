@@ -36,9 +36,10 @@ function SignInBlock({
   placement: 'hero' | 'foot'
   initialInviteCode: string
 }) {
-  const { activeSignIn, signInError, authMethods } = useAuth()
+  const { signIn, activeSignIn, signInError, discoveredServers, authMethods } = useAuth()
   const [inviteCode, setInviteCode] = useState(initialInviteCode)
   const pending = activeSignIn !== null
+  const plexPending = activeSignIn === 'plex'
   const code = inviteCode.trim()
   const codeError = inviteCodeError(code)
   // A unique id per placement so the two SignInBlock instances on the
@@ -49,6 +50,7 @@ function SignInBlock({
   // Only offer the providers this install actually configured (plan 006
   // Phase 1). null = methods not fetched yet → show everything rather than
   // hiding the way in behind a slow request.
+  const showPlex = !authMethods || authMethods.plex
   const showApple = !authMethods || authMethods.apple
   const showWorkos = Boolean(authMethods?.workos)
   // The WorkOS callback lands back here with ?auth_error=<reason> on failure.
@@ -86,6 +88,16 @@ function SignInBlock({
         className="walkthrough__signin-buttons"
         disabled={pending || Boolean(codeError)}
       >
+        {showPlex && (
+          <button
+            type="button"
+            className="walkthrough__signin-button"
+            onClick={() => void signIn(code || undefined)}
+            disabled={pending}
+          >
+            {plexPending ? 'Waiting for Plex…' : 'Sign in with Plex'}
+          </button>
+        )}
         {showApple && <AppleSignInButton inviteCode={code || undefined} />}
         {/* No provider = the WorkOS hosted page, which carries email sign-in
             for members whose identity is neither Google nor Apple. */}
@@ -108,7 +120,8 @@ function SignInBlock({
       </fieldset>
       <p className="walkthrough__signin-hint">
         Invitation-only. Returning members sign in with Google, Apple
-        {showWorkos ? ', or email' : ''}; no
+        {showWorkos ? ', email' : ''}
+        {showPlex ? ', or the Plex account the library was shared to' : ''}; no
         code needed. First-time guests: paste your invite code above, then sign
         in with any provider.
       </p>
@@ -117,6 +130,22 @@ function SignInBlock({
       )}
       {signInError && (
         <p className="walkthrough__signin-error" role="alert">{signInError}</p>
+      )}
+      {discoveredServers && discoveredServers.length > 0 && (
+        <div className="walkthrough__discovery">
+          <p className="walkthrough__discovery-title">
+            First-run setup. Set <code>PLEX_SERVER_ID</code> to lock this down:
+          </p>
+          <ul className="walkthrough__discovery-list">
+            {discoveredServers.map((s) => (
+              <li key={s.id}>
+                <span className="walkthrough__discovery-name">{s.name}</span>
+                {s.owned && <span className="walkthrough__discovery-tag">owned</span>}
+                <code className="walkthrough__discovery-id">{s.id}</code>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   )

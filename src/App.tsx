@@ -11,6 +11,7 @@ import { ReplayButton } from './components/nav/ReplayButton'
 import { LinkDeviceModal } from './components/auth/LinkDeviceModal'
 import { clearPendingLinkCode, readPendingLinkCode } from './lib/linkFragment'
 import { AuthProvider, useAuth } from './lib/auth'
+import { isPlexUser } from './lib/hooks/usePlexLinks'
 import { useLimits } from './lib/hooks/useLimits'
 import { useRatingGate, useSectionAccess } from './lib/hooks/usePolicy'
 // View Transitions cross-fade + persistent-shell view-transition-names.
@@ -38,6 +39,9 @@ const MoviesTab = lazy(() =>
 const DownloadsTab = lazy(() =>
   import('./components/tabs/DownloadsTab').then((m) => ({ default: m.DownloadsTab })),
 )
+const UsersTab = lazy(() =>
+  import('./components/tabs/UsersTab').then((m) => ({ default: m.UsersTab })),
+)
 const IptvTab = lazy(() => import('./components/tabs/IptvTab'))
 const YouTubeTab = lazy(() =>
   import('./components/tabs/YouTubeTab').then((m) => ({ default: m.YouTubeTab })),
@@ -59,6 +63,7 @@ const TABS: Record<Route, React.ComponentType> = {
   tv: TvTab,
   movies: MoviesTab,
   downloads: DownloadsTab,
+  users: UsersTab,
   live: IptvTab,
   youtube: YouTubeTab,
   music: MusicTab,
@@ -69,15 +74,21 @@ function Shell() {
   // A `#/link/CODE` landing (device pairing) survives the provider redirect
   // in sessionStorage; open the claim modal once the member is signed in.
   const [linkCode, setLinkCode] = useState<string | null>(() => readPendingLinkCode())
+  const { isAdmin, user } = useAuth()
   const limits = useLimits()
   const sections = useSectionAccess()
   const ratingGate = useRatingGate()
+  // The Users tab is admin-only. Non-admins who land on /users via a
+  // stale link get bounced home rather than seeing an error page.
   // The Live tab is gated by IPTV_DISABLED — bounce on stale links too
   // (the route still exists in the enum so old bookmarks don't 404 the
   // SPA itself; they just round-trip to home).
   // Optional integrations (plan 006 Phase 3): a tab whose backing service
   // is unconfigured bounces home, same as the IPTV gate.
-  // A member's policy can also deny Live or Downloads (those calls 403).
+  // A member's policy can also deny Live or Downloads (those calls 403),
+  // and the Users list reads plex.tv with the session's Plex token, so
+  // only a Plex-backed admin session can load it.
+  const usersOk = isAdmin && isPlexUser(user)
   const liveOk = limits.data?.iptvEnabled !== false && sections.live
   const sonarrEnabled = limits.data?.sonarrEnabled !== false
   const radarrEnabled = limits.data?.radarrEnabled !== false
@@ -88,14 +99,16 @@ function Shell() {
   const youtubeOff = ratingGate.capped || (!limits.isPlaceholderData && limits.data?.youtubeEnabled !== true)
   const musicOff = !limits.isPlaceholderData && limits.data?.musicEnabled !== true
   useEffect(() => {
+    if (route === 'users' && !usersOk) navigate('home')
     if (route === 'live' && !liveOk) navigate('home')
     if (route === 'tv' && !sonarrEnabled) navigate('home')
     if (route === 'movies' && !radarrEnabled) navigate('home')
     if (route === 'downloads' && !downloadsOk) navigate('home')
     if (route === 'youtube' && youtubeOff) navigate('home')
     if (route === 'music' && musicOff) navigate('home')
-  }, [route, liveOk, sonarrEnabled, radarrEnabled, downloadsOk, youtubeOff, musicOff, navigate])
+  }, [route, usersOk, liveOk, sonarrEnabled, radarrEnabled, downloadsOk, youtubeOff, musicOff, navigate])
   const blocked =
+    (route === 'users' && !usersOk) ||
     (route === 'live' && !liveOk) ||
     (route === 'tv' && !sonarrEnabled) ||
     (route === 'movies' && !radarrEnabled) ||

@@ -16,6 +16,7 @@ import { apiUrl } from '../api/base'
 import { runAppleSignIn } from './appleFlow'
 import type { SignInFlowDeps } from './flowDeps'
 import { inviteCodeError } from './messages'
+import { runPlexSignIn } from './plexFlow'
 import { AuthRequestTimeoutError, boundedAuthRequest, AUTH_NETWORK_TIMEOUT_MS } from './request'
 import {
   SESSION_CONFIRMATION_UNAVAILABLE_ERROR,
@@ -38,6 +39,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [activeSignIn, setActiveSignIn] = useState<ActiveSignIn>(null)
   const [signInError, setSignInError] = useState<string | null>(null)
   const [signOutError, setSignOutError] = useState<string | null>(null)
+  const [discoveredServers, setDiscoveredServers] =
+    useState<AuthCtx['discoveredServers']>(null)
+  const pollRef = useRef<number | null>(null)
+  const pollAbortRef = useRef<AbortController | null>(null)
+  const pollGenerationRef = useRef(0)
+  const popupRef = useRef<Window | null>(null)
   const signInInFlightRef = useRef(false)
   const activeSignInRef = useRef<ActiveSignIn>(null)
   const activeSignInAttemptRef = useRef<number | null>(null)
@@ -66,6 +73,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     signInInFlightRef,
     signOutInFlightRef,
     setViewAs,
+    setDiscoveredServers,
   })
 
   const rejectMalformedInvite = useCallback((inviteCode?: string) => {
@@ -207,14 +215,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (mountedRef.current) setSignInState('idle')
   }, [clearSignIn, mountedRef])
 
+  const stopPolling = useCallback((clearActive = true) => {
+    if (pollRef.current !== null) window.clearTimeout(pollRef.current)
+    pollRef.current = null
+    pollGenerationRef.current += 1
+    pollAbortRef.current?.abort()
+    pollAbortRef.current = null
+    if (clearActive) clearSignIn()
+    popupRef.current?.close()
+    popupRef.current = null
+  }, [clearSignIn])
+
   useEffect(
     () => () => {
-      clearSignIn()
+      stopPolling()
       signOutAbortRef.current?.abort()
       signOutAbortRef.current = null
       signOutInFlightRef.current = false
     },
-    [clearSignIn],
+    [stopPolling],
   )
 
   // One object of render-stable refs/setters/callbacks, handed to the
@@ -228,15 +247,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearSignIn,
       isSignInAttemptCurrent,
       confirmProviderSession,
+      stopPolling,
       setSignInState,
       setSignInError,
       setSignOutError,
+      setDiscoveredServers,
       signInInFlightRef,
       activeSignInRef,
       activeSignInAttemptRef,
       activeSignInAbortRef,
+      popupRef,
+      pollRef,
+      pollAbortRef,
+      pollGenerationRef,
     }),
-    [beginSignIn, clearSignIn, confirmProviderSession, isSignInAttemptCurrent, rejectMalformedInvite],
+    [
+      beginSignIn,
+      clearSignIn,
+      confirmProviderSession,
+      isSignInAttemptCurrent,
+      rejectMalformedInvite,
+      stopPolling,
+    ],
+  )
+
+  const signIn = useCallback(
+    (inviteCode?: string) => runPlexSignIn(flowDeps(), inviteCode),
+    [flowDeps],
   )
 
   const appleSignIn = useCallback(
@@ -258,7 +295,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSignOutError(null)
     cancelScheduledSessionRefresh()
     invalidateSessionReads()
-    clearSignIn()
+    stopPolling()
     let failure: unknown = null
     try {
       const response = await boundedAuthRequest(
@@ -286,6 +323,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSignInState('idle')
         setSignInError(null)
         setViewAs(null)
+        setDiscoveredServers(null)
         if (failure) {
           setSignOutError(
             failure instanceof AuthRequestTimeoutError
@@ -307,7 +345,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSessionError,
     setSessionState,
     setViewAs,
-    clearSignIn,
+    stopPolling,
   ])
 
   const loading = sessionState === 'loading'
@@ -334,6 +372,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         activeSignIn,
         signInError,
         signOutError,
+        discoveredServers,
+        signIn,
         appleSignIn,
         beginAppleSignIn,
         cancelAppleSignIn,
