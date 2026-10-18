@@ -549,24 +549,28 @@ async fn add_movie(
     };
     options.insert("searchForMovie".into(), false.into());
     capped.insert("addOptions".into(), Value::Object(options));
-    let r = fetch(
-        &st,
-        Method::POST,
-        "/api/v3/movie",
-        &[],
-        Some(&Value::Object(capped)),
-        LAN_TIMEOUT,
-    )
-    .await?;
 
-    // Its own task so a client hang-up cannot stop the settlement halfway
-    // (Node never cancelled): a dropped request would strand the movie
-    // unmonitored and ungrabbed, with no rollback.
+    // The add and its settlement run in their own task, so a client hang-up
+    // (even while Radarr is still committing the add) cannot stop them
+    // halfway (Node never cancelled): a dropped request would strand the
+    // movie unmonitored and ungrabbed, with no rollback.
     let caller = Caller::new(&p, &headers);
-    let task = settle_add(st.clone(), caller, r, body, folder, wanted_search);
-    Ok(tokio::spawn(task)
+    let task = async move {
+        let capped = Value::Object(capped);
+        let r = fetch(
+            &st,
+            Method::POST,
+            "/api/v3/movie",
+            &[],
+            Some(&capped),
+            LAN_TIMEOUT,
+        )
+        .await?;
+        Ok(settle_add(st, caller, r, body, folder, wanted_search).await)
+    };
+    tokio::spawn(task)
         .await
-        .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic())))
+        .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
 }
 
 /// Everything after the upstream add: the capped grab (or its rollback /

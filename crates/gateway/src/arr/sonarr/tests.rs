@@ -336,3 +336,54 @@ fn the_tv_waits_match_the_ts() {
     assert_eq!(t.tv_poll, Duration::from_millis(1500));
     assert_eq!(t.tv_search, Duration::from_secs(180));
 }
+
+/// A hang-up while Sonarr is still committing the add itself: the capped
+/// grab must still run.
+#[tokio::test]
+async fn a_hang_up_during_the_add_post_still_grabs() {
+    let fake = Fake::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (st, cookie) = sonarr_state(&dir, &fake, fast()).await;
+    let app = crate::router(st.clone());
+    let path = "/data/tv-hangup-add";
+    let mut routes = routes(path, TIGHT_FREE, 200, false);
+    let add_route = routes
+        .iter_mut()
+        .find(|r| r.method == "POST" && r.path.ends_with("/series"))
+        .unwrap();
+    *add_route = Route::new(
+        "POST",
+        "/sonarr/api/v3/series",
+        201,
+        &json!({ "id": 7, "title": "Reserved Show", "rootFolderPath": path,
+                 "seasons": [{ "seasonNumber": 1, "monitored": true }] }),
+    );
+    add_route.hold = true;
+    fake.set_routes(routes);
+
+    let body = json!({ "title": "Reserved Show", "rootFolderPath": path, "qualityProfileId": 7,
+                       "addOptions": { "searchForMissingEpisodes": true } });
+    let req = tokio::spawn({
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move {
+            send(
+                &app,
+                json_req(
+                    "POST",
+                    "/api/sonarr/api/v3/series",
+                    Some(&cookie),
+                    Some(&body),
+                ),
+            )
+            .await
+        }
+    });
+    fake.until(|f| f.count("POST", "/sonarr/api/v3/series") == 1)
+        .await;
+    req.abort();
+    assert!(req.await.is_err_and(|e| e.is_cancelled()));
+
+    fake.release_held(1);
+    fake.until(|f| grab_posts(f) == 1).await;
+    st.arr.idle().await;
+}

@@ -199,6 +199,35 @@ async fn the_reservation_is_released_after_a_grab_either_way() {
     assert_eq!(st.arr.radarr_ledger.pending_bytes(&folder), 0.0);
 }
 
+/// A hang-up while Radarr is still committing the add itself: the settlement
+/// (here the rollback after a failed grab) must still run.
+#[tokio::test]
+async fn a_hang_up_during_the_add_post_still_settles() {
+    let fake = Fake::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (st, cookie) = radarr_state(&dir, &fake, fast()).await;
+    let app = crate::router(st.clone());
+    let path = "/data/movies-hangup-add";
+    let mut routes = add_routes(path, TIGHT_FREE, &[("Held", 402)], 500, false);
+    let mut held_add = created("Held", 402);
+    held_add.hold = true;
+    routes.insert(0, held_add);
+    fake.set_routes(routes);
+
+    let req = tokio::spawn({
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move { add(&app, &cookie, path, "Held").await }
+    });
+    fake.until(|f| f.count("POST", "/radarr/api/v3/movie") == 1)
+        .await;
+    req.abort();
+    assert!(req.await.is_err_and(|e| e.is_cancelled()));
+
+    fake.release_held(1);
+    fake.until(|f| f.count("DELETE", "/radarr/api/v3/movie/402") == 1)
+        .await;
+}
+
 #[tokio::test]
 async fn a_grab_past_its_budget_is_kept_monitored_never_deleted() {
     let fake = Fake::start(vec![]).await;

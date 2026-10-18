@@ -683,45 +683,47 @@ async fn add_series(
     options.insert("searchForMissingEpisodes".into(), false.into());
     options.insert("searchForCutoffUnmetEpisodes".into(), false.into());
     capped.insert("addOptions".into(), Value::Object(options));
-    let r = fetch(
-        &st,
-        Method::POST,
-        "/api/v3/series",
-        &[],
-        Some(&Value::Object(capped)),
-    )
-    .await?;
 
-    // The conversion signal; the recommender's catalog is keyed on tmdbId
-    // (Sonarr's own id is tvdbId), so without one there is nothing to send.
-    if r.is_success()
-        && st.config.use_local_recommender
-        && let Some(tmdb) = body.get("tmdbId").filter(|v| v.is_number())
-    {
-        let ev = json!({ "sub": p.session.sub, "kind": "tv", "tmdb_id": tmdb, "signal": "added" });
-        let caller = Caller::new(&p, &headers);
-        recommender::spawn_mirror(
-            &st,
-            "/events/feedback",
-            ev,
-            "recommender.postFeedback",
-            Some(&caller),
-        );
-    }
+    // The add, the conversion signal and the reconcile run in their own task,
+    // so a client hang-up (even while Sonarr is still committing the add)
+    // cannot stop them halfway (Node never cancelled).
+    let caller = Caller::new(&p, &headers);
+    let sub = p.session.sub.clone();
+    let task = async move {
+        let capped = Value::Object(capped);
+        let r = fetch(&st, Method::POST, "/api/v3/series", &[], Some(&capped)).await?;
 
-    if r.is_success() && wanted_search {
-        // Its own task so a client hang-up cannot stop the reconcile halfway
-        // (Node never cancelled); it never fails, so the join result is moot.
-        let task = reconcile_and_grab(
-            st.clone(),
-            r.body.clone(),
-            body,
-            folder,
-            p.session.sub.clone(),
-        );
-        let _ = tokio::spawn(task).await;
-    }
-    Ok(relay_reply(r))
+        // The conversion signal; the recommender's catalog is keyed on tmdbId
+        // (Sonarr's own id is tvdbId), so without one there is nothing to send.
+        if r.is_success()
+            && st.config.use_local_recommender
+            && let Some(tmdb) = body.get("tmdbId").filter(|v| v.is_number())
+        {
+            let ev = json!({ "sub": sub, "kind": "tv", "tmdb_id": tmdb, "signal": "added" });
+            recommender::spawn_mirror(
+                &st,
+                "/events/feedback",
+                ev,
+                "recommender.postFeedback",
+                Some(&caller),
+            );
+        }
+        if r.is_success() && wanted_search {
+            // Never fails; its own task keeps a panic from costing the reply.
+            let _ = tokio::spawn(reconcile_and_grab(
+                st.clone(),
+                r.body.clone(),
+                body,
+                folder,
+                sub,
+            ))
+            .await;
+        }
+        Ok(relay_reply(r))
+    };
+    tokio::spawn(task)
+        .await
+        .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
 }
 
 /// Season numbers as the TS held them (None is `undefined`).
