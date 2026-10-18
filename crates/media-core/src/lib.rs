@@ -154,10 +154,11 @@ pub async fn run_guarded_scan(state: &AppState, trigger: &str) -> bool {
     true
 }
 
-/// The photo, audiobook and YouTube passes, shared by the scheduled scan and
-/// the manual POST /scan so neither runs a narrower scan than the other. The
-/// caller holds the `scanning` guard. Best-effort: each logs its own failure
-/// and is a no-op when its roots env is unset.
+/// The photo, audiobook and YouTube passes, then the library poster prefetch,
+/// shared by the scheduled scan and the manual POST /scan so neither runs a
+/// narrower scan than the other. The caller holds the `scanning` guard.
+/// Best-effort: each logs its own failure and is a no-op when its roots env
+/// is unset.
 pub(crate) async fn run_extra_passes(state: &AppState, trigger: &str) {
     match scanner::scan_photos_isolated(state.db.clone(), state.config.photo_roots.clone()).await {
         Ok(report) => tracing::info!(
@@ -198,6 +199,7 @@ pub(crate) async fn run_extra_passes(state: &AppState, trigger: &str) {
         ),
         Err(e) => tracing::warn!(trigger, "youtube scan failed: {e}"),
     }
+    artwork::prefetch_library(state).await;
 }
 
 /// Spawn the background scan scheduler: an optional boot scan plus a periodic
@@ -269,6 +271,7 @@ mod tests {
         let mut config = config::Config::from_env().unwrap();
         config.boot_scan = boot_scan;
         config.scan_interval_secs = scan_interval_secs;
+        config.tmdb_image_base = crate::routes::testsupport::DEAD_ORIGIN.into();
         AppState {
             db,
             artwork: Arc::new(artwork::Store::open(

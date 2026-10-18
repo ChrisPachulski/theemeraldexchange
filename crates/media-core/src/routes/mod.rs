@@ -44,7 +44,7 @@ mod stores;
 mod stream;
 mod subtitles;
 #[cfg(test)]
-mod testsupport;
+pub(crate) mod testsupport;
 mod watch;
 mod youtube;
 

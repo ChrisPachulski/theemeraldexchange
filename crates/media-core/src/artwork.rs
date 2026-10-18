@@ -1,16 +1,19 @@
 //! Artwork core: decode (EXIF orientation applied), resize to a fixed width
 //! ladder, encode lossy WebP, compute blurhash placeholders, and keep the
 //! resized variants in a disk-capped LRU cache under `<data>/images/cache`.
+//! TMDB originals are fetched once into `<data>/images/orig/tmdb/<file>`,
+//! under the same cap, with a negative cache in the `images` table.
 //!
 //! CPU work runs through [`Pool`], a constant 2-permit gate around
 //! `spawn_blocking`, so image decoding never takes more than two of the NAS's
 //! six threads away from Plex.
 
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex, Weak};
+use std::time::{Duration, SystemTime};
 
 use fast_image_resize::images::{Image, ImageRef};
 use fast_image_resize::{PixelType, Resizer};
@@ -138,26 +141,31 @@ impl Pool {
 }
 
 /// Image store rooted at `<data>/images`. Resized variants live under
-/// `cache/`, capped at `cap_bytes` with LRU-by-mtime eviction. Methods do
+/// `cache/` and fetched originals under `orig/`; both are capped together at
+/// `cap_bytes` with LRU-by-mtime eviction (both can be rebuilt). Methods do
 /// blocking filesystem I/O: call them from inside [`Pool::run`] or
 /// `spawn_blocking`.
 pub struct Store {
     root: PathBuf,
     cap_bytes: u64,
-    /// Bytes under `cache/`. The mutex also serialises writes and eviction,
-    /// so the count stays exact.
+    /// Bytes under `cache/` and `orig/`. The mutex also serialises writes and
+    /// eviction, so the count stays exact.
     used: Mutex<u64>,
     tmp_seq: AtomicU64,
     pub pool: Pool,
+    pub origin: Origin,
 }
 
+/// The capped areas under the store root.
+const AREAS: [&str; 2] = ["cache", "orig"];
+
 impl Store {
-    /// Open the store, seeding the byte counter with a walk of `cache/`.
-    /// Leftover temp files from a crash are removed. Nothing is created until
-    /// the first write, so a missing directory is an empty cache.
+    /// Open the store, seeding the byte counter with a walk of `cache/` and
+    /// `orig/`. Leftover temp files from a crash are removed. Nothing is
+    /// created until the first write, so a missing directory is an empty cache.
     pub fn open(root: PathBuf, cap_bytes: u64) -> Self {
         let mut used = 0;
-        for (path, size, _) in walk_files(&root.join("cache")) {
+        for (path, size, _) in walk_areas(&root) {
             if is_temp(&path) {
                 let _ = std::fs::remove_file(&path);
             } else {
@@ -170,6 +178,7 @@ impl Store {
             used: Mutex::new(used),
             tmp_seq: AtomicU64::new(0),
             pool: Pool::default(),
+            origin: Origin::default(),
         }
     }
 
@@ -184,25 +193,44 @@ impl Store {
     /// The cache path for `key` (a relative path such as
     /// `tmdb/abc.jpg/342.webp`), or `None` when the key could escape `cache/`.
     pub fn cache_path(&self, key: &str) -> Option<PathBuf> {
+        self.area_path("cache", key)
+    }
+
+    /// The path of a fetched original (`tmdb/<file>`) under `orig/`.
+    pub fn orig_path(&self, key: &str) -> Option<PathBuf> {
+        self.area_path("orig", key)
+    }
+
+    fn area_path(&self, area: &str, key: &str) -> Option<PathBuf> {
         let rel = Path::new(key);
         let safe = !key.is_empty() && rel.components().all(|c| matches!(c, Component::Normal(_)));
-        safe.then(|| self.root.join("cache").join(rel))
+        safe.then(|| self.root.join(area).join(rel))
     }
 
     /// A cache hit: returns the path and touches its mtime so LRU keeps it.
     pub fn get(&self, key: &str) -> Option<PathBuf> {
-        let path = self.cache_path(key)?;
-        let file = std::fs::File::options().append(true).open(&path).ok()?;
-        let _ = file.set_modified(SystemTime::now());
-        Some(path)
+        touch(self.cache_path(key)?)
+    }
+
+    /// A stored original, touched like a cache hit.
+    pub fn get_orig(&self, key: &str) -> Option<PathBuf> {
+        touch(self.orig_path(key)?)
     }
 
     /// Write `bytes` under `key` (temp file + rename), then evict the oldest
-    /// entries if the cache is over its cap.
+    /// entries if the store is over its cap.
     pub fn put(&self, key: &str, bytes: &[u8]) -> Result<PathBuf, ArtworkError> {
-        let path = self
-            .cache_path(key)
-            .ok_or_else(|| ArtworkError::Io(std::io::Error::other("unsafe cache key")))?;
+        self.write(self.cache_path(key), bytes)
+    }
+
+    /// Store a fetched original; it counts toward the cap like a variant.
+    pub fn put_orig(&self, key: &str, bytes: &[u8]) -> Result<PathBuf, ArtworkError> {
+        self.write(self.orig_path(key), bytes)
+    }
+
+    fn write(&self, path: Option<PathBuf>, bytes: &[u8]) -> Result<PathBuf, ArtworkError> {
+        let path =
+            path.ok_or_else(|| ArtworkError::Io(std::io::Error::other("unsafe cache key")))?;
         let dir = path.parent().expect("cache path has a parent");
         std::fs::create_dir_all(dir)?;
         let name = path.file_name().expect("cache path has a file name");
@@ -244,7 +272,7 @@ impl Store {
     // An in-memory index replaces it if the cache grows past ~100k files.
     fn evict(&self, used: &mut u64, keep: &Path) {
         let low_water = self.cap_bytes - self.cap_bytes / 10;
-        let mut files: Vec<_> = walk_files(&self.root.join("cache"))
+        let mut files: Vec<_> = walk_areas(&self.root)
             .into_iter()
             .filter(|(p, _, _)| p != keep && !is_temp(p))
             .collect();
@@ -258,6 +286,19 @@ impl Store {
             }
         }
     }
+}
+
+fn touch(path: PathBuf) -> Option<PathBuf> {
+    let file = std::fs::File::options().append(true).open(&path).ok()?;
+    let _ = file.set_modified(SystemTime::now());
+    Some(path)
+}
+
+fn walk_areas(root: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
+    AREAS
+        .iter()
+        .flat_map(|area| walk_files(&root.join(area)))
+        .collect()
 }
 
 fn is_temp(path: &Path) -> bool {
@@ -276,6 +317,254 @@ fn walk_files(dir: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
             Some((e.into_path(), meta.len(), mtime))
         })
         .collect()
+}
+
+/// Production TMDB image origin (`Config::tmdb_image_base`).
+pub const TMDB_ORIGIN: &str = "https://image.tmdb.org/t/p/original";
+/// Concurrent origin fetches, process-wide.
+pub const FETCH_SLOTS: usize = 2;
+/// Whole-request timeout, under the gateway's 15 s TTFB.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+/// Largest original accepted from the origin.
+pub const MAX_ORIGINAL_BYTES: usize = 10 * 1024 * 1024;
+/// How long an origin 404 is remembered before the file is tried again.
+const NEGATIVE_TTL_DAYS: i64 = 7;
+/// Rows per prefetch query.
+const PREFETCH_BATCH: i64 = 500;
+
+/// A TMDB image file name: `^[A-Za-z0-9]{1,64}\.(jpg|png)$`.
+pub fn valid_tmdb_name(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(stem, ext)| {
+        (1..=64).contains(&stem.len())
+            && stem.bytes().all(|b| b.is_ascii_alphanumeric())
+            && matches!(ext, "jpg" | "png")
+    })
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum FetchError {
+    /// The origin answered 404, now or inside the cooldown.
+    #[error("not found at origin")]
+    NotFound,
+    /// Transient failure or a rejected answer (redirect, size, content type).
+    #[error("origin: {0}")]
+    Upstream(String),
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+    #[error(transparent)]
+    Artwork(#[from] ArtworkError),
+}
+
+/// Origin fetch state: a client with redirects off, the fetch slots and the
+/// per-file single-flight locks.
+pub struct Origin {
+    http: reqwest::Client,
+    slots: Semaphore,
+    inflight: Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
+}
+
+impl Default for Origin {
+    fn default() -> Self {
+        Self {
+            http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(FETCH_TIMEOUT)
+                .build()
+                .expect("reqwest client (TLS init)"),
+            slots: Semaphore::new(FETCH_SLOTS),
+            inflight: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl Origin {
+    /// The lock every request for `key` takes; dead entries are pruned here.
+    fn lock_for(&self, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut map = self.inflight.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(lock) = map.get(key).and_then(Weak::upgrade) {
+            return lock;
+        }
+        map.retain(|_, w| w.strong_count() > 0);
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        map.insert(key.to_string(), Arc::downgrade(&lock));
+        lock
+    }
+}
+
+fn now_stamp() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+/// The TMDB original `file` (a name [`valid_tmdb_name`] accepts): read from
+/// `orig/tmdb/`, or fetched once from `base` and stored there. Requests for
+/// one file queue on its lock, so concurrent misses make one origin hit.
+pub async fn tmdb_original(
+    db: &crate::db::Db,
+    store: &Arc<Store>,
+    base: &str,
+    file: &str,
+) -> Result<Vec<u8>, FetchError> {
+    let key = format!("tmdb/{file}");
+    let lock = store.origin.lock_for(&key);
+    let _guard = lock.lock().await;
+
+    let stored = {
+        let (store, key) = (store.clone(), key.clone());
+        tokio::task::spawn_blocking(move || {
+            store.get_orig(&key).and_then(|p| std::fs::read(p).ok())
+        })
+        .await
+        .map_err(|e| ArtworkError::Pool(e.to_string()))?
+    };
+    if let Some(bytes) = stored {
+        return Ok(bytes);
+    }
+    let cutoff = (chrono::Utc::now() - chrono::Duration::days(NEGATIVE_TTL_DAYS))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let cooling: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM images WHERE key = ? AND failed_at > ?")
+            .bind(&key)
+            .bind(&cutoff)
+            .fetch_optional(&db.pool)
+            .await?;
+    if cooling.is_some() {
+        return Err(FetchError::NotFound);
+    }
+
+    let fetched = {
+        let _slot = store
+            .origin
+            .slots
+            .acquire()
+            .await
+            .map_err(|e| ArtworkError::Pool(e.to_string()))?;
+        fetch(&store.origin.http, &format!("{base}/{file}")).await
+    };
+    match fetched {
+        Ok(bytes) => {
+            let (st, k, b) = (store.clone(), key.clone(), bytes.clone());
+            tokio::task::spawn_blocking(move || st.put_orig(&k, &b))
+                .await
+                .map_err(|e| ArtworkError::Pool(e.to_string()))??;
+            sqlx::query(
+                "INSERT INTO images (key, fetched_at, attempts) VALUES (?, ?, 1) \
+                 ON CONFLICT(key) DO UPDATE SET fetched_at = excluded.fetched_at, \
+                 failed_at = NULL, attempts = attempts + 1",
+            )
+            .bind(&key)
+            .bind(now_stamp())
+            .execute(&db.pool)
+            .await?;
+            Ok(bytes)
+        }
+        Err(FetchError::NotFound) => {
+            sqlx::query(
+                "INSERT INTO images (key, failed_at, attempts) VALUES (?, ?, 1) \
+                 ON CONFLICT(key) DO UPDATE SET failed_at = excluded.failed_at, \
+                 attempts = attempts + 1",
+            )
+            .bind(&key)
+            .bind(now_stamp())
+            .execute(&db.pool)
+            .await?;
+            Err(FetchError::NotFound)
+        }
+        Err(e) => {
+            tracing::warn!(key, "tmdb image fetch failed: {e}");
+            Err(e)
+        }
+    }
+}
+
+/// One GET: 404 is [`FetchError::NotFound`]; any other non-2xx (redirects
+/// included, since the client follows none), a non-image content type or a
+/// body over [`MAX_ORIGINAL_BYTES`] is [`FetchError::Upstream`].
+async fn fetch(http: &reqwest::Client, url: &str) -> Result<Vec<u8>, FetchError> {
+    let upstream = |e: reqwest::Error| FetchError::Upstream(e.without_url().to_string());
+    let mut resp = http.get(url).send().await.map_err(upstream)?;
+    let status = resp.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(FetchError::NotFound);
+    }
+    if !status.is_success() {
+        return Err(FetchError::Upstream(format!("status {status}")));
+    }
+    let ct = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !ct.starts_with("image/") {
+        return Err(FetchError::Upstream(format!("content type {ct:?}")));
+    }
+    let too_large = || FetchError::Upstream("body over the size cap".into());
+    if resp
+        .content_length()
+        .is_some_and(|n| n > MAX_ORIGINAL_BYTES as u64)
+    {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(upstream)? {
+        if body.len() + chunk.len() > MAX_ORIGINAL_BYTES {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// Fetch the poster of every movie and show that has no `images` row yet, in
+/// batches of [`PREFETCH_BATCH`] through the shared fetch slots. Runs after
+/// each scan; posters outside the library are fetched on first request.
+/// Best-effort: failures are logged and the file is retried on a later pass
+/// (a 404 only after its cooldown).
+pub async fn prefetch_library(state: &crate::AppState) {
+    let mut after = String::new();
+    let (mut fetched, mut failed) = (0usize, 0usize);
+    loop {
+        let batch: Vec<String> = match sqlx::query_scalar(
+            "SELECT p FROM (SELECT poster_path AS p FROM movies UNION SELECT poster_path FROM shows) \
+             WHERE p > ? AND NOT EXISTS (SELECT 1 FROM images WHERE key = 'tmdb/' || ltrim(p, '/')) \
+             ORDER BY p LIMIT ?",
+        )
+        .bind(&after)
+        .bind(PREFETCH_BATCH)
+        .fetch_all(&state.db.pool)
+        .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!("poster prefetch query failed: {e}");
+                return;
+            }
+        };
+        let Some(last) = batch.last() else { break };
+        after = last.clone();
+        let mut jobs = tokio::task::JoinSet::new();
+        for path in &batch {
+            let file = path.trim_start_matches('/').to_string();
+            if !valid_tmdb_name(&file) {
+                continue;
+            }
+            let (db, store) = (state.db.clone(), state.artwork.clone());
+            let base = state.config.tmdb_image_base.clone();
+            jobs.spawn(async move { tmdb_original(&db, &store, &base, &file).await });
+        }
+        while let Some(done) = jobs.join_next().await {
+            match done {
+                Ok(Ok(_)) => fetched += 1,
+                _ => failed += 1,
+            }
+        }
+        if (batch.len() as i64) < PREFETCH_BATCH {
+            break;
+        }
+    }
+    if fetched + failed > 0 {
+        tracing::info!(fetched, failed, "library poster prefetch complete");
+    }
 }
 
 /// Fixture images built in-test, shared with the route tests.

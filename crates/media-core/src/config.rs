@@ -144,6 +144,9 @@ pub struct Config {
     pub images_dir: PathBuf,
     /// Disk cap for the image cache (`MEDIA_IMAGE_CACHE_MB`, default 2048).
     pub image_cache_bytes: u64,
+    /// TMDB image origin, [`crate::artwork::TMDB_ORIGIN`]. Tests point it at
+    /// a loopback fake.
+    pub tmdb_image_base: String,
 }
 
 impl Config {
@@ -261,6 +264,7 @@ impl Config {
             artwork_dir,
             images_dir,
             image_cache_bytes,
+            tmdb_image_base: crate::artwork::TMDB_ORIGIN.to_string(),
         })
     }
 

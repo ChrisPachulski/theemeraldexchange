@@ -708,6 +708,7 @@ mod tests {
         let db = crate::db::Db::connect_memory().await.unwrap();
         let mut config = Config::from_env().unwrap();
         config.transcoder_url = Some(url.to_string());
+        config.tmdb_image_base = crate::routes::testsupport::DEAD_ORIGIN.into();
         AppState {
             db,
             artwork: Arc::new(crate::artwork::Store::open(
