@@ -117,6 +117,35 @@ pub async fn open(path: &std::path::Path) -> Result<SqlitePool> {
     Ok(pool)
 }
 
+/// A snapshot copy, read-only and immutable (no migrations, no locks, no
+/// -shm writes). Immutable mode skips the WAL, so a snapshot whose -wal still
+/// holds pages is refused rather than read stale.
+pub async fn open_snapshot(path: &std::path::Path) -> Result<SqlitePool> {
+    let wal = path.with_file_name(format!(
+        "{}-wal",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    if std::fs::metadata(&wal).is_ok_and(|m| m.len() > 0) {
+        return Err(sqlx::Error::Configuration(
+            format!(
+                "{} has a non-empty WAL; checkpoint it first",
+                path.display()
+            )
+            .into(),
+        )
+        .into());
+    }
+    register_sqlite_vec();
+    let opts = SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true)
+        .immutable(true);
+    Ok(SqlitePoolOptions::new()
+        .max_connections(2)
+        .connect_with(opts)
+        .await?)
+}
+
 async fn migrate(
     pool: &SqlitePool,
     migrations: &[(i64, &str, &str)],

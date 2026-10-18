@@ -37,6 +37,8 @@ pub struct Config {
     pub principal_mode: PrincipalMode,
     pub cold_start_threshold: i64,
     pub default_recipe: String,
+    /// RECOMMENDER_OPTIMIZER_MODEL: the Claude model the nightly optimizer asks.
+    pub optimizer_model: String,
     pub optimizer_max_drift_pct: f64,
     pub optimizer_max_tokens: i64,
     pub rec_log_retention_days: i64,
@@ -127,6 +129,9 @@ impl Config {
             cold_start_threshold: int("RECOMMENDER_COLD_START_THRESHOLD", 10)?,
             default_recipe: get("RECOMMENDER_DEFAULT_RECIPE")
                 .unwrap_or_else(|| "mmr_diverse".into()),
+            // Python os.environ.get(k, default): an empty value stays empty.
+            optimizer_model: get("RECOMMENDER_OPTIMIZER_MODEL")
+                .unwrap_or_else(|| "claude-haiku-4-5-20251001".into()),
             optimizer_max_drift_pct: match get("RECOMMENDER_OPTIMIZER_MAX_DRIFT_PCT") {
                 None => 0.20,
                 Some(v) => v.trim().parse().map_err(|_| {
@@ -261,6 +266,7 @@ mod tests {
         assert_eq!(c.default_recipe, "mmr_diverse");
         assert_eq!(c.optimizer_max_drift_pct, 0.20);
         assert_eq!(c.optimizer_max_tokens, 8000);
+        assert_eq!(c.optimizer_model, "claude-haiku-4-5-20251001");
         assert_eq!(c.rec_log_retention_days, 90);
         assert_eq!(c.model_dir, PathBuf::from("/srv/minilm"));
         assert!(c.tmdb_api_key.is_none() && c.anthropic_api_key.is_none());

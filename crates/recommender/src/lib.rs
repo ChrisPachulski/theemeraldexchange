@@ -12,10 +12,13 @@ pub mod holdout;
 pub mod http;
 pub mod ingest;
 pub mod metrics;
+pub mod optimizer;
 pub mod reasons;
 pub mod recipes;
+pub mod replay_eval;
 pub mod retrieval;
 pub mod rng;
+pub mod schedule;
 pub mod tmdb;
 
 #[derive(Debug, thiserror::Error)]

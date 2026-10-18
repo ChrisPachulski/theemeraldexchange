@@ -21,7 +21,7 @@ use crate::Result;
 use crate::context::{Candidate, UserContext, normalize};
 use crate::db::{TableGeneration, table_generation};
 use crate::reasons::{discover_reason, personalized_reason};
-use crate::retrieval::retrieve_candidates;
+use crate::retrieval::{CandidateBatch, retrieve_candidates};
 
 pub const DEFAULTS: &[(&str, Def)] = &[
     ("pool_size", Def::Int(800)),
@@ -252,12 +252,15 @@ pub(super) fn dot(a: &[f32], b: &[f32]) -> f32 {
     (acc.iter().sum::<f64>() + tail) as f32
 }
 
+/// `pinned` replaces retrieval with exactly these candidates (replay-eval's
+/// score_ids); None retrieves as /score does.
 pub(super) async fn score(
     pool: &SqlitePool,
     caches: &Caches,
     ctx: &UserContext,
     n: usize,
     p: &P<'_>,
+    pinned: Option<CandidateBatch>,
 ) -> Result<RecipeResult> {
     let pool_size = p.int("pool_size").max(0) as usize;
     let neg_w = p.num("negative_weight");
@@ -281,7 +284,10 @@ pub(super) async fn score(
         }
         None => normalize(pos),
     };
-    let mut batch = retrieve_candidates(pool, ctx.kind, &query, ctx, pool_size, min_votes).await?;
+    let mut batch = match pinned {
+        Some(b) => b,
+        None => retrieve_candidates(pool, ctx.kind, &query, ctx, pool_size, min_votes).await?,
+    };
     let empty_pool = |batch_diag: &serde_json::Value| RecipeResult {
         items: Vec::new(),
         diag: extend(diag(json!({ "path": "empty_pool" })), batch_diag),

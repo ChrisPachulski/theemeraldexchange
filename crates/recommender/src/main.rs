@@ -32,8 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("recommender starting; db={}", config.db_path.display());
     let pool = db::open(&config.db_path).await?;
     let caches = Arc::new(recommender::recipes::Caches::default());
-    let _sweeper =
-        http::events::spawn_retention_sweeper(pool.clone(), config.clone(), caches.clone());
+    let _jobs = recommender::schedule::start(pool.clone(), config.clone(), caches.clone());
 
     let listener = tokio::net::TcpListener::bind(std::net::SocketAddr::from(LISTEN)).await?;
     tracing::info!("recommender listening on http://{}", listener.local_addr()?);
@@ -82,6 +81,29 @@ async fn cli(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error
             pool.close().await;
             Ok(res?)
         }
+        ("optimize", []) => {
+            let config = Config::from_env()?;
+            let pool = db::open(&config.db_path).await?;
+            let res =
+                recommender::optimizer::run(&pool, &config, recommender::optimizer::ANTHROPIC_URL)
+                    .await;
+            pool.close().await;
+            let report = res?;
+            println!("{report:?}");
+            Ok(())
+        }
+        ("replay-eval", rest) => {
+            let env = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+            let opts = recommender::replay_eval::Opts::parse(rest, env).map_err(|e| {
+                format!(
+                    "{e}; usage: eex-recommender replay-eval [--snap DIR] [--cutoff YYYY-MM-DD] \
+                     [--recipe ranker|fused] [--kind movie|tv|both] [--params JSON] [--show N]"
+                )
+            })?;
+            let owner = env("EEX_OWNER_SUB")
+                .ok_or("replay-eval needs EEX_OWNER_SUB (the household sub to replay)")?;
+            Ok(recommender::replay_eval::run(&opts, owner).await?)
+        }
         ("verify-embedding", [baseline]) => {
             // Reads only RECOMMENDER_MODEL_DIR: the image check runs without secrets.
             let model_dir = recommender::config::model_dir(|k| std::env::var(k).ok());
@@ -93,7 +115,7 @@ async fn cli(cmd: &str, args: &[String]) -> Result<(), Box<dyn std::error::Error
         }
         _ => Err(format!(
             "unknown command {cmd:?}; usage: eex-recommender [featurize [--limit N] | \
-             ingest --mode M ... | verify-embedding <baseline.json>]"
+             ingest --mode M ... | optimize | replay-eval ... | verify-embedding <baseline.json>]"
         )
         .into()),
     }

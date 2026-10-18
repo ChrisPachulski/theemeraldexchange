@@ -1200,7 +1200,7 @@ pub fn slate(
 // --- recipe entry points -----------------------------------------------------
 
 /// Python round(x, nd) (NaN stays NaN).
-fn py_round(x: f64, nd: usize) -> f64 {
+pub(crate) fn py_round(x: f64, nd: usize) -> f64 {
     format!("{x:.nd$}").parse().unwrap_or(x)
 }
 
@@ -1444,4 +1444,4 @@ pub async fn score_ids(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

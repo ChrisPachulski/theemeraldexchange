@@ -85,7 +85,7 @@ fn assert_sparse(got: &Sparse, want: &Value, what: &str) {
     }
 }
 
-async fn seed(pool: &SqlitePool, g: &Value) {
+pub(crate) async fn seed(pool: &SqlitePool, g: &Value) {
     crate::http::tests::seed_score_golden(pool, g).await;
     for e in g["extras"].as_array().unwrap() {
         let (kind, id) = (e["kind"].as_str().unwrap(), e["tmdb_id"].as_i64().unwrap());

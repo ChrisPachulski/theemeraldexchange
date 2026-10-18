@@ -94,6 +94,17 @@ pub struct Caches {
     pub this_year: Option<i32>,
 }
 
+#[cfg(test)]
+impl Caches {
+    /// Caches whose catalog "this year" is pinned (goldens).
+    pub fn with_year(year: i32) -> Self {
+        Caches {
+            this_year: Some(year),
+            ..Default::default()
+        }
+    }
+}
+
 pub fn get(name: &str) -> Option<&'static Recipe> {
     REGISTRY.iter().find(|r| r.name == name)
 }
@@ -175,12 +186,32 @@ pub async fn score(
             let mmr_k = n.max(p.int("mmr_input_k").max(0) as usize);
             cosine(pool, ctx, n, &p, Some((lam, mmr_k))).await?
         }
-        "fused" => fused::score(pool, caches, ctx, n, &p).await?,
+        "fused" => fused::score(pool, caches, ctx, n, &p, None).await?,
         "ranker" => ranker::score(pool, caches, ctx, n, &p).await?,
         _ => {
             cold_start_result(pool, ctx, n, p.int("min_vote_count"), "cold_start_trending").await?
         }
     }))
+}
+
+/// fused scores for exactly `batch`'s candidates, uncapped (household_eval's
+/// score_ids: retrieval pinned to the ids, kids_genre_cap 1.0, n = all).
+pub async fn fused_score_batch(
+    pool: &SqlitePool,
+    caches: &Arc<Caches>,
+    ctx: &UserContext,
+    batch: crate::retrieval::CandidateBatch,
+    params: &Params,
+) -> Result<HashMap<i64, f64>> {
+    let mut params = params.clone();
+    params.insert("kids_genre_cap".into(), Param::Float(1.0));
+    let p = P {
+        defaults: fused::DEFAULTS,
+        params: &params,
+    };
+    let n = batch.candidates.len();
+    let res = fused::score(pool, caches, ctx, n, &p, Some(batch)).await?;
+    Ok(res.items.iter().map(|i| (i.tmdb_id, i.score)).collect())
 }
 
 /// The popularity pool as "trending" items: cold_start_trending, and the
