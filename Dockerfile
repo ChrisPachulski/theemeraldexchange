@@ -50,12 +50,13 @@ COPY Cargo.toml Cargo.lock LICENSE ./
 COPY crates/emerald-contracts ./crates/emerald-contracts
 COPY crates/emerald-contracts-napi ./crates/emerald-contracts-napi
 COPY crates/emerald-contracts-pyo3 ./crates/emerald-contracts-pyo3
-# media-core, transcoder, iptv and auth are workspace members too; cargo must
-# see them to resolve the workspace.
+# media-core, transcoder, iptv, auth and gateway are workspace members too;
+# cargo must see them to resolve the workspace.
 COPY crates/media-core ./crates/media-core
 COPY crates/transcoder ./crates/transcoder
 COPY crates/iptv ./crates/iptv
 COPY crates/auth ./crates/auth
+COPY crates/gateway ./crates/gateway
 
 # napi-rs CLI ships its own builder script; run it inside the crate dir
 # so it picks up package.json's napi block (binaryName, target list).

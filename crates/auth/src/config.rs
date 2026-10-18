@@ -226,7 +226,9 @@ impl Config {
     }
 }
 
-fn check_strength(name: &str, value: &str) -> Result<(), String> {
+/// The production secret rule (placeholder, then length); the gateway applies
+/// it to RECOMMENDER_EVENT_SECRET too.
+pub fn check_strength(name: &str, value: &str) -> Result<(), String> {
     if SECRET_PLACEHOLDERS.contains(&value.to_lowercase().as_str()) {
         return Err(format!(
             "{name} looks like a placeholder value. Generate a real secret with \
