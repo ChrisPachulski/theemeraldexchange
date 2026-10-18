@@ -39,19 +39,21 @@ WORKDIR /srv
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl gosu \
  && rm -rf /var/lib/apt/lists/* \
- && mkdir -p /data \
+ && mkdir -p /data /srv/minilm \
  && groupadd --system --gid 10001 recommender \
  && useradd --system --uid 10001 --gid recommender --home-dir /srv --no-create-home recommender \
  && chown -R recommender:recommender /data /srv
 
 # all-MiniLM-L6-v2 at the pinned revision c9745ed, sha256-checked at build time
-# (Dockerfile frontend >= 1.6). Same files the Python image downloaded into
+# (Dockerfile frontend >= 1.6). /srv/minilm is created above and the files are
+# owned by uid 10001: with ADD creating the dir itself, the first CI image gave
+# uid 10001 EACCES on config.json. Same files the Python image downloaded into
 # /data/hf-cache at featurize time; `eex-recommender verify-embedding` proves
 # them against the committed baseline in CI.
 ARG MINILM=https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/c9745ed1d9f207416be6d2e6f8de32d1f16199bf
-ADD --chmod=644 --checksum=sha256:953f9c0d463486b10a6871cc2fd59f223b2c70184f49815e7efbcab5d8908b41 ${MINILM}/config.json /srv/minilm/config.json
-ADD --chmod=644 --checksum=sha256:be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037 ${MINILM}/tokenizer.json /srv/minilm/tokenizer.json
-ADD --chmod=644 --checksum=sha256:53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db ${MINILM}/model.safetensors /srv/minilm/model.safetensors
+ADD --chown=10001:10001 --chmod=644 --checksum=sha256:953f9c0d463486b10a6871cc2fd59f223b2c70184f49815e7efbcab5d8908b41 ${MINILM}/config.json /srv/minilm/config.json
+ADD --chown=10001:10001 --chmod=644 --checksum=sha256:be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037 ${MINILM}/tokenizer.json /srv/minilm/tokenizer.json
+ADD --chown=10001:10001 --chmod=644 --checksum=sha256:53aa51172d142c89d9012cce15ae4d6cc0ca6895895114379cacb4fab128d9db ${MINILM}/model.safetensors /srv/minilm/model.safetensors
 
 COPY --from=builder /usr/local/bin/eex-recommender /usr/local/bin/eex-recommender
 COPY --chmod=755 crates/recommender/docker-entrypoint.sh /usr/local/bin/recommender-entrypoint
