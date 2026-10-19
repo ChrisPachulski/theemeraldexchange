@@ -156,6 +156,14 @@ jobs:
           set -o pipefail
           cargo test --workspace --all-targets 2>&1 | tee cargo-test.log
 
+      - name: Image-pin staleness guard (best-effort)
+        # Flags compose image pins whose Docker Hub tag was last pushed >12
+        # months ago (the cloudflared pin once sat ~18 months stale with
+        # nothing watching it). Its parser tests ran in cargo test above. Hub
+        # or network failures are warnings, so a registry blip never fails CI;
+        # only a confirmed stale tag does.
+        run: cargo run -q -p pin-staleness -- docker-compose.yml
+
       - name: Surface fmt / clippy / test failures as annotations
         if: failure()
         # First 10 hits only: GitHub shows at most 10 error annotations per step.
@@ -279,17 +287,6 @@ jobs:
         # so unset vars default to empty with a warning — `-q` still exits 0.
         # Verified against the production compose file on the deploy host.
         run: docker compose config -q
-
-      - name: Image-pin staleness guard (best-effort)
-        # Flags compose image pins whose Docker Hub tag was last pushed >12
-        # months ago (the cloudflared pin once sat ~18 months stale with
-        # nothing watching it). Self-test first (offline parser assertions),
-        # then the live check. The script treats network/Hub-API failures as
-        # warnings (exit 0) so a registry blip can never fail CI — only a
-        # CONFIRMED stale tag does.
-        run: |
-          node scripts/check-image-pin-staleness.mjs --self-test
-          node scripts/check-image-pin-staleness.mjs docker-compose.yml
 
       - name: Stage eex-ytresolve placeholder
         # The Dockerfile COPYs bin/eex-ytresolve (the prebuilt Rust YouTube

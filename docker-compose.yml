@@ -562,7 +562,7 @@ services:
     # a digest-only (or tag-only) bump ships something other than what the file
     # claims. A previous bump updated the digest but left the tag reading
     # 2024.12.2, which made the pin look ~18 months stale while actually
-    # running 2026.5.2 bits. CI now runs scripts/check-image-pin-staleness.mjs
+    # running 2026.5.2 bits. CI now runs crates/pin-staleness
     # against this file to flag pins whose tag is >12 months old.
     image: cloudflare/cloudflared:2026.6.0@sha256:ba461b8aa9c042156dbd39c38657fe7431bafa063220eab8d5330a523863da9f
     container_name: exchange-cloudflared

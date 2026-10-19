@@ -8,6 +8,7 @@ members = [
   "crates/auth",
   "crates/gateway",
   "crates/recommender",
+  "crates/pin-staleness",
 ]
 # ytresolve (our native Rust YouTube extractor) now lives in its own repo:
 #   https://github.com/ChrisPachulski/rust-yt-extractor
