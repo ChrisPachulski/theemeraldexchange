@@ -96,7 +96,9 @@ jobs:
     # sub-namespace, PII scrub. The Apple Swift port MUST agree with it
     # byte-for-byte; tests/vectors/*.json are the interop oracle.
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    # The whole server is Rust since the port: a warm run takes 5-8 min, and
+    # a Cargo.toml change (new crate) rebuilds from the partial cache.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
