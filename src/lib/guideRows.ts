@@ -2,6 +2,7 @@
 // fetch window both use (so they share one react-query cache entry) and the
 // row filter, a port of the Apple app's EmeraldKit `GuideSearch.filter`.
 import type { EpgGridDto, EpgProgrammeDto } from './api/iptv'
+import { matchesWords } from './wordMatch'
 
 export const GUIDE_BUCKET_MS = 30 * 60_000
 export const GUIDE_HOURS = 6 // 30 min of history + 5.5h forward
@@ -56,7 +57,7 @@ export function filterGuideRows(
       : [...rows.filter((r) => favorites.has(r.stream_id)), ...rows.filter((r) => !favorites.has(r.stream_id))]
   const q = query.trim().toLowerCase()
   if (!q) return pinned
-  const has = (text: string | null) => !!text && text.toLowerCase().includes(q)
+  const has = (text: string | null) => !!text && matchesWords(text, q)
   return pinned.filter(
     (row) =>
       has(row.name) ||

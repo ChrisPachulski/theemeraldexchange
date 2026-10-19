@@ -1,0 +1,1182 @@
+{
+  "sonarr": {
+    "lookup": [
+      {
+        "title": "Scooby Doo",
+        "year": 2008,
+        "tvdbId": 402601,
+        "tmdbId": 0,
+        "alternateTitles": [],
+        "images": []
+      },
+      {
+        "title": "The Scooby-Doo Show",
+        "year": 1976,
+        "tvdbId": 73817,
+        "tmdbId": 205755,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo: Origins",
+        "year": 0,
+        "tvdbId": 461932,
+        "tmdbId": 253124,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 18,
+        "title": "Scooby-Doo, Where Are You!",
+        "year": 1969,
+        "tvdbId": 78260,
+        "tmdbId": 926,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "The New Scooby-Doo Movies",
+        "year": 1972,
+        "tvdbId": 75661,
+        "tmdbId": 1068,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 192,
+        "title": "What's New Scooby-Doo?",
+        "year": 2002,
+        "tvdbId": 80119,
+        "tmdbId": 652,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 187,
+        "title": "A Pup Named Scooby-Doo",
+        "year": 1988,
+        "tvdbId": 73546,
+        "tmdbId": 418,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Be Cool, Scooby-Doo!",
+        "year": 2015,
+        "tvdbId": 301376,
+        "tmdbId": 64228,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "LEGO Scooby-Doo Shorts",
+        "year": 2015,
+        "tvdbId": 312002,
+        "tmdbId": 103464,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo and Scrappy-Doo",
+        "year": 1979,
+        "tvdbId": 78740,
+        "tmdbId": 6005,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo! Mystery Incorporated",
+        "year": 2010,
+        "tvdbId": 174681,
+        "tmdbId": 18123,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "YoKoSo Scooby-Doo!",
+        "year": 0,
+        "tvdbId": 451140,
+        "tmdbId": 256699,
+        "alternateTitles": [],
+        "images": []
+      },
+      {
+        "title": "Scooby-Doo: Origins",
+        "year": 0,
+        "tvdbId": 474192,
+        "tmdbId": 0,
+        "alternateTitles": [],
+        "images": []
+      },
+      {
+        "title": "Shaggy and Scooby-Doo Get a Clue",
+        "year": 2006,
+        "tvdbId": 81425,
+        "tmdbId": 593,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "The 13 Ghosts of Scooby-Doo",
+        "year": 1985,
+        "tvdbId": 73543,
+        "tmdbId": 1069,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo en Europe",
+        "year": 2019,
+        "tvdbId": 372179,
+        "tmdbId": 123802,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "The Richie Rich/Scooby-Doo Show and Scrappy Too!",
+        "year": 1980,
+        "tvdbId": 276365,
+        "tmdbId": 1071,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo and Guess Who?",
+        "year": 2019,
+        "tvdbId": 361065,
+        "tmdbId": 88367,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby's All Star Laff-A-Lympics",
+        "year": 1977,
+        "tvdbId": 78328,
+        "tmdbId": 1072,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Syl’s Oude Doos",
+        "year": 2019,
+        "tvdbId": 373146,
+        "tmdbId": 0,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      }
+    ],
+    "library": [
+      {
+        "id": 18,
+        "title": "Scooby-Doo, Where Are You!",
+        "year": 1969,
+        "tvdbId": 78260,
+        "tmdbId": 926,
+        "alternateTitles": [
+          {
+            "title": "Scooby Doo Wo bist Du"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 187,
+        "title": "A Pup Named Scooby-Doo",
+        "year": 1988,
+        "tvdbId": 73546,
+        "tmdbId": 418,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 192,
+        "title": "What's New Scooby-Doo?",
+        "year": 2002,
+        "tvdbId": 80119,
+        "tmdbId": 652,
+        "alternateTitles": [],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      }
+    ]
+  },
+  "radarr": {
+    "lookup": [
+      {
+        "title": "Scooby-Doo",
+        "year": 2002,
+        "tmdbId": 9637,
+        "alternateTitles": [
+          {
+            "title": "Skuby-Du"
+          },
+          {
+            "title": "Scooby-Doo ja salaperäinen saari"
+          },
+          {
+            "title": "Skoúmpi Ntou: Énas tetrápodos íroas"
+          },
+          {
+            "title": "Skubi Du"
+          },
+          {
+            "title": "Scooby-Doo - Der Kinofilm"
+          },
+          {
+            "title": "Scooby-Doo: The Movie"
+          },
+          {
+            "title": "Scooby-Doo, le film"
+          },
+          {
+            "title": "Սքուբի-Դու"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 652,
+        "title": "Scooby-Doo on Zombie Island",
+        "year": 1998,
+        "tmdbId": 13151,
+        "alternateTitles": [
+          {
+            "title": "좀비 섬의 스쿠비 두"
+          },
+          {
+            "title": "Scooby-Doo en la Isla de los Zombis"
+          },
+          {
+            "title": "Scooby-Doo na Ilha dos Zumbis"
+          },
+          {
+            "title": "Scooby Doo dans l'île des zombies"
+          },
+          {
+            "title": "Scooby-Doo Zombie-saarella"
+          },
+          {
+            "title": "Scooby-Doo und die Gespensterinsel"
+          },
+          {
+            "title": "Ο Σκούμπι Ντου στο νησί των τεράτων"
+          },
+          {
+            "title": "Scooby-Doo a zombie szigetén"
+          },
+          {
+            "title": "Scooby-Doo: l'isola degli zombie"
+          },
+          {
+            "title": "スクービー・ドゥーのゾンビ島"
+          },
+          {
+            "title": "Scooby Doo på Zombie-øya"
+          },
+          {
+            "title": "Scooby Doo na Wyspie Zombie"
+          },
+          {
+            "title": "Scooby Doo - Insula Zombilor"
+          },
+          {
+            "title": "Скуби-Ду на острове Мертвецов"
+          },
+          {
+            "title": "Skubi Du na ostrvu zombija"
+          },
+          {
+            "title": "Scooby-Doo på Zombieön"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 584,
+        "title": "Aloha Scooby-Doo!",
+        "year": 2005,
+        "tmdbId": 24615,
+        "alternateTitles": [
+          {
+            "title": "Chuyến Phiêu Lưu Trên Đảo Hawaii"
+          },
+          {
+            "title": "Scooby Doo! Aloha, Scooby-Doo !"
+          },
+          {
+            "title": "Ο Σκούμπι-Ντου στη Χαβάη"
+          },
+          {
+            "title": "O Scooby-Doo sti Havai"
+          },
+          {
+            "title": "阿囉哈叔比狗"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo! Pirates Ahoy!",
+        "year": 2006,
+        "tmdbId": 13355,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo! Et Le Triangle Des Bermudes!"
+          },
+          {
+            "title": "¡Scooby-Doo! ¡Piratas a babor!"
+          },
+          {
+            "title": "Scooby Doo: Pirater i sikte"
+          },
+          {
+            "title": "Scooby-Doo! Piratas à Bordo"
+          },
+          {
+            "title": "Scooby Doo ¡Piratas A la Vista!"
+          },
+          {
+            "title": "Scooby-Doo! Pirati dolaze!"
+          },
+          {
+            "title": "Скуби-Ду: Против бермудских пиратов!"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo! Camp Scare",
+        "year": 2010,
+        "tmdbId": 45752,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo! Terror en el campamento"
+          },
+          {
+            "title": "Scooby-Doo! Rettegés a táborban"
+          },
+          {
+            "title": "Scooby-Doo! Mistérios no Campo de Férias"
+          },
+          {
+            "title": "Scooby-Doo! Miedo En El Campamento"
+          },
+          {
+            "title": "Scooby Doo Un verano espeluznante"
+          },
+          {
+            "title": "Ο Σκούμπι Ντου στην κατασκήνωση"
+          },
+          {
+            "title": "Scooby-Doo! Verão Assombrado"
+          },
+          {
+            "title": "Лагерные страшилки"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Trick or Treat Scooby-Doo!",
+        "year": 2022,
+        "tmdbId": 1015724,
+        "alternateTitles": [
+          {
+            "title": "Koledu nebo něco provedu Scooby-Doo!"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo! Stage Fright",
+        "year": 2013,
+        "tmdbId": 203696,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo! Tréma před vystoupením"
+          },
+          {
+            "title": "Σκούμπι-Ντου!: Τρόμος στο Θέατρο"
+          },
+          {
+            "title": "叔比狗舞台驚魂記"
+          },
+          {
+            "title": "Scooby-Doo! O Fantasma da Ópera"
+          },
+          {
+            "title": "Scooby-Doo! Medo do Palco"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Chill Out, Scooby-Doo!",
+        "year": 2007,
+        "tmdbId": 13354,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo y el abominable hombre de las nieves"
+          },
+          {
+            "title": "Ta det kallt, Scooby-Doo!"
+          },
+          {
+            "title": "Отдыхай Скуби Ду!"
+          },
+          {
+            "title": "Estàs fresc, Scooby-Doo!"
+          },
+          {
+            "title": "Stai fresco Scooby-Doo"
+          },
+          {
+            "title": "Scooby-Doo e o Abominável Homem das Neves"
+          },
+          {
+            "title": "תירגע, סקובי-דו!"
+          },
+          {
+            "title": "Nyugi, Scooby!"
+          },
+          {
+            "title": "Scooby-Doo és a hó-szörny"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo! Frankencreepy",
+        "year": 2014,
+        "tmdbId": 284995,
+        "alternateTitles": [
+          {
+            "title": "Scooby Doo Frankenhrůza"
+          },
+          {
+            "title": "Скуби-Ду: Франкен-монстр"
+          },
+          {
+            "title": "¡Scooby-Doo! y el Frankenmonstruo"
+          },
+          {
+            "title": "Scooby-Doo! und der Fluch der von Dinkensteins"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Happy Halloween, Scooby-Doo!",
+        "year": 2020,
+        "tmdbId": 721656,
+        "alternateTitles": [
+          {
+            "title": "¡Scooby!"
+          },
+          {
+            "title": "Scooby-Doo! Joyeux Halloween, Scooby-Doo!"
+          },
+          {
+            "title": "史酷比快樂萬聖節"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Big Top Scooby-Doo!",
+        "year": 2012,
+        "tmdbId": 119321,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo A Tenda de Circo do Scooby!"
+          },
+          {
+            "title": "Scooby-Doo Misterio en el circo"
+          },
+          {
+            "title": "Scooby-Doo Misterio en el circo"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo 2: Monsters Unleashed",
+        "year": 2004,
+        "tmdbId": 11024,
+        "alternateTitles": [
+          {
+            "title": "Scooby Doo 2"
+          },
+          {
+            "title": "Scooby Doo 2: Monstruos sueltos"
+          },
+          {
+            "title": "Scooby-Doo 2 Monstruos Sueltos"
+          },
+          {
+            "title": "Scooby-Doo 2: Ta terata apeleftherothikan"
+          },
+          {
+            "title": "Skubi Du 2: Čudovišta na slobodi"
+          },
+          {
+            "title": "Scooby-Doo 2: Príšery vypustené"
+          },
+          {
+            "title": "Skubi-Du 2: Chudovishcha na svoboda"
+          },
+          {
+            "title": "Skubi-Du 2: Monstry na voli"
+          },
+          {
+            "title": "Scooby-Doo 2: Monstruos sueltos"
+          },
+          {
+            "title": "Scooby-Doo 2 : Les Monstres se déchaînent"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo! The Mystery Begins",
+        "year": 2009,
+        "tmdbId": 22620,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo! - Az első rejtély"
+          },
+          {
+            "title": "Scooby Doo 3 - The Mystery Begins"
+          },
+          {
+            "title": "Scooby-Doo ! L'Origine du Mystère"
+          },
+          {
+            "title": "Scooby-Doo! - O Misterio Começa"
+          },
+          {
+            "title": "Scooby-Doo! - Il mistero ha inizio"
+          },
+          {
+            "title": "Scooby-Doo 3 - Il mistero ha inizio"
+          },
+          {
+            "title": "¡Scooby-Doo! Comienza El Misterio"
+          },
+          {
+            "title": "Scooby-Doo! Strachy i Patałachy Początek Przygody"
+          },
+          {
+            "title": "Скуби-Ду 3: Тайна начинается"
+          },
+          {
+            "title": "Scooby-Doo! Nu böjar mysteriet"
+          },
+          {
+            "title": "Scooby-Doo ! Le mystère commence"
+          },
+          {
+            "title": "Scooby-Doo 3 ! : Le mystère commence"
+          },
+          {
+            "title": "史酷比3"
+          },
+          {
+            "title": "Скуби-Ду! Тайна Начинается"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo! Abracadabra-Doo",
+        "year": 2010,
+        "tmdbId": 32916,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo - Abrakadabra!"
+          },
+          {
+            "title": "Scooby-Doo Abrakadabra!"
+          },
+          {
+            "title": "Scooby-Doo Abrakadabra!"
+          },
+          {
+            "title": "Scooby-Doo Das Geheimnis der Zauberakademie"
+          },
+          {
+            "title": "Scooby-Doo ! Abracadabra"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo! Meets the Harlem Globetrotters",
+        "year": 1973,
+        "tmdbId": 284521,
+        "alternateTitles": [
+          {
+            "title": "The New Scooby-Doo Movies"
+          },
+          {
+            "title": "The Best Of The New Scooby-Doo Movies"
+          },
+          {
+            "title": "Scooby-Doo - Harlem Globetrotters"
+          },
+          {
+            "title": "Scooby-Doo ! rencontre les Harlem Globe Trotters"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo! and Krypto, Too!",
+        "year": 2023,
+        "tmdbId": 1146348,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo! & Krypto, Too!"
+          },
+          {
+            "title": "史酷比！还有超狗小氪！"
+          },
+          {
+            "title": "Скуби-Ду и Крипто"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo! WrestleMania Mystery",
+        "year": 2014,
+        "tmdbId": 258893,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo! O Mistério WrestleMania"
+          },
+          {
+            "title": "Scooby-Doo! O Mistério WrestleMania"
+          },
+          {
+            "title": "Scooby-Doo! Misterio en la Lucha Libre"
+          },
+          {
+            "title": "Scooby-Doo! und das WrestleMania Rätsel"
+          },
+          {
+            "title": "Scooby-Doo! The WWE Mystery"
+          },
+          {
+            "title": "Σκούμπι Ντου! Το μυστήριο του ετήσιου αγώνα πάλης"
+          },
+          {
+            "title": "Scooby-Doo! E o Mistério da LutaMania"
+          },
+          {
+            "title": "史酷比：格鬥狂熱迷"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 654,
+        "title": "Scooby-Doo! and the Loch Ness Monster",
+        "year": 2004,
+        "tmdbId": 12902,
+        "alternateTitles": [
+          {
+            "title": "Scooby Doo och Loch Ness-odjuret"
+          },
+          {
+            "title": "Scooby-Doo a Lochnesská příšera"
+          },
+          {
+            "title": "Scooby-Doo e o Monstro do Lago Ness"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo Meets Batman",
+        "year": 2002,
+        "tmdbId": 287757,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo trifft Batman"
+          },
+          {
+            "title": "Scooby-Doo Encontra Batman"
+          },
+          {
+            "title": "Scooby-Doo se reúne con Batman"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "title": "Scooby-Doo! Moon Monster Madness",
+        "year": 2015,
+        "tmdbId": 302960,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo! et le monstre de l'espace"
+          },
+          {
+            "title": "Scooby-Doo! Durchgeknallt im All"
+          },
+          {
+            "title": "Scooby-Doo! Hold szörnyes őrület"
+          },
+          {
+            "title": "Скуби-Ду! Лунный безумный монстр"
+          },
+          {
+            "title": "Scooby-Doo! Crociera sulla Luna"
+          },
+          {
+            "title": "Scooby-Doo: Loucura do Monstro da Lua"
+          },
+          {
+            "title": "史酷比：瘋狂月之怪"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      }
+    ],
+    "library": [
+      {
+        "id": 584,
+        "title": "Aloha Scooby-Doo!",
+        "year": 2005,
+        "tmdbId": 24615,
+        "alternateTitles": [
+          {
+            "title": "Chuyến Phiêu Lưu Trên Đảo Hawaii"
+          },
+          {
+            "title": "Scooby Doo! Aloha, Scooby-Doo !"
+          },
+          {
+            "title": "Ο Σκούμπι-Ντου στη Χαβάη"
+          },
+          {
+            "title": "O Scooby-Doo sti Havai"
+          },
+          {
+            "title": "阿囉哈叔比狗"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 585,
+        "title": "Scooby-Doo and the Cyber Chase",
+        "year": 2001,
+        "tmdbId": 15601,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo y la persecución cibernética"
+          },
+          {
+            "title": "Scooby Doo Og Cyber Jagten"
+          },
+          {
+            "title": "Scooby-Doo e a Caçada Virtual"
+          },
+          {
+            "title": "Scooby-Doo und die Cyberjagd"
+          },
+          {
+            "title": "Scooby Doo i kibernetički lov"
+          },
+          {
+            "title": "Scooby Doo og jagten i cyberspace"
+          },
+          {
+            "title": "Scooby-Doo i Cyberrymden"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 649,
+        "title": "Scooby-Doo! and the Witch's Ghost",
+        "year": 1999,
+        "tmdbId": 17681,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo et le fantôme de la sorcière"
+          },
+          {
+            "title": "Scooby-Doo y el fantasma de la bruja"
+          },
+          {
+            "title": "Scooby-Doo e a Bruxa Fantasma"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 650,
+        "title": "Scooby-Doo and the Alien Invaders",
+        "year": 2000,
+        "tmdbId": 20410,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo y los invasores del espacio"
+          },
+          {
+            "title": "Scooby-Doo und die Ausserirdischen"
+          },
+          {
+            "title": "Scooby-Doo et les extra-terrestres"
+          },
+          {
+            "title": "O Σκούμπι Ντου και οι εξωγήινοι"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 652,
+        "title": "Scooby-Doo on Zombie Island",
+        "year": 1998,
+        "tmdbId": 13151,
+        "alternateTitles": [
+          {
+            "title": "좀비 섬의 스쿠비 두"
+          },
+          {
+            "title": "Scooby-Doo en la Isla de los Zombis"
+          },
+          {
+            "title": "Scooby-Doo na Ilha dos Zumbis"
+          },
+          {
+            "title": "Scooby Doo dans l'île des zombies"
+          },
+          {
+            "title": "Scooby-Doo Zombie-saarella"
+          },
+          {
+            "title": "Scooby-Doo und die Gespensterinsel"
+          },
+          {
+            "title": "Ο Σκούμπι Ντου στο νησί των τεράτων"
+          },
+          {
+            "title": "Scooby-Doo a zombie szigetén"
+          },
+          {
+            "title": "Scooby-Doo: l'isola degli zombie"
+          },
+          {
+            "title": "スクービー・ドゥーのゾンビ島"
+          },
+          {
+            "title": "Scooby Doo på Zombie-øya"
+          },
+          {
+            "title": "Scooby Doo na Wyspie Zombie"
+          },
+          {
+            "title": "Scooby Doo - Insula Zombilor"
+          },
+          {
+            "title": "Скуби-Ду на острове Мертвецов"
+          },
+          {
+            "title": "Skubi Du na ostrvu zombija"
+          },
+          {
+            "title": "Scooby-Doo på Zombieön"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 654,
+        "title": "Scooby-Doo! and the Loch Ness Monster",
+        "year": 2004,
+        "tmdbId": 12902,
+        "alternateTitles": [
+          {
+            "title": "Scooby Doo och Loch Ness-odjuret"
+          },
+          {
+            "title": "Scooby-Doo a Lochnesská příšera"
+          },
+          {
+            "title": "Scooby-Doo e o Monstro do Lago Ness"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 787,
+        "title": "Scoob!",
+        "year": 2020,
+        "tmdbId": 385103,
+        "alternateTitles": [
+          {
+            "title": "SCOOBY! O Filme"
+          },
+          {
+            "title": "Scooby!"
+          },
+          {
+            "title": "Скуб!"
+          },
+          {
+            "title": "สคูบ!"
+          },
+          {
+            "title": "Scooby-Doo! A New Universe"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 809,
+        "title": "Scooby-Doo! in Where's My Mummy?",
+        "year": 2005,
+        "tmdbId": 20558,
+        "alternateTitles": [
+          {
+            "title": "Scooby Doo: A múmia átka"
+          },
+          {
+            "title": "Scooby Doo y la maldición de Cleopatra"
+          },
+          {
+            "title": "Scooby-Doo! und der Fluch der Kleopatra"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      },
+      {
+        "id": 860,
+        "title": "Scooby-Doo! Meets the Boo Brothers",
+        "year": 1987,
+        "tmdbId": 24787,
+        "alternateTitles": [
+          {
+            "title": "Scooby-Doo y los Hermanos Boo"
+          },
+          {
+            "title": "Scooby-Doo incontra i fratelli Boo"
+          },
+          {
+            "title": "Scooby-Doo e os Irmãos Pavor"
+          },
+          {
+            "title": "Scooby-Doo i bracia Boo"
+          },
+          {
+            "title": "Scooby-Doo! e os Irmãos Buu"
+          },
+          {
+            "title": "Scooby Doo Upoznaju Braću Boo"
+          }
+        ],
+        "images": [
+          {
+            "coverType": "poster"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -124,3 +124,13 @@ describe('browse shelves', () => {
     expect(browseShelves(items, { noun: 'shows', rating: () => 0 }).map((s) => s.key)).toEqual(['recent', 'genre-Drama'])
   })
 })
+
+describe('filterAndSortLibrary search', () => {
+  it('finds a hyphenated title from a spaced query (the scooby doo report)', () => {
+    const lib = [{ title: 'Scooby-Doo, Where Are You!' }, { title: "What's New, Scooby-Doo?" }, { title: 'Scrubs' }]
+    expect(filterAndSortLibrary(lib, { query: 'scooby doo', status: 'all' }).map((r) => r.title)).toEqual([
+      'Scooby-Doo, Where Are You!',
+      "What's New, Scooby-Doo?",
+    ])
+  })
+})

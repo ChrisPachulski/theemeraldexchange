@@ -75,7 +75,7 @@
           "method": "GET",
           "path": "/radarr/api/v3/movie/lookup",
           "status": 200,
-          "text": "[{\"title\":\"Heat\",\"tmdbId\":949}]",
+          "text": "[{\"title\":\"Heat\",\"tmdbId\":949,\"remotePoster\":\"https://image.example/p.jpg\"}]",
           "ct": "application/json"
         }
       ],
@@ -210,12 +210,21 @@
           "status": 200,
           "content_type": "application/json",
           "retry_after": null,
-          "body": "[{\"title\":\"Heat\",\"tmdbId\":949}]",
+          "body": "[{\"title\":\"Heat\",\"tmdbId\":949,\"remotePoster\":\"https://image.example/p.jpg\"}]",
           "calls": [
             {
               "method": "GET",
               "path": "/radarr/api/v3/movie/lookup",
               "query": "term=heat",
+              "body": null,
+              "key_header": "placeholder-radarr-key",
+              "secret": null,
+              "bearer": false
+            },
+            {
+              "method": "GET",
+              "path": "/radarr/api/v3/movie",
+              "query": "",
               "body": null,
               "key_header": "placeholder-radarr-key",
               "secret": null,

@@ -96,7 +96,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/radarr/api/v3/qualityprofile", read())
         .route("/api/radarr/api/v3/rootfolder", read())
         .route("/api/radarr/api/v3/movie", read().post(add_movie))
-        .route("/api/radarr/api/v3/movie/lookup", read())
+        .route("/api/radarr/api/v3/movie/lookup", get(lookup))
         // The Downloads tab's movie pending states.
         .route("/api/radarr/api/v3/queue", read())
         .route(
@@ -151,6 +151,17 @@ async fn read(
 ) -> Res {
     gate(&st, &p, &method, ARR, false, None).await?;
     forward_read(&st, RADARR, &uri).await
+}
+
+/// Discover search, owned titles first (see arr/search.rs).
+async fn lookup(
+    State(st): State<AppState>,
+    auth::RequireAuth(p): auth::RequireAuth,
+    method: Method,
+    uri: Uri,
+) -> Res {
+    gate(&st, &p, &method, ARR, false, None).await?;
+    super::search::lookup(&st, RADARR, &uri).await
 }
 
 // --- admin: clear stuck imports -----------------------------------------------------

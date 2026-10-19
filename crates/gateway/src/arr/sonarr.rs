@@ -111,7 +111,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/sonarr/api/v3/qualityprofile", read())
         .route("/api/sonarr/api/v3/rootfolder", read())
         .route("/api/sonarr/api/v3/series", read().post(add_series))
-        .route("/api/sonarr/api/v3/series/lookup", read())
+        .route("/api/sonarr/api/v3/series/lookup", get(lookup))
         // DetailModal's per-season episode air dates (?seriesId=N).
         .route("/api/sonarr/api/v3/episode", read())
         // The Downloads tab's season clusters.
@@ -302,6 +302,17 @@ async fn read(
 ) -> Res {
     gate(&st, &p, &method, ARR, false, None).await?;
     forward_read(&st, SONARR, &uri).await
+}
+
+/// Discover search, owned titles first (see arr/search.rs).
+async fn lookup(
+    State(st): State<AppState>,
+    auth::RequireAuth(p): auth::RequireAuth,
+    method: Method,
+    uri: Uri,
+) -> Res {
+    gate(&st, &p, &method, ARR, false, None).await?;
+    super::search::lookup(&st, SONARR, &uri).await
 }
 
 async fn clear_stuck_route(

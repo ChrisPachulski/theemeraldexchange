@@ -6,6 +6,7 @@ pub mod grabs;
 pub mod notifications;
 pub mod radarr;
 pub mod sab;
+pub mod search;
 pub mod shared;
 pub mod sonarr;
 
@@ -36,6 +37,8 @@ pub struct ArrState {
     pub grabs: GrabLog,
     /// Serializes every /api/notifications/discord mutation and test.
     pub discord: tokio::sync::Mutex<()>,
+    /// The library lists Discover search ranks against.
+    pub libraries: search::Libraries,
     /// Background TV grabs still running.
     tv_grabs: tokio::sync::watch::Sender<usize>,
 }
@@ -58,6 +61,7 @@ impl ArrState {
             sab_limit: limiter(),
             grabs: GrabLog(JsonlLog::new(&c.grab_log_path)),
             discord: tokio::sync::Mutex::new(()),
+            libraries: search::Libraries::default(),
             tv_grabs: tokio::sync::watch::Sender::new(0),
         }
     }
