@@ -1,4 +1,5 @@
 import { stripArticle } from './title'
+import { matchesWords } from './wordMatch'
 
 // Shared library filter + sort for the Movies/TV tabs. Both tabs text+status
 // filter then sort by the same key set; only their domain-specific comparators
@@ -47,9 +48,8 @@ export function filterAndSortLibrary<T extends LibraryItem>(
   opts: { query: string; status: string; genre?: string; comparator?: (a: T, b: T) => number },
 ): T[] {
   if (!data) return []
-  const q = opts.query.trim().toLowerCase()
-  const items = q
-    ? data.filter((it) => it.title.toLowerCase().includes(q))
+  const items = opts.query.trim()
+    ? data.filter((it) => matchesWords(it.title, opts.query))
     : data.slice()
   const byStatus =
     opts.status === 'all'

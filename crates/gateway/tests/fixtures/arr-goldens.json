@@ -220,6 +220,15 @@
               "key_header": "placeholder-radarr-key",
               "secret": null,
               "bearer": false
+            },
+            {
+              "method": "GET",
+              "path": "/radarr/api/v3/movie",
+              "query": "",
+              "body": null,
+              "key_header": "placeholder-radarr-key",
+              "secret": null,
+              "bearer": false
             }
           ],
           "grabs": []

@@ -145,6 +145,15 @@
               "key_header": "placeholder-sonarr-key",
               "secret": null,
               "bearer": false
+            },
+            {
+              "method": "GET",
+              "path": "/sonarr/api/v3/series",
+              "query": "",
+              "body": null,
+              "key_header": "placeholder-sonarr-key",
+              "secret": null,
+              "bearer": false
             }
           ],
           "grabs": []
