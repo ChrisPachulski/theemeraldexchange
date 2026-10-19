@@ -72,7 +72,7 @@ fn every_owned_scooby_movie_leads_the_movie_search() {
 }
 
 #[test]
-fn owned_shows_lead_and_posterless_stubs_are_gone_from_the_tv_search() {
+fn owned_shows_lead_and_posterless_stubs_sink_in_the_tv_search() {
     let f = fixture();
     let library = rows(&f["sonarr"]["library"]);
     let lookup = rows(&f["sonarr"]["lookup"]);
@@ -93,13 +93,13 @@ fn owned_shows_lead_and_posterless_stubs_are_gone_from_the_tv_search() {
         ids(&library, "tvdbId").iter().all(|i| head.contains(i)),
         "{t:?}"
     );
-    assert!(
-        out.iter()
-            .all(|r| !r["images"].as_array().unwrap().is_empty()),
-        "{t:?}"
-    );
-    // A lookup row that matches no query word sinks to the end.
-    assert_eq!(*t.last().unwrap(), "Syl\u{2019}s Oude Doos", "{t:?}");
+    // Nothing is lost: posterless rows stay addable but sink to the end,
+    // behind a lookup row that matches no query word.
+    assert_eq!(out.len(), 20, "{t:?}");
+    let posterless = |r: &Value| r["images"].as_array().unwrap().is_empty();
+    let first_bare = out.iter().position(posterless).unwrap();
+    assert!(out[first_bare..].iter().all(posterless), "{t:?}");
+    assert_eq!(t[first_bare - 1], "Syl\u{2019}s Oude Doos", "{t:?}");
 }
 
 #[test]

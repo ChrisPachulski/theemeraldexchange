@@ -47,7 +47,7 @@
           "method": "GET",
           "path": "/sonarr/api/v3/series/lookup",
           "status": 200,
-          "text": "[{\"title\":\"Severance\",\"tvdbId\":371980,\"remotePoster\":\"https://image.example/p.jpg\"}]",
+          "text": "[{\"title\":\"Severance\",\"tvdbId\":371980}]",
           "ct": "application/json"
         },
         {
@@ -135,7 +135,7 @@
           "status": 200,
           "content_type": "application/json",
           "retry_after": null,
-          "body": "[{\"title\":\"Severance\",\"tvdbId\":371980,\"remotePoster\":\"https://image.example/p.jpg\"}]",
+          "body": "[{\"title\":\"Severance\",\"tvdbId\":371980}]",
           "calls": [
             {
               "method": "GET",
@@ -167,7 +167,7 @@
           "status": 200,
           "content_type": "application/json",
           "retry_after": null,
-          "body": "[{\"title\":\"Severance\",\"tvdbId\":371980,\"remotePoster\":\"https://image.example/p.jpg\"}]",
+          "body": "[{\"title\":\"Severance\",\"tvdbId\":371980}]",
           "calls": [
             {
               "method": "GET",

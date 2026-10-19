@@ -2,7 +2,7 @@
 //! and Jellyfin rank: titles already in the library first, then the *arr's
 //! own lookup. The lookup alone stops at about 20 rows in metadata order, so
 //! owned titles fell below junk or off the list ("scooby doo" showed 3 of the
-//! 9 Scooby-Doo movies on disk), and its posterless stubs led the grid.
+//! 9 Scooby-Doo movies on disk), and a posterless stub led the grid.
 //! Matching is by words, so punctuation never decides a hit: "scooby doo"
 //! finds "Scooby-Doo!", "spiderman" finds "Spider-Man".
 
@@ -109,8 +109,9 @@ async fn library(st: &AppState, svc: Arr, path: &str) -> Rows {
 }
 
 /// Owned matches (best match first), then the lookup's other owned rows,
-/// then its remaining rows with matches ahead of near-misses. A row with no
-/// poster that is not owned is dropped: it is a metadata stub.
+/// then its remaining rows: matches ahead of near-misses, and rows with no
+/// poster last (a metadata stub, or a title announced too recently for art,
+/// which must stay addable).
 fn rank(term: &str, found: Vec<Value>, library: &[Value], key: &str) -> Vec<Value> {
     let q = words(term);
     if q.is_empty() {
@@ -132,7 +133,7 @@ fn rank(term: &str, found: Vec<Value>, library: &[Value], key: &str) -> Vec<Valu
     let mut seen: HashSet<i64> = owned.iter().filter_map(|(_, _, v)| id(v)).collect();
     let in_library: HashSet<i64> = library.iter().filter_map(id).collect();
     let mut out: Vec<Value> = owned.into_iter().map(|(_, _, v)| v.clone()).collect();
-    let mut rest: Vec<(u8, Value)> = Vec::new();
+    let mut rest: Vec<((bool, u8), Value)> = Vec::new();
     for v in found {
         let vid = id(&v);
         if vid.is_some_and(|n| !seen.insert(n)) {
@@ -140,8 +141,8 @@ fn rank(term: &str, found: Vec<Value>, library: &[Value], key: &str) -> Vec<Valu
         }
         if vid.is_some_and(|n| in_library.contains(&n)) {
             out.push(v);
-        } else if has_poster(&v) {
-            rest.push((score(&q, &v).unwrap_or(3), v));
+        } else {
+            rest.push(((!has_poster(&v), score(&q, &v).unwrap_or(3)), v));
         }
     }
     rest.sort_by_key(|(s, _)| *s);
