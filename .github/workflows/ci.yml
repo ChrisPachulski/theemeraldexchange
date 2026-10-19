@@ -96,7 +96,9 @@ jobs:
     # sub-namespace, PII scrub. The Apple Swift port MUST agree with it
     # byte-for-byte; tests/vectors/*.json are the interop oracle.
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    # The whole server is Rust since the port: a warm run takes 5-8 min, and
+    # a Cargo.toml change (new crate) rebuilds from the partial cache.
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -155,6 +157,14 @@ jobs:
         run: |
           set -o pipefail
           cargo test --workspace --all-targets 2>&1 | tee cargo-test.log
+
+      - name: Image-pin staleness guard (best-effort)
+        # Flags compose image pins whose Docker Hub tag was last pushed >12
+        # months ago (the cloudflared pin once sat ~18 months stale with
+        # nothing watching it). Its parser tests ran in cargo test above. Hub
+        # or network failures are warnings, so a registry blip never fails CI;
+        # only a confirmed stale tag does.
+        run: cargo run -q -p pin-staleness -- docker-compose.yml
 
       - name: Surface fmt / clippy / test failures as annotations
         if: failure()
@@ -279,17 +289,6 @@ jobs:
         # so unset vars default to empty with a warning — `-q` still exits 0.
         # Verified against the production compose file on the deploy host.
         run: docker compose config -q
-
-      - name: Image-pin staleness guard (best-effort)
-        # Flags compose image pins whose Docker Hub tag was last pushed >12
-        # months ago (the cloudflared pin once sat ~18 months stale with
-        # nothing watching it). Self-test first (offline parser assertions),
-        # then the live check. The script treats network/Hub-API failures as
-        # warnings (exit 0) so a registry blip can never fail CI — only a
-        # CONFIRMED stale tag does.
-        run: |
-          node scripts/check-image-pin-staleness.mjs --self-test
-          node scripts/check-image-pin-staleness.mjs docker-compose.yml
 
       - name: Stage eex-ytresolve placeholder
         # The Dockerfile COPYs bin/eex-ytresolve (the prebuilt Rust YouTube
