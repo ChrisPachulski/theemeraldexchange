@@ -522,7 +522,8 @@ async fn scan_once_with_probe_bin(
     Ok(report)
 }
 
-/// Delete every `media_files` row whose path no longer exists on disk. The
+/// Delete every `media_files` row whose path no longer exists on disk, or now
+/// sits in a directory the walk skips ([`in_extras_dir`]). The
 /// delete cascades the backing `movies`/`episodes` rows (file_id ON DELETE
 /// CASCADE); shows left with zero episodes are swept afterwards so the
 /// library never lists an empty series. Returns the number of file rows
@@ -552,7 +553,9 @@ async fn prune_missing_files(
         rows.into_iter()
             .filter(|(_, path)| {
                 let p = std::path::Path::new(path);
-                roots.iter().any(|root| p.starts_with(root)) && !p.exists()
+                roots
+                    .iter()
+                    .any(|root| p.starts_with(root) && (in_extras_dir(p, root) || !p.exists()))
             })
             .map(|(id, _)| id)
             .collect()
@@ -1540,16 +1543,20 @@ const EXTRAS_DIRS: &[&str] = &[
 ];
 
 /// `true` when any directory component of `path` below `root` is a known
-/// bonus-content folder. The filename itself is not checked.
+/// bonus-content folder or a hidden (dot-prefixed) folder. Plex and Sonarr
+/// both ignore hidden folders, so they are where files get parked out of the
+/// library (`.pokemon_foreign_quarantine`, `.Trash-*`); indexing them served
+/// quarantined foreign-dub episodes as the only copy. The filename itself is
+/// not checked.
 pub fn in_extras_dir(path: &Path, root: &Path) -> bool {
     let rel = path.strip_prefix(root).unwrap_or(path);
     let Some(dir) = rel.parent() else {
         return false;
     };
     dir.components().any(|c| match c {
-        std::path::Component::Normal(os) => os
-            .to_str()
-            .is_some_and(|s| EXTRAS_DIRS.contains(&s.to_lowercase().as_str())),
+        std::path::Component::Normal(os) => os.to_str().is_some_and(|s| {
+            s.starts_with('.') || EXTRAS_DIRS.contains(&s.to_lowercase().as_str())
+        }),
         _ => false,
     })
 }
@@ -4026,6 +4033,8 @@ mod tests {
             "/media/Movies/Some Movie (2002)/Plex Versions/Optimized for TV/Some Movie.mp4",
             "/media/Movies/Some Movie (2002)/Behind The Scenes/clip.mkv",
             "/media/Movies/Some Movie (2002)/extras/thing.mkv",
+            "/media/Movies/.quarantine/Season 2/ep.avi",
+            "/media/Movies/Some Movie (2002)/.grab/thing.mkv",
         ] {
             assert!(in_extras_dir(Path::new(p), root), "should skip: {p}");
         }
@@ -4034,6 +4043,8 @@ mod tests {
             // The filename itself is never checked — only directories.
             "/media/Movies/Trailers (2021)/Trailer.mkv",
             "/media/Movies/The Sample Movie (1999)/sample movie.mkv",
+            // A dotted title or filename is not a hidden directory.
+            "/media/Movies/St. Elmo's Fire (1985)/.hidden-name.mkv",
         ] {
             // "Trailers (2021)" is not an exact component match; a title dir
             // merely CONTAINING an extras word must not be skipped.
@@ -4327,6 +4338,17 @@ mod tests {
             .await
             .unwrap();
 
+        // A third row that still exists on disk but sits in a hidden
+        // (quarantine) dir the walk now skips — indexed before the skip.
+        let hidden_dir = tmp.path().join(".quarantine");
+        std::fs::create_dir(&hidden_dir).unwrap();
+        let hidden_path = hidden_dir.join("Hidden Movie (2018).mkv");
+        std::fs::write(&hidden_path, b"bytes").unwrap();
+        let hidden_file = seed_media_file(&db, hidden_path.to_str().unwrap()).await;
+        upsert_movie(&db, "Hidden Movie", Some(2018), hidden_file, "t", None)
+            .await
+            .unwrap();
+
         let (kept_movie, gone_movie): (i64, i64) = {
             let k: i64 = sqlx::query_scalar("SELECT id FROM movies WHERE file_id = ?")
                 .bind(kept_file)
@@ -4358,7 +4380,10 @@ mod tests {
         }];
         let report = scan_once(&db, &roots, &no_tmdb()).await.unwrap();
 
-        assert_eq!(report.files_removed, 1, "the deleted file's row is pruned");
+        assert_eq!(
+            report.files_removed, 2,
+            "the deleted file's and the hidden-dir file's rows are pruned"
+        );
         assert_eq!(
             report.watch_orphans_removed, 1,
             "the orphaned watch row is reaped"
