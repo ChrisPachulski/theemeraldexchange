@@ -816,6 +816,9 @@ async fn session_segment(
     // rendition assets (audio_{n}.m3u8 + its segments) race their own detached
     // pass the same way, so they get the same brief wait — for hls.js too,
     // whose alt_audio master can name a rendition its pass hasn't written yet.
+    // `init.mp4` waits too: the synthesized fMP4 manifest names it before
+    // ffmpeg writes it (with the first segment), and AVPlayer fetches it once;
+    // a 404 there leaves every segment undecodable.
     // A native request for a segment the running encoder will never write (a
     // scrub back past the resume point, or a jump far ahead) re-encodes from
     // there first; the wait below then picks it up.
@@ -826,7 +829,9 @@ async fn session_segment(
         state.sessions.backfill(&id, index).await;
     }
     if ((is_native_hls_client(&headers)
-        && (segment_index(&segment).is_some() || segment == SIDECAR_SUBTITLE_NAME))
+        && (segment_index(&segment).is_some()
+            || segment == SIDECAR_SUBTITLE_NAME
+            || segment == "init.mp4"))
         || crate::session::is_audio_rendition_asset(&segment))
         && !tokio::fs::try_exists(&path).await.unwrap_or(false)
     {
@@ -2056,6 +2061,67 @@ mod tests {
             "public, max-age=31536000, immutable",
             "written-once rendition segments stay immutable"
         );
+
+        state.sessions.stop(&session_id).await;
+    }
+
+    #[tokio::test]
+    async fn native_init_segment_waits_for_ffmpeg_to_write_it() {
+        // AVPlayer asked for init.mp4 0.7s into a resumed Wonka session, got an
+        // instant 404, never asked again, and retried an undecodable segment
+        // 25 times a second.
+        let tmp = tempfile::tempdir().unwrap();
+        let state = state_with(
+            &tmp,
+            Caps {
+                max_total: 4,
+                max_cpu: 4,
+            },
+            PrincipalMode::Off,
+        );
+        let resp = router(state.clone())
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(grant_body(&h264_file())))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let session_id = v["sessionId"].as_str().unwrap().to_string();
+        let init = state
+            .sessions
+            .asset_path(&session_id, "init.mp4")
+            .await
+            .unwrap();
+        let _ = std::fs::remove_file(&init);
+        let writer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            std::fs::write(&init, "init").unwrap();
+        });
+
+        let resp = router(state.clone())
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/api/transcode/session/{session_id}/init.mp4"))
+                    .header("user-agent", "AppleCoreMedia/1.0.0 (Apple TV)")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        writer.await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        assert_eq!(&body[..], b"init");
 
         state.sessions.stop(&session_id).await;
     }
