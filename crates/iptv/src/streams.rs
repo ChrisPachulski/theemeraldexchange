@@ -1504,10 +1504,17 @@ async fn remux_manifest(
             encode_uri_component(&creds.password)
         )
     };
-    // Itself first, then siblings; dead placeholders are skipped.
-    let candidates = match sibling_feeds(&s.pool, &id).await {
-        Ok(c) => c,
-        Err(e) => return internal(&e.to_string()),
+    let live = &s.streams.live;
+    let dialing = live.get_active(&id, &sub).is_none();
+    // Itself first, then siblings; dead placeholders are skipped. Resolved
+    // only for a dial: the scan walks every channel, too slow for each poll.
+    let candidates = if dialing {
+        match sibling_feeds(&s.pool, &id).await {
+            Ok(c) => c,
+            Err(e) => return internal(&e.to_string()),
+        }
+    } else {
+        Vec::new()
     };
     let opts = EnsureOpts {
         stream_id: &id,
@@ -1515,9 +1522,8 @@ async fn remux_manifest(
         feeds: &candidates,
         url_for: &url_for,
     };
-    let live = &s.streams.live;
     // About to dial for a viewer: a feed check's capture gives up its slot first.
-    if live.get_active(&id, &sub).is_none() {
+    if dialing {
         live.remux.yield_aux("remux", AUX_YIELD).await;
     }
     // The viewer's other channels were freed at grant time, not here: on this
