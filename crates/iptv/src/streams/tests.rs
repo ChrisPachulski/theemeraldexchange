@@ -1904,6 +1904,22 @@ async fn the_manifest_starts_a_remux_and_serves_stable_signed_segment_urls() {
 }
 
 #[tokio::test]
+async fn a_poll_of_a_running_session_skips_the_sibling_scan() {
+    let (t, fake) = remux_setup(&format!("{SEGS}{LIVE}")).await;
+    let first = t.watch("10").await;
+    assert_eq!(first.status, StatusCode::OK, "{}", first.text());
+    // The scan reads every channel; a poll that ran it would now 500.
+    sqlx::query("DROP TABLE channels")
+        .execute(&t.state.pool)
+        .await
+        .unwrap();
+    let again = t.get(&manifest_uri("10", "plex:42")).await;
+    assert_eq!(again.status, StatusCode::OK, "{}", again.text());
+    assert_eq!(again.text(), first.text());
+    assert_eq!(fake.pids().len(), 1);
+}
+
+#[tokio::test]
 async fn a_feed_that_dies_before_its_window_is_503_remux_warming_with_retry_after() {
     let (t, fake) = remux_setup("exit 255\n").await;
     let r = t.watch("10").await;
