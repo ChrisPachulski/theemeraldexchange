@@ -26,7 +26,7 @@
     "hooks:install": "chmod +x scripts/git-hooks/pre-push && ln -sf ../../scripts/git-hooks/pre-push .git/hooks/pre-push"
   },
   "dependencies": {
-    "@sentry/react": "10.73.0",
+    "@sentry/react": "11.8.0",
     "@tanstack/react-query": "^5.104.3",
     "@tanstack/react-virtual": "^3.14.20",
     "hls.js": "^1.7.3",
