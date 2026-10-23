@@ -32,7 +32,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", features = ["serde"] }
 # Snapshot/sync schedules (node-cron syntax), shared with iptv and the gateway.
-croner = "3"
+croner = "4"
 walkdir = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 sha2.workspace = true
