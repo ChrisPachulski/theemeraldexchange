@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { matchesWords, words } from './wordMatch'
+import { matchesWords, rankWords, words } from './wordMatch'
 
 describe('matchesWords', () => {
   it('ignores punctuation and spacing', () => {
@@ -16,6 +16,16 @@ describe('matchesWords', () => {
     expect(matchesWords('US: CNN', 'us')).toBe(true)
     expect(matchesWords('Music Channel', 'us')).toBe(false)
     expect(matchesWords('X-Men', 'xmen')).toBe(true)
+  })
+  it('folds diacritics', () => {
+    expect(matchesWords('Pokémon', 'pokemon')).toBe(true)
+    expect(matchesWords('Pokemon', 'pokémon')).toBe(true)
+  })
+  it('ranks the exact title first, then titles that start with the query', () => {
+    expect(rankWords('Scooby-Doo!', 'scooby-doo')).toBe(0)
+    expect(rankWords('Scooby-Doo and the Alien Invaders', 'scooby-doo')).toBe(1)
+    expect(rankWords('A Pup Named Scooby-Doo', 'scooby-doo')).toBe(2)
+    expect(rankWords('Batman', 'scooby-doo')).toBeNull()
   })
   it('still refuses a title without the words', () => {
     expect(matchesWords('Scooby-Doo!', 'batman')).toBe(false)

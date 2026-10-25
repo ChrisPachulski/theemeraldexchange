@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { radarr } from '../api/radarr'
 
-export function useRadarrLibrary() {
+export function useRadarrLibrary(enabled = true) {
   return useQuery({
     queryKey: ['radarr', 'movie'],
     queryFn: radarr.movies,
     staleTime: 60_000,
+    enabled,
   })
 }
 

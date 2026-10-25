@@ -29,6 +29,7 @@ type Tab = {
 }
 
 const TABS: Tab[] = [
+  { route: 'search', label: 'Search' },
   { route: 'tv', label: 'TV Shows', needs: 'sonarrEnabled' },
   { route: 'movies', label: 'Movies', needs: 'radarrEnabled' },
   { route: 'youtube', label: 'YouTube', library: 'youtubeEnabled', unrated: true },
@@ -43,6 +44,7 @@ const TABS: Tab[] = [
 ]
 
 const ROUTE_LABEL: Record<NavRoute, string> = {
+  search: 'Search',
   tv: 'TV Shows',
   movies: 'Movies',
   youtube: 'YouTube',
@@ -67,6 +69,7 @@ export function TopNav({ active }: Props) {
   const ratingGate = useRatingGate()
   const iptvEnabled = limits.data?.iptvEnabled !== false // default true on older backends
   const tabRefs = useRef<Record<NavRoute, HTMLButtonElement | null>>({
+    search: null,
     tv: null,
     movies: null,
     youtube: null,

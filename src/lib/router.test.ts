@@ -14,7 +14,7 @@ afterEach(() => {
 })
 
 describe('parseHash', () => {
-  const routes: Route[] = ['home', 'tv', 'movies', 'live', 'downloads', 'users', 'youtube', 'music']
+  const routes: Route[] = ['home', 'search', 'tv', 'movies', 'live', 'downloads', 'users', 'youtube', 'music']
 
   it.each(routes)('resolves canonical #/%s to itself', (route) => {
     stubHash(`#/${route}`)
@@ -101,6 +101,10 @@ describe('open-title intents', () => {
     expect(parseHash()).toBe('tv')
     stubHash('#/live/200158440')
     expect(parseHash()).toBe('live')
+    stubHash('#/live/guide:200158440:1761350400')
+    expect(parseHash()).toBe('live')
+    stubHash('#/search/12')
+    expect(parseHash()).toBe('home')
   })
 
   it('takes a library id or lookup term once and clears it from the URL', () => {

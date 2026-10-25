@@ -10,6 +10,13 @@ per-feature release; the current package version is 0.9.0.
 
 ### Added
 
+- Web app-wide Search (`#/search`, a Search entry in the nav and on Home, and
+  the `/` key from anywhere): one query reaches the library's movies and TV
+  shows, episodes by title, live channels and guide programmes, and titles
+  not in the library yet (Sonarr/Radarr lookup, opening the detail with Add),
+  in the Apple Search tab's order. Titles open in their own tab's detail,
+  channels tune in Live, upcoming programmes open their channel's guide
+  (`#/live/guide:<streamId>:<startUnixSecs>`), episodes play in place.
 - Self-service account deletion for the Apple clients: `DELETE /api/account/self`
   revokes the caller's membership, invites, device tokens, and per-member state
   (IPTV favorites and history, API key, passkeys, policy, feedback, watchlist,
@@ -60,6 +67,13 @@ per-feature release; the current package version is 0.9.0.
 
 ### Changed
 
+- Search matches by words, so punctuation never decides a hit: live channel
+  and VOD/series names, the guide filter and programme search (iptv), the
+  Discover search (gateway) and the web library filters find "Scooby-Doo!"
+  from "scooby-doo", "scooby doo" or "scoobydoo", and "Law & Order" from "law
+  and order". A run-together query needs 4+ characters, so "us" no longer
+  hits "Music". Programme search lists title hits before description-only
+  ones.
 - Deploys are gated on CI: `scripts/ci-gate.sh` (called by `deploy-nas.sh`
   and `deploy-image.sh`) refuses an unpushed HEAD, waits for in-flight GitHub
   Actions checks, and aborts on a red or cancelled one; `--skip-ci-gate` /

@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useEffectEvent, useState } from 'react'
 import { TopNav } from './components/nav/TopNav'
 import { HomeNav } from './components/nav/HomeNav'
 import { SetupChecklist } from './components/setup/SetupChecklist'
@@ -49,6 +49,9 @@ const YouTubeTab = lazy(() =>
 const MusicTab = lazy(() =>
   import('./components/tabs/MusicTab').then((m) => ({ default: m.MusicTab })),
 )
+const SearchTab = lazy(() =>
+  import('./components/tabs/SearchTab').then((m) => ({ default: m.SearchTab })),
+)
 
 // Walkthrough is the unauthed landing experience. Authed users (the hot
 // path) never see it, so keep it out of the initial chunk. Unauthed users
@@ -60,6 +63,7 @@ const Walkthrough = lazy(() =>
 
 const TABS: Record<Route, React.ComponentType> = {
   home: HomeTab,
+  search: SearchTab,
   tv: TvTab,
   movies: MoviesTab,
   downloads: DownloadsTab,
@@ -116,6 +120,19 @@ function Shell() {
     (route === 'youtube' && youtubeOff) ||
     (route === 'music' && musicOff)
   const effectiveRoute: Route = blocked ? 'home' : route
+  // "/" opens Search from anywhere but a text field (Plex web's shortcut).
+  const openSearch = useEffectEvent(() => navigate('search'))
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return
+      const t = e.target as HTMLElement | null
+      if (t?.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return
+      e.preventDefault()
+      openSearch()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const ActiveTab = TABS[effectiveRoute]
   const krakenVariant = effectiveRoute === 'home' ? 'kraken' : 'resting'
 

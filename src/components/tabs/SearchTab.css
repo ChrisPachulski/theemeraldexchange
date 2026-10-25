@@ -1,0 +1,47 @@
+/* The app-wide search: the field sits up top under the HUD pod (the page's one
+   job is search, so it never docks away), results run down beneath it. */
+.search-tab {
+  padding: var(--hero-pad-top) 0 var(--s-8);
+  display: grid;
+  gap: var(--s-5);
+  min-height: 100dvh;
+  align-content: start;
+}
+
+.search-tab__results {
+  padding: 0 var(--s-5);
+  max-width: var(--library-max);
+  margin: 0 auto;
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: var(--s-6);
+}
+
+/* The field spans the results column, so both share one left edge. */
+.search-tab .search-hero {
+  max-width: var(--library-max);
+}
+
+/* ResultGrid brings its own page padding, and the programme results their own
+   bottom margin; here the sections line up and the column's gap spaces them. */
+.search-tab__section .result-grid {
+  padding: 0;
+}
+
+.search-tab__results .iptv-prog-results {
+  margin: 0;
+}
+
+.search-tab__hint {
+  margin: 0;
+  max-width: var(--content-max);
+  color: var(--text-muted);
+  font-size: var(--t-base);
+}
+
+@media (max-width: 520px) {
+  .search-tab__results {
+    padding: 0 var(--s-3);
+  }
+}

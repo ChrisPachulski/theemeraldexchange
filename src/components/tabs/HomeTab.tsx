@@ -25,6 +25,7 @@ type Entry = {
 }
 
 const ENTRIES: Entry[] = [
+  { route: 'search', label: 'Search' },
   { route: 'tv', label: 'TV Shows' },
   { route: 'movies', label: 'Movies' },
   { route: 'youtube', label: 'YouTube', library: 'youtubeEnabled', unrated: true },

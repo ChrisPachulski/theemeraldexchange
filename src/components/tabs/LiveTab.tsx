@@ -10,16 +10,12 @@ import {
   type EpgProgrammeDto,
   type PagedDto,
   type EpgSearchHit,
+  type EpgSearchResult,
   type SourceUnavailableError,
   type StreamGrant,
 } from '../../lib/api/iptv'
 import { useIptvCategories } from '../../lib/hooks/useIptvCategories'
-import {
-  EPG_SEARCH_MIN_CHARS,
-  useIptvEpgChannel,
-  useIptvEpgNow,
-  useIptvEpgSearch,
-} from '../../lib/hooks/useIptvEpg'
+import { useIptvEpgChannel, useIptvEpgNow } from '../../lib/hooks/useIptvEpg'
 import { useIptvLive } from '../../lib/hooks/useIptvLive'
 import { useIptvFavoriteSet, useToggleIptvFavorite } from '../../lib/hooks/useIptvFavorites'
 import { useReportPosition } from '../../lib/hooks/useIptvHistory'
@@ -41,7 +37,7 @@ import { ConcurrencyLimitModal } from '../iptv/ConcurrencyLimitModal'
 import { ConnectionsWidget } from '../iptv/ConnectionsWidget'
 import { LibrarySearchResults } from '../iptv/LibrarySearchResults'
 import { LivePlayerModal, type LivePlaying } from '../iptv/LivePlayerModal'
-import { groupAirings, type Airing } from '../iptv/programmeAirings'
+import { ProgrammeResults } from '../iptv/ProgrammeResults'
 import { RecordingsPanel } from '../iptv/RecordingsPanel'
 import {
   concurrencyPayloadFromError,
@@ -250,12 +246,42 @@ export default function LiveTab() {
     }
   })
 
-  // Home's "On now" row tunes a channel via `#/live/<streamId>`. The epg/now rows
-  // that row rendered are still cached and carry the channel name, which titles
-  // the player as Apple's does.
+  // A programme hit carries no archive metadata; resolve its real channel so the
+  // guide's catch-up rows are right (Apple SearchScreen.openProgram), then open
+  // the guide scrolled to the hit.
+  const showHitInGuide = async (hit: EpgSearchHit) => {
+    const page = await iptvApi.listLive({ q: hit.channelName, limit: 100 }).catch(() => null)
+    const c = page?.items.find((ch) => ch.stream_id === hit.streamId)
+    setGuideFor({
+      id: hit.streamId,
+      name: hit.channelName,
+      archiveDays: c ? Math.max(0, c.tv_archive_duration ?? 7) : 0,
+      canCatchup: c?.tv_archive === 1,
+      untilIso: hit.programme.stop_utc,
+      selectedStart: hit.programme.start_utc,
+    })
+  }
+
+  // Home's "On now" row and Search tune a channel via `#/live/<streamId>`. The
+  // rows they rendered (epg/now, channel pages, programme hits) are still cached
+  // and carry the channel name, which titles the player as Apple's does. Search's
+  // upcoming programme hits arrive as `guide:<streamId>:<startUnixSecs>` and open
+  // in their channel's guide (a hit no longer cached just tunes the channel).
   useIntent('live', true, (ref) => {
-    const streamId = Number(ref)
-    let name = 'Live TV'
+    const [streamId, startMs] = ref.startsWith('guide:')
+      ? ref.slice(6).split(':').map((n, i) => Number(n) * (i ? 1000 : 1))
+      : [Number(ref), null]
+    const searched = queryClient
+      .getQueriesData<EpgSearchResult>({ queryKey: ['iptv', 'epg', 'search'] })
+      .flatMap(([, page]) => page?.hits ?? [])
+      .filter((h) => h.streamId === streamId)
+    const guideHit = searched.find((h) => Date.parse(h.programme.start_utc) === startMs)
+    if (guideHit) return void showHitInGuide(guideHit)
+    let name = searched[0]?.channelName ?? 'Live TV'
+    for (const [, page] of queryClient.getQueriesData<PagedDto<ChannelDto>>({ queryKey: ['iptv', 'live'] })) {
+      const hit = page?.items.find((c) => c.stream_id === streamId)?.name
+      if (hit) name = hit
+    }
     for (const [, rows] of queryClient.getQueriesData<EpgNowRow[]>({ queryKey: ['iptv', 'epg', 'now'] })) {
       const hit = rows?.find((r) => r.channel_stream_id === streamId)?.name
       if (hit) name = hit
@@ -284,22 +310,6 @@ export default function LiveTab() {
       setPlayError(playFailureFromError(err))
     }
   })
-
-  // A programme hit carries no archive metadata; resolve its real channel so the
-  // guide's catch-up rows are right (Apple SearchScreen.openProgram), then open
-  // the guide scrolled to the hit.
-  const showHitInGuide = async (hit: EpgSearchHit) => {
-    const page = await iptvApi.listLive({ q: hit.channelName, limit: 100 }).catch(() => null)
-    const c = page?.items.find((ch) => ch.stream_id === hit.streamId)
-    setGuideFor({
-      id: hit.streamId,
-      name: hit.channelName,
-      archiveDays: c ? Math.max(0, c.tv_archive_duration ?? 7) : 0,
-      canCatchup: c?.tv_archive === 1,
-      untilIso: hit.programme.stop_utc,
-      selectedStart: hit.programme.start_utc,
-    })
-  }
 
   const handleCardKeyDown = (event: KeyboardEvent, stream: ChannelDto) => {
     if (event.target !== event.currentTarget) return
@@ -819,149 +829,5 @@ function ChannelGuide({
         </ul>
       </div>
     </div>
-  )
-}
-
-const PROGRAMME_SEARCH_HOURS = 24
-const PROGRAMME_SEARCH_LIMIT = 60
-const SEARCH_BUCKET_MS = 5 * 60_000
-
-function isAiring(programme: EpgProgrammeDto, nowMs: number): boolean {
-  return new Date(programme.start_utc).getTime() <= nowMs && new Date(programme.stop_utc).getTime() > nowMs
-}
-
-function formatClock(iso: string): string {
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(iso))
-}
-
-function formatDayClock(iso: string): string {
-  return new Intl.DateTimeFormat(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(iso))
-}
-
-// Programme hits for the search box — the Apple Live -> Search "Programs" section.
-// Searches title + description across every channel's schedule for the next 24h,
-// so typing a team or show finds the channels carrying it. Airing hits tune the
-// channel; upcoming ones open that channel's guide.
-function ProgrammeResults({
-  q,
-  onPlayLive,
-  onShowInGuide,
-}: {
-  q: string
-  onPlayLive: (hit: EpgSearchHit) => void
-  onShowInGuide: (hit: EpgSearchHit) => void
-}) {
-  // Ticks so LIVE badges age out; the 5-min bucket keeps the query key stable while
-  // typing, and programmes that ended inside the bucket are dropped below.
-  const [nowMs, setNowMs] = useState(() => Date.now())
-  useEffect(() => {
-    const t = setInterval(() => setNowMs(Date.now()), 30_000)
-    return () => clearInterval(t)
-  }, [])
-  const fromMs = Math.floor(nowMs / SEARCH_BUCKET_MS) * SEARCH_BUCKET_MS
-  const fromIso = new Date(fromMs).toISOString()
-  const toIso = new Date(fromMs + PROGRAMME_SEARCH_HOURS * 3600_000).toISOString()
-  const search = useIptvEpgSearch(q, fromIso, toIso, PROGRAMME_SEARCH_LIMIT)
-  const hits = useMemo(() => {
-    const live: EpgSearchHit[] = []
-    const later: EpgSearchHit[] = []
-    for (const hit of search.data?.hits ?? []) {
-      if (new Date(hit.programme.stop_utc).getTime() <= nowMs) continue
-      ;(isAiring(hit.programme, nowMs) ? live : later).push(hit)
-    }
-    later.sort((a, b) => a.programme.start_utc.localeCompare(b.programme.start_utc))
-    return [...live, ...later]
-  }, [search.data, nowMs])
-
-  const airings = useMemo(() => groupAirings(hits), [hits])
-
-  if (q.trim().length < EPG_SEARCH_MIN_CHARS) return null
-  if (search.isLoading) return <p className="iptv-tab__status">Searching programs…</p>
-  if (search.error) return <p className="iptv-tab__status iptv-tab__status--error">Program search failed.</p>
-  if (airings.length === 0) return null
-
-  const more = (search.data?.total ?? hits.length) > hits.length
-  return (
-    <section className="iptv-prog-results" aria-label="Matching programs">
-      <h2 className="iptv-prog-results__head">
-        Programs <span className="iptv-prog-results__count">{airings.length}</span>
-        {hits.length > airings.length && (
-          <span className="iptv-prog-results__feeds">
-            <span aria-hidden="true">--</span> on {hits.length}
-            {more ? '+' : ''} channels
-          </span>
-        )}
-      </h2>
-      <ul className="iptv-prog-results__list">
-        {airings.map((airing) => (
-          <AiringCard
-            key={airing.key}
-            airing={airing}
-            live={isAiring(airing.hits[0].programme, nowMs)}
-            onPlayLive={onPlayLive}
-            onShowInGuide={onShowInGuide}
-          />
-        ))}
-      </ul>
-    </section>
-  )
-}
-
-// Feeds shown before "+N more": a game is often on a channel's HD, SD, 4K and
-// backup copies, and the first few cover the choice.
-const AIRING_FEEDS_SHOWN = 3
-
-function AiringCard({
-  airing,
-  live,
-  onPlayLive,
-  onShowInGuide,
-}: {
-  airing: Airing
-  live: boolean
-  onPlayLive: (hit: EpgSearchHit) => void
-  onShowInGuide: (hit: EpgSearchHit) => void
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const shown = expanded ? airing.hits : airing.hits.slice(0, AIRING_FEEDS_SHOWN)
-  const hidden = airing.hits.length - shown.length
-  return (
-    <li className={'iptv-prog-card' + (live ? ' iptv-prog-card--live' : '')}>
-      <p className="iptv-prog-card__when">
-        {live ? (
-          <>
-            <span className="iptv-prog-card__live">Live</span> until {formatClock(airing.stopUtc)}
-          </>
-        ) : (
-          formatDayClock(airing.startUtc)
-        )}
-        {airing.eyebrow && (
-          <>
-            {' '}
-            <span className="iptv-prog-card__sep" aria-hidden="true">--</span> {airing.eyebrow}
-          </>
-        )}
-      </p>
-      <h3 className="iptv-prog-card__title">{airing.title}</h3>
-      <div className="iptv-prog-card__feeds">
-        {shown.map((hit) => (
-          <button
-            key={`${hit.streamId}#${hit.programIndex}`}
-            type="button"
-            className="iptv-prog-card__feed"
-            onClick={() => (live ? onPlayLive(hit) : onShowInGuide(hit))}
-            title={live ? `Watch ${hit.channelName} live` : `Show ${hit.channelName} in the guide`}
-            aria-label={live ? `Watch ${hit.channelName} live` : `Show ${hit.channelName} in the guide`}
-          >
-            {hit.channelName}
-          </button>
-        ))}
-        {hidden > 0 && (
-          <button type="button" className="iptv-prog-card__more" onClick={() => setExpanded(true)}>
-            +{hidden} more
-          </button>
-        )}
-      </div>
-    </li>
   )
 }

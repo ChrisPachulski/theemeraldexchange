@@ -1,16 +1,18 @@
 import { useEffect, useEffectEvent, useState } from 'react'
 
-export type Route = 'home' | 'tv' | 'movies' | 'downloads' | 'users' | 'live' | 'youtube' | 'music'
+export type Route = 'home' | 'search' | 'tv' | 'movies' | 'downloads' | 'users' | 'live' | 'youtube' | 'music'
 
-const ROUTES: Route[] = ['home', 'tv', 'movies', 'live', 'downloads', 'users', 'youtube', 'music']
+const ROUTES: Route[] = ['home', 'search', 'tv', 'movies', 'live', 'downloads', 'users', 'youtube', 'music']
 const DEFAULT_ROUTE: Route = 'home'
 
 // `#/<tab>/<ref>` asks that tab to open one item, so any surface (Home shelves,
 // Downloads, a person's filmography) can land on a specific title instead of
 // just the tab. Refs: movies = Radarr id or `tmdb:N`; tv = Sonarr id, `tvdb:N`
-// or `tmdb:N`; live = stream id. The tab consumes it once (useIntent).
+// or `tmdb:N`; live = stream id, or `guide:<streamId>:<startUnixSecs>` for a
+// programme search hit to open in that channel's guide. The tab consumes it
+// once (useIntent).
 export type IntentRoute = 'movies' | 'tv' | 'live'
-const INTENT = /^(movies|tv|live)\/((?:tmdb:|tvdb:)?\d+)$/
+const INTENT = /^(movies|tv|live)\/((?:tmdb:|tvdb:|guide:\d+:)?\d+)$/
 
 function rawHash(): string {
   return window.location.hash.replace(/^#\/?/, '').trim().toLowerCase()

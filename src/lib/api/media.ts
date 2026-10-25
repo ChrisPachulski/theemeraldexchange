@@ -771,6 +771,11 @@ export const mediaApi = {
     get<RawListResponse<RawEpisodeRow>>(`/shows/${showId}/episodes`, undefined, req).then(
       (raw) => normList(raw, normEpisode),
     ),
+  /** Episodes by title or overview across every show (FTS, show order). */
+  searchEpisodes: (q: string, limit: number, req?: RequestOpts) =>
+    get<RawListResponse<RawEpisodeRow>>('/episodes', { q, limit }, req).then((raw) =>
+      normList(raw, normEpisode),
+    ),
   scan: () => post<ScanResponse, Record<string, never>>('/scan', {}),
 
   /** YouTube channel names, most recent upload first. */

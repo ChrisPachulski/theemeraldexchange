@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { sonarr } from '../api/sonarr'
 
-export function useSonarrLibrary() {
+export function useSonarrLibrary(enabled = true) {
   return useQuery({
     queryKey: ['sonarr', 'series'],
     queryFn: sonarr.series,
     staleTime: 60_000,
+    enabled,
   })
 }
 
