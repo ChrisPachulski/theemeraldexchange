@@ -111,6 +111,9 @@ fn punctuation_and_spacing_never_decide_a_match() {
         ("spiderman", "Spider-Man: Homecoming"),
         ("whats new scooby", "What's New, Scooby-Doo?"),
         ("SCOOB", "Scoob!"),
+        ("scooby-doo", "Scooby Doo and Guess Who?"),
+        ("law and order", "Law & Order"),
+        ("law & order", "Law and Order"),
     ] {
         assert_eq!(
             rank(q, vec![], &lib(title), "tmdbId").len(),
@@ -119,6 +122,10 @@ fn punctuation_and_spacing_never_decide_a_match() {
         );
     }
     assert!(rank("batman", vec![], &lib("Scooby-Doo!"), "tmdbId").is_empty());
+    assert!(
+        rank("us", vec![], &lib("Music and Lyrics"), "tmdbId").is_empty(),
+        "a short query matches word starts only"
+    );
     assert_eq!(
         words("What\u{2019}s New, Scooby-Doo?"),
         ["whats", "new", "scooby", "doo"]

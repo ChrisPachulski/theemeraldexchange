@@ -790,16 +790,17 @@ async fn epg_search_route() {
         .await
         .json();
     assert_eq!(body["total"], 2);
+    // The title hit leads; the description-only hit follows.
     assert_eq!(
-        body["hits"][0],
+        body["hits"][1],
         json!({"streamId": 700, "channelName": "YES Network", "categoryId": 5, "programIndex": 0,
             "programme": {"channel_id": "yes.us", "start_utc": "2026-07-06T01:00:00Z", "stop_utc": "2026-07-06T02:00:00Z",
                 "title": "Pregame", "description": "Yankees preview"}})
     );
     assert_eq!(
         (
-            &body["hits"][1]["programIndex"],
-            &body["hits"][1]["programme"]["title"]
+            &body["hits"][0]["programIndex"],
+            &body["hits"][0]["programme"]["title"]
         ),
         (&json!(1), &json!("Yankees vs Red Sox"))
     );

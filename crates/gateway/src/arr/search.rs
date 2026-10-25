@@ -150,10 +150,16 @@ fn rank(term: &str, found: Vec<Value>, library: &[Value], key: &str) -> Vec<Valu
     out
 }
 
-/// Lowercase alphanumeric words; apostrophes join ("What's" is "whats").
+/// A run-together query shorter than this matches word starts only, so "us"
+/// finds "US Marshals" but not "Music".
+const RUN_TOGETHER_MIN: usize = 4;
+
+/// Lowercase alphanumeric words; apostrophes join ("What's" is "whats") and
+/// "&" is the word "and".
 fn words(s: &str) -> Vec<String> {
     s.to_lowercase()
         .replace(['\'', '\u{2019}'], "")
+        .replace('&', " and ")
         .split(|c: char| !c.is_alphanumeric())
         .filter(|w| !w.is_empty())
         .map(String::from)
@@ -162,7 +168,7 @@ fn words(s: &str) -> Vec<String> {
 
 /// 0 the title is the query, 1 it starts with it, 2 it holds every query
 /// word as a word prefix, or holds the query run together ("scoobydoo",
-/// "spiderman"); None no match. The best of title, original and alternate
+/// "spiderman", four letters or more); None no match. The best of title, original and alternate
 /// titles counts.
 fn score(q: &[String], v: &Value) -> Option<u8> {
     let alternates = v
@@ -184,7 +190,8 @@ fn score(q: &[String], v: &Value) -> Option<u8> {
             } else if q
                 .iter()
                 .all(|w| t.iter().any(|x| x.starts_with(w.as_str())))
-                || t.concat().contains(&q.concat())
+                || (q.concat().chars().count() >= RUN_TOGETHER_MIN
+                    && t.concat().contains(&q.concat()))
             {
                 Some(2)
             } else {

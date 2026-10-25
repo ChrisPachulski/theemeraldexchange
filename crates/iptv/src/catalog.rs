@@ -205,6 +205,73 @@ fn escape_like(term: &str) -> String {
     out
 }
 
+/// Characters that separate words in a column, as the query's own split does.
+const SEPARATORS: [&str; 12] = ["-", ":", ".", ",", "!", "?", "/", "(", ")", "[", "]", "|"];
+
+/// A run-together query shorter than this matches word starts only, so "us"
+/// finds "US: CNN" but not "Music".
+const RUN_TOGETHER_MIN: usize = 4;
+
+/// Lowercase alphanumeric search words: apostrophes join ("What's" is
+/// "whats") and "&" is the word "and".
+fn search_words(q: &str) -> Vec<String> {
+    q.to_lowercase()
+        .replace(['\'', '\u{2019}'], "")
+        .replace('&', " and ")
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+/// `col` matched by words, so punctuation never decides a hit: "scooby-doo"
+/// finds "SCOOBY DOO", "spiderman" finds "Spider-Man", "law and order" finds
+/// "Law & Order". Every query word starts a word of `col`, or the query run
+/// together sits in `col` with its separators squeezed out. A query with no
+/// words ("%") matches literally. LIKE folds ASCII case. The gateway's
+/// Discover search and the apps' WordMatch match the same way.
+///
+/// Each test leads with a plain substring LIKE, which rejects most rows
+/// before the REPLACE chain runs (the 24 h programme window is ~160k rows).
+/// `run_together` is off for descriptions, where it costs the most and
+/// finds the least.
+fn word_match(col: &str, q: &str, run_together: bool) -> (String, Vec<Arg>) {
+    let words = search_words(q);
+    if words.is_empty() {
+        let like = format!("%{}%", escape_like(q.trim()));
+        return (format!("{col} LIKE ? ESCAPE '\\'"), vec![Arg::Text(like)]);
+    }
+    let joined = format!("REPLACE(REPLACE({col}, '''', ''), '\u{2019}', '')");
+    let spaced = SEPARATORS
+        .iter()
+        .fold(format!("REPLACE({joined}, '&', ' and ')"), |e, c| {
+            format!("REPLACE({e}, '{c}', ' ')")
+        });
+    let mut args = Vec::new();
+    let mut clause = words
+        .iter()
+        .map(|w| {
+            args.push(Arg::Text(format!("%{w}%")));
+            args.push(Arg::Text(format!("% {w}%")));
+            let present = if w == "and" {
+                format!("({col} LIKE ? OR {col} LIKE '%&%')")
+            } else {
+                format!("{col} LIKE ?")
+            };
+            format!("({present} AND ' ' || {spaced} LIKE ?)")
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ");
+    let squeezed = words.concat();
+    if run_together && squeezed.chars().count() >= RUN_TOGETHER_MIN {
+        let first = &squeezed[..squeezed.chars().next().map_or(0, char::len_utf8)];
+        clause = format!("({clause}) OR ({col} LIKE ? AND REPLACE({spaced}, ' ', '') LIKE ?)");
+        args.push(Arg::Text(format!("%{first}%")));
+        args.push(Arg::Text(format!("%{squeezed}%")));
+    }
+    (format!("({clause})"), args)
+}
+
 type SqlQuery<'q, O> = sqlx::query::QueryAs<'q, sqlx::Sqlite, O, sqlx::sqlite::SqliteArguments>;
 
 fn bind_all<'q, O>(mut q: SqlQuery<'q, O>, args: &[Arg]) -> SqlQuery<'q, O> {
@@ -247,12 +314,13 @@ where
     let mut wh = Vec::new();
     let mut args = Vec::new();
     if let Some(c) = opts.category_id {
-        wh.push("category_id = ?");
+        wh.push("category_id = ?".to_string());
         args.push(Arg::Int(c));
     }
     if let Some(q) = opts.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
-        wh.push("LOWER(name) LIKE ? ESCAPE '\\'");
-        args.push(Arg::Text(format!("%{}%", escape_like(&q.to_lowercase()))));
+        let (clause, words) = word_match("name", q, true);
+        wh.push(clause);
+        args.extend(words);
     }
     let where_sql = if wh.is_empty() {
         String::new()
@@ -458,8 +526,9 @@ pub async fn epg_grid(
         args.push(Arg::Int(c));
     }
     if let Some(q) = o.q.as_deref().map(str::trim).filter(|q| !q.is_empty()) {
-        wh.push("name LIKE ? ESCAPE '\\'".into());
-        args.push(Arg::Text(format!("%{}%", escape_like(q))));
+        let (clause, words) = word_match("name", q, true);
+        wh.push(clause);
+        args.extend(words);
     }
     if o.has_epg_only {
         wh.push(format!(
@@ -528,9 +597,9 @@ struct SearchRow {
     total: i64,
 }
 
-/// Programme search over the whole EPG store: case-insensitive "contains" on
-/// title or description, one hit per (channel, programme), ordered by channel
-/// then start. `total` counts every match before the limit.
+/// Programme search over the whole EPG store: title or description matched by
+/// words (`word_match`), one hit per (channel, programme), title hits first,
+/// then by channel and start. `total` counts every match before the limit.
 pub async fn epg_search(
     pool: &SqlitePool,
     from: &str,
@@ -552,6 +621,11 @@ pub async fn epg_search(
     } else {
         "WHERE category_id IN (SELECT value FROM json_each(?))"
     };
+    // Title hits lead: a broad word in many descriptions must not push the
+    // programme named for it past the limit.
+    let (title_hit, title_args) = word_match("COALESCE(p.title, '')", term, true);
+    let (description_hit, description_args) =
+        word_match("COALESCE(p.description, '')", term, false);
     let sql = format!(
         "WITH channel_scope AS (
            SELECT stream_id, num, name, category_id, {EFFECTIVE_EPG} AS epg_id
@@ -563,27 +637,23 @@ pub async fn epg_search(
            WHERE channel_id IN (SELECT epg_id FROM channel_scope)
              AND start_utc < ? AND stop_utc > ?
          )
-         SELECT c.stream_id AS streamId, c.name AS channelName, c.category_id AS categoryId,
-           p.*, COUNT(*) OVER () AS total
-         FROM channel_scope c JOIN programmes p ON p.channel_id = c.epg_id
-         WHERE COALESCE(p.title, '') LIKE ? ESCAPE '\\'
-            OR COALESCE(p.description, '') LIKE ? ESCAPE '\\'
-         ORDER BY c.num, c.name, c.stream_id, p.start_utc
+         SELECT *, COUNT(*) OVER () AS total FROM (
+           SELECT c.stream_id AS streamId, c.name AS channelName, c.category_id AS categoryId,
+             c.num, p.*, {title_hit} AS title_hit, {description_hit} AS description_hit
+           FROM channel_scope c JOIN programmes p ON p.channel_id = c.epg_id
+         )
+         WHERE title_hit OR description_hit
+         ORDER BY title_hit DESC, num, channelName, streamId, start_utc
          LIMIT ?"
     );
     let mut query = sqlx::query_as::<_, SearchRow>(sqlx::AssertSqlSafe(sql));
     if !category_ids.is_empty() {
         query = query.bind(serde_json::to_string(category_ids).unwrap_or_default());
     }
-    let like = format!("%{}%", escape_like(term));
-    let rows = query
-        .bind(to)
-        .bind(from)
-        .bind(like.clone())
-        .bind(like)
-        .bind(limit)
-        .fetch_all(pool)
-        .await?;
+    query = query.bind(to).bind(from);
+    let mut args = title_args;
+    args.extend(description_args);
+    let rows = bind_all(query, &args).bind(limit).fetch_all(pool).await?;
     Ok(SearchResult {
         total: rows.first().map_or(0, |r| r.total),
         hits: rows
@@ -1112,6 +1182,81 @@ pub(crate) mod tests {
     /// The pushdown fixture of iptvEpgQuery.test.ts: 200 channels x 300
     /// programmes, the needle on channel c5 at indices 7 and 20 only.
     #[tokio::test]
+    async fn channel_search_matches_by_words_not_punctuation() {
+        let (pool, _d) = pool().await;
+        for (id, name) in [
+            (1, "24/7 SCOOBY DOO"),
+            (2, "Spider-Man Toons"),
+            (3, "US: Law & Order"),
+            (4, "Music Channel"),
+            (5, "What's New Scooby-Doo?"),
+        ] {
+            channel(&pool, id, id, name, None, None, 1).await;
+        }
+        let ids = |q: &str| {
+            let pool = pool.clone();
+            let q = q.to_string();
+            async move {
+                let opts = ListOpts {
+                    q: Some(q),
+                    ..Default::default()
+                };
+                let mut ids: Vec<i64> = list_live(&pool, &opts)
+                    .await
+                    .unwrap()
+                    .items
+                    .iter()
+                    .map(|c| c.stream_id)
+                    .collect();
+                ids.sort_unstable();
+                ids
+            }
+        };
+        assert_eq!(ids("scooby-doo").await, [1, 5]);
+        assert_eq!(ids("scooby doo").await, [1, 5]);
+        assert_eq!(ids("scoobydoo").await, [1, 5]);
+        assert_eq!(ids("spiderman").await, [2]);
+        assert_eq!(ids("spider man").await, [2]);
+        assert_eq!(ids("law and order").await, [3]);
+        assert_eq!(ids("law & order").await, [3]);
+        assert_eq!(ids("whats new").await, [5]);
+        assert_eq!(
+            ids("us").await,
+            [3],
+            "a short word starts a word: not \"Music\""
+        );
+        assert_eq!(ids("batman").await, Vec::<i64>::new());
+    }
+
+    #[tokio::test]
+    async fn programme_search_puts_title_hits_first() {
+        let (pool, _d) = pool().await;
+        channel(&pool, 1, 1, "Alpha", None, Some("a"), 1).await;
+        channel(&pool, 2, 2, "Beta", None, Some("b"), 1).await;
+        exec(
+            &pool,
+            "INSERT INTO epg_programs (channel_id, start_utc, stop_utc, title, description) VALUES
+               ('a', '2026-05-23T01:00:00.000Z', '2026-05-23T02:00:00.000Z', 'Cartoon Hour', 'Scooby-Doo and friends'),
+               ('b', '2026-05-23T01:00:00.000Z', '2026-05-23T02:00:00.000Z', 'Scooby Doo, Where Are You!', NULL);",
+        )
+        .await;
+        let (f, t) = ("2026-05-23T00:00:00.000Z", "2026-05-24T00:00:00.000Z");
+        let r = epg_search(&pool, f, t, "scooby-doo", &[], None)
+            .await
+            .unwrap();
+        let titles: Vec<_> = r
+            .hits
+            .iter()
+            .map(|h| h.programme.title.as_deref())
+            .collect();
+        assert_eq!(
+            titles,
+            [Some("Scooby Doo, Where Are You!"), Some("Cartoon Hour")]
+        );
+        assert_eq!(r.total, 2);
+    }
+
+    #[tokio::test]
     async fn search_returns_exactly_the_matches_with_grid_aligned_program_index() {
         let (pool, _d) = pool().await;
         exec(
@@ -1206,6 +1351,9 @@ pub(crate) mod tests {
     /// (epg-goldens.json "api", written by the TS stack before S8).
     #[tokio::test]
     async fn queries_on_the_scenario_db_match_the_ts_goldens() {
+        // Two cases differ from the TS on purpose: a search term matches by
+        // words (`word_match`), so "US:" also finds "US CMT (S)" and "e" needs
+        // a word starting with "e".
         let golden = crate::testpanel::json_fixture("epg-goldens.json");
         let api = &golden["api"];
         let scenario = crate::testpanel::Scenario::start().await;
