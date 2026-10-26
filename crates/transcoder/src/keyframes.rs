@@ -13,6 +13,11 @@
 //! [`crate::session::SessionManager::vod_manifest`] (lazy populate on miss) and
 //! the boot-spawned warmer in `main.rs` (proactive fill so even a first play is
 //! never "live").
+//!
+//! A file the probe can read but gets no usable keyframes from is cached too, as
+//! an empty list: an AVI's keyframe packets carry no timestamp (`N/A`), and a
+//! broken file fails the same way every time. Without that record the hourly
+//! warmer re-read all ~675 library AVIs end to end on every pass (2026-10-26).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
@@ -36,7 +41,8 @@ struct CacheEntry {
     mtime_secs: u64,
     mtime_nanos: u32,
     size: u64,
-    /// Source video keyframe presentation times (seconds), ascending.
+    /// Source video keyframe presentation times (seconds), ascending. Empty when
+    /// the probe got nothing usable from this file: tried, not worth retrying.
     keyframes: Vec<f64>,
 }
 
@@ -59,32 +65,46 @@ fn cache_file(cache_root: &Path, path: &Path) -> PathBuf {
     cache_root.join(format!("{:016x}.json", h.finish()))
 }
 
-/// Return the cached keyframe list for `path` if present AND still valid for the
-/// file's current (mtime, size). `None` on any miss/mismatch/IO error.
-pub(crate) async fn load(cache_root: &Path, path: &Path) -> Option<Vec<f64>> {
+/// The cached entry for `path` if present AND still valid for the file's
+/// current (mtime, size), including an empty one. `None` on any
+/// miss/mismatch/IO error.
+async fn cached(cache_root: &Path, path: &Path) -> Option<CacheEntry> {
     let (mtime_secs, mtime_nanos, size) = file_identity(path).await?;
     let bytes = tokio::fs::read(cache_file(cache_root, path)).await.ok()?;
     let entry: CacheEntry = serde_json::from_slice(&bytes).ok()?;
     let fresh = entry.path == path.to_string_lossy()
         && entry.mtime_secs == mtime_secs
         && entry.mtime_nanos == mtime_nanos
-        && entry.size == size
-        && !entry.keyframes.is_empty();
-    fresh.then_some(entry.keyframes)
+        && entry.size == size;
+    fresh.then_some(entry)
+}
+
+/// Return the cached keyframe list for `path` if present, still valid, and
+/// non-empty. `None` on any miss/mismatch/IO error or a file that had none.
+pub(crate) async fn load(cache_root: &Path, path: &Path) -> Option<Vec<f64>> {
+    cached(cache_root, path)
+        .await
+        .map(|e| e.keyframes)
+        .filter(|kf| !kf.is_empty())
+}
+
+/// True when this version of `path` was already probed, whether or not it gave
+/// keyframes, so the warmer never reads it end to end again.
+pub(crate) async fn tried(cache_root: &Path, path: &Path) -> bool {
+    cached(cache_root, path).await.is_some()
 }
 
 /// Probe `path`'s keyframes and cache them, returning the list. Skips the probe
-/// (returns the cached list) when a valid entry already exists, so the warmer
-/// and the lazy path are both idempotent and cheap on a warm cache.
+/// when a valid entry already exists (returning its list, or `None` for a file
+/// that had none), so the warmer and the lazy path are both idempotent and
+/// cheap on a warm cache. A probe that timed out or never started is not
+/// cached: that says nothing about the file.
 pub(crate) async fn ensure(cache_root: &Path, ffmpeg_bin: &str, path: &Path) -> Option<Vec<f64>> {
-    if let Some(kf) = load(cache_root, path).await {
-        return Some(kf);
+    if let Some(entry) = cached(cache_root, path).await {
+        return (!entry.keyframes.is_empty()).then_some(entry.keyframes);
     }
     let (mtime_secs, mtime_nanos, size) = file_identity(path).await?;
     let keyframes = probe(ffmpeg_bin, path).await?;
-    if keyframes.is_empty() {
-        return None;
-    }
     let entry = CacheEntry {
         path: path.to_string_lossy().into_owned(),
         mtime_secs,
@@ -95,7 +115,7 @@ pub(crate) async fn ensure(cache_root: &Path, ffmpeg_bin: &str, path: &Path) -> 
     if let Ok(json) = serde_json::to_vec(&entry) {
         write_atomic(cache_root, &cache_file(cache_root, path), &json).await;
     }
-    Some(keyframes)
+    (!keyframes.is_empty()).then_some(keyframes)
 }
 
 /// Write `bytes` to `dest` atomically (temp + rename) so a crash mid-write never
@@ -124,7 +144,9 @@ pub(crate) async fn output_within(
 /// Extract video keyframe PTS (seconds, ascending) via a full-file packet demux.
 /// `ffprobe ... -show_entries packet=pts_time,flags` emits one CSV line per
 /// video packet (`<pts>,<flags>`); a keyframe's flags begin with `K`. Bounded by
-/// [`PROBE_TIMEOUT`]; any failure → `None` (caller falls back to EVENT).
+/// [`PROBE_TIMEOUT`]. A file ffprobe rejects, or one with no timed keyframes,
+/// gives an empty list; a timeout or spawn failure gives `None`, so it is tried
+/// again later. Either way the caller falls back to EVENT.
 async fn probe(ffmpeg_bin: &str, path: &Path) -> Option<Vec<f64>> {
     let mut cmd = Command::new(ffprobe_bin(ffmpeg_bin));
     cmd.args([
@@ -151,7 +173,7 @@ async fn probe(ffmpeg_bin: &str, path: &Path) -> Option<Vec<f64>> {
                 code = ?o.status.code(),
                 "keyframe probe exited non-zero"
             );
-            return None;
+            return Some(Vec::new());
         }
         Ok(Err(e)) => {
             tracing::warn!(path = %path.display(), error = %e, "keyframe probe spawn failed");
@@ -168,7 +190,7 @@ async fn probe(ffmpeg_bin: &str, path: &Path) -> Option<Vec<f64>> {
     // B-frames, so sort to get a clean ascending timeline.
     kf.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     kf.dedup();
-    if kf.is_empty() { None } else { Some(kf) }
+    Some(kf)
 }
 
 /// Parse `pts_time,flags` CSV lines, keeping the pts of keyframe packets
@@ -260,6 +282,90 @@ mod tests {
     fn ffprobe_derived_from_ffmpeg_prefix() {
         assert_eq!(ffprobe_bin("/usr/bin/ffmpeg"), "/usr/bin/ffprobe");
         assert_eq!(ffprobe_bin("ffmpeg"), "ffprobe");
+    }
+
+    /// A stand-in `ffmpeg` whose sibling `ffprobe` counts its runs in `runs` and
+    /// then executes `body`.
+    fn fake_ffmpeg(dir: &Path, body: &str) -> (String, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let runs = dir.join("runs");
+        let probe = dir.join("ffprobe");
+        std::fs::write(
+            &probe,
+            format!("#!/bin/sh\necho run >> {}\n{body}\n", runs.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (dir.join("ffmpeg").to_string_lossy().into_owned(), runs)
+    }
+
+    fn runs(file: &Path) -> usize {
+        std::fs::read_to_string(file).map_or(0, |s| s.lines().count())
+    }
+
+    // 2026-10-26: AVI keyframes come back as `N/A,K_`, so the list was empty,
+    // nothing was cached, and the hourly warmer re-read every AVI end to end.
+    #[tokio::test]
+    async fn a_file_without_timed_keyframes_is_probed_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ffmpeg, count) = fake_ffmpeg(tmp.path(), "echo 'N/A,K_'; echo 'N/A,__'");
+        let video = tmp.path().join("show.avi");
+        std::fs::write(&video, b"avi").unwrap();
+        let cache = tmp.path().join(KFCACHE_DIRNAME);
+
+        assert!(!tried(&cache, &video).await);
+        assert!(ensure(&cache, &ffmpeg, &video).await.is_none());
+        assert!(ensure(&cache, &ffmpeg, &video).await.is_none());
+        assert_eq!(runs(&count), 1, "the second ensure re-read the file");
+        assert!(tried(&cache, &video).await);
+        assert!(
+            load(&cache, &video).await.is_none(),
+            "an empty list is no scrubber"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_file_ffprobe_rejects_is_probed_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ffmpeg, count) = fake_ffmpeg(tmp.path(), "exit 1");
+        let video = tmp.path().join("broken.mkv");
+        std::fs::write(&video, b"mkv").unwrap();
+        let cache = tmp.path().join(KFCACHE_DIRNAME);
+
+        ensure(&cache, &ffmpeg, &video).await;
+        ensure(&cache, &ffmpeg, &video).await;
+        assert_eq!(runs(&count), 1);
+    }
+
+    #[tokio::test]
+    async fn a_changed_file_is_probed_again() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (ffmpeg, count) = fake_ffmpeg(tmp.path(), "exit 1");
+        let video = tmp.path().join("regrab.mkv");
+        std::fs::write(&video, b"old").unwrap();
+        let cache = tmp.path().join(KFCACHE_DIRNAME);
+
+        ensure(&cache, &ffmpeg, &video).await;
+        std::fs::write(&video, b"replaced with a new grab").unwrap();
+        assert!(!tried(&cache, &video).await);
+        ensure(&cache, &ffmpeg, &video).await;
+        assert_eq!(runs(&count), 2);
+    }
+
+    #[tokio::test]
+    async fn a_probe_that_never_ran_is_not_remembered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let video = tmp.path().join("movie.mkv");
+        std::fs::write(&video, b"mkv").unwrap();
+        let cache = tmp.path().join(KFCACHE_DIRNAME);
+        let missing = tmp.path().join("no-such-dir").join("ffmpeg");
+
+        assert!(
+            ensure(&cache, &missing.to_string_lossy(), &video)
+                .await
+                .is_none()
+        );
+        assert!(!tried(&cache, &video).await);
     }
 
     #[tokio::test]
