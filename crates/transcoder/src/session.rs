@@ -2086,8 +2086,9 @@ impl SessionManager {
             let mut warmed = 0u32;
             for path in files {
                 let p = std::path::Path::new(&path);
-                // Cheap skip for already-cached files (a stat + small read).
-                if crate::keyframes::load(&self.cache_root, p).await.is_some() {
+                // Cheap skip for files already probed, with or without
+                // keyframes (a stat + small read).
+                if crate::keyframes::tried(&self.cache_root, p).await {
                     continue;
                 }
                 // Yield the disk entirely to live playback: wait until idle.
@@ -2117,7 +2118,10 @@ impl SessionManager {
     }
 
     /// Recursively list video files under the confined media roots (by extension;
-    /// keyframes are codec-agnostic). Best-effort: unreadable dirs are skipped.
+    /// keyframes are codec-agnostic). Best-effort: unreadable dirs are skipped,
+    /// and so are hidden ones (`.pokemon_foreign_quarantine`, `.kipper_staging`):
+    /// they hold quarantined or half-imported files nobody browses to. Playing
+    /// one still warms it lazily.
     async fn collect_video_files(&self) -> Vec<String> {
         let mut out = Vec::new();
         let mut stack: Vec<PathBuf> = self.media_roots.clone();
@@ -2132,7 +2136,9 @@ impl SessionManager {
                 };
                 let path = entry.path();
                 if ft.is_dir() {
-                    stack.push(path);
+                    if !entry.file_name().to_string_lossy().starts_with('.') {
+                        stack.push(path);
+                    }
                 } else if ft.is_file()
                     && path
                         .extension()
@@ -2827,6 +2833,27 @@ mod tests {
         assert!(!vtt.exists(), "no sidecar without a selected subtitle");
 
         mgr.stop(&id).await;
+    }
+
+    // 2026-10-26: the warmer walked into `.pokemon_foreign_quarantine` and
+    // re-read its 288 AVIs every pass.
+    #[tokio::test]
+    async fn the_warmer_skips_hidden_folders() {
+        let tmp = tempfile::tempdir().unwrap();
+        let media = tmp.path().join("media");
+        for dir in ["Show/Season 1", ".quarantine/Season 1"] {
+            std::fs::create_dir_all(media.join(dir)).unwrap();
+        }
+        std::fs::write(media.join("Show/Season 1/e1.avi"), b"").unwrap();
+        std::fs::write(media.join(".quarantine/Season 1/e1.avi"), b"").unwrap();
+        let mgr = manager_with_stub(&tmp, write_stub(tmp.path(), "run"))
+            .with_media_roots(vec![media.clone()]);
+
+        let files = mgr.collect_video_files().await;
+        assert_eq!(
+            files,
+            vec![media.join("Show/Season 1/e1.avi").to_string_lossy()]
+        );
     }
 
     #[tokio::test]
