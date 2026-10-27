@@ -317,6 +317,108 @@ async fn compares_the_other_coast_first_ahead_of_closer_named_channels() {
     );
 }
 
+/// 2026-10-25: the provider files "Showtime Women (West) (H)" under the East
+/// id, so West streams resolve to no listing; they still stand for the West
+/// twin, ahead of the other related channels.
+#[tokio::test]
+async fn takes_an_unlisted_west_stream_of_the_channel_for_the_west_twin() {
+    let (p, _d) = seeded().await;
+    for (id, num, name) in [
+        (22598, 7281, "US Showtime (West) (H)"),
+        (400124927, 1490, "US: SHOWTIME WEST"),
+        (22600, 7358, "US Showtime 2 (West) (H)"),
+        (300, 9000, "US West Palm Beach Showtime"),
+    ] {
+        chan(&p, id, num, name, None, None).await;
+    }
+    let west_of = async |p: &SqlitePool| -> Vec<Candidate> {
+        candidates(p, 200163566, "showtime.us", &not_dead, &[])
+            .await
+            .into_iter()
+            .filter(|c| c.epg_id == "showtimewest.us")
+            .collect()
+    };
+    // No West schedule: nothing to tell the West picture by.
+    assert_eq!(west_of(&p).await, []);
+
+    prog(
+        &p,
+        "showtimewest.us",
+        "2026-10-10T02:00:00.000Z",
+        "2026-10-10T04:30:00.000Z",
+        "The Firm",
+    )
+    .await;
+    assert_eq!(
+        candidates(&p, 200163566, "showtime.us", &not_dead, &[]).await,
+        [
+            cand(5864, "showtime.us", Role::Sibling),
+            // Two West streams from two provider sources, then three slots left.
+            cand(400124927, "showtimewest.us", Role::Family),
+            cand(22598, "showtimewest.us", Role::Family),
+            cand(22599, "showtime2.us", Role::Family),
+            cand(200163568, "shoxbet.us", Role::Family),
+            cand(22597, "showtime.us", Role::Sibling),
+        ]
+    );
+    // An East-named subject finds them too; a dead or excluded one is passed over.
+    let dead = |id: i64| id == 400124927;
+    let o = candidates(&p, 22597, "showtime.us", &dead, &[]).await;
+    assert_eq!(
+        o.iter()
+            .filter(|c| c.epg_id == "showtimewest.us")
+            .collect::<Vec<_>>(),
+        [&cand(22598, "showtimewest.us", Role::Family)]
+    );
+    let o = candidates(&p, 22597, "showtime.us", &not_dead, &[400124927, 22598]).await;
+    assert!(!o.iter().any(|c| c.epg_id == "showtimewest.us"));
+
+    // Found by the West id's name, not the subject's: a short or differently
+    // named subject, or a West stream the guide lists under the East id.
+    chan(&p, 40, 30, "US: FX", Some("fx.us"), None).await;
+    chan(&p, 41, 31, "US FX (East) (H)", Some("fx.us"), None).await;
+    chan(&p, 42, 32, "US FX (West) (H)", None, None).await;
+    chan(&p, 43, 33, "US: FX (West)", Some("fx.us"), None).await;
+    prog(
+        &p,
+        "fx.us",
+        "2026-10-10T02:00:00.000Z",
+        "2026-10-10T04:30:00.000Z",
+        "Alien",
+    )
+    .await;
+    prog(
+        &p,
+        "fxwest.us",
+        "2026-10-10T02:00:00.000Z",
+        "2026-10-10T04:30:00.000Z",
+        "Aliens",
+    )
+    .await;
+    for subject in [40, 43] {
+        let o = candidates(&p, subject, "fx.us", &not_dead, &[]).await;
+        assert!(
+            o.contains(&cand(42, "fxwest.us", Role::Family)),
+            "{subject}: {o:?}"
+        );
+    }
+
+    // A West stream with a listing of its own is the related channel already.
+    chan(
+        &p,
+        5866,
+        5388,
+        "US Showtime West (S)",
+        Some("showtimewest.us"),
+        None,
+    )
+    .await;
+    assert_eq!(
+        west_of(&p).await,
+        [cand(5866, "showtimewest.us", Role::Family)]
+    );
+}
+
 #[tokio::test]
 async fn prefers_a_verified_stream_and_skips_dead_or_excluded_ones() {
     let (p, _d) = seeded().await;
@@ -544,6 +646,31 @@ async fn knows_what_a_fresh_verdict_says_the_stream_carries() {
         &c,
         Some("showtimeshowcase.us"),
         ms(NOW) + HOUR_MS
+    ));
+}
+
+/// The provider re-points streams within days: 200163572 matched East on
+/// 2026-10-22 and carried West on 2026-10-25, unchecked under a 7-day match.
+#[tokio::test]
+async fn trusts_a_match_for_a_day_not_a_week() {
+    let mut c = FeedCheck::new(
+        200163566,
+        "match",
+        Some("showtime.us"),
+        None,
+        Some(5864),
+        Some(0.98),
+    );
+    c.checked_at = iso_ms(ms(NOW));
+    assert!(feed_check_is_fresh(
+        &c,
+        Some("showtime.us"),
+        ms(NOW) + 23 * HOUR_MS
+    ));
+    assert!(!feed_check_is_fresh(
+        &c,
+        Some("showtime.us"),
+        ms(NOW) + 25 * HOUR_MS
     ));
 }
 

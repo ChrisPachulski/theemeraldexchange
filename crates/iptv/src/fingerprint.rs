@@ -26,6 +26,11 @@ const FLAT_STD: f64 = 4.0;
 /// before a score means anything.
 pub const MIN_OVERLAP_FRAMES: usize = 40;
 
+/// A capture whose every frame stays within this mean absolute luma (0-255)
+/// of its first is a still picture. Measured 2026-10-25: the provider's
+/// "Channel temporarily unavailable" card 0.13, film footage 8.8 and up.
+const STILL_DIFF: f64 = 1.0;
+
 /// Decoder shortcuts: the picture is scaled to 32x18, so deblocking is wasted
 /// work on the Plex-sharing NAS. Two threads keeps a capture off every core.
 const DECODE_ARGS: [&str; 4] = ["-skip_loop_filter", "all", "-threads", "2"];
@@ -117,6 +122,29 @@ fn normalise(frames: &[u8]) -> Vec<Option<Vec<f32>>> {
             })
         })
         .collect()
+}
+
+/// A still picture: a slate or a frozen feed. It says nothing about the
+/// programme, and two slates of one template would "match" (2026-10-25: a
+/// Showtime Women stream showed the provider's unavailable card).
+pub fn is_still(frames: &[u8]) -> bool {
+    let mut it = frames.chunks_exact(FP_FRAME_BYTES);
+    let Some(first) = it.next() else {
+        return false;
+    };
+    let mut count = 1;
+    for f in it {
+        let diff: f64 = f
+            .iter()
+            .zip(first)
+            .map(|(&a, &b)| (a as f64 - b as f64).abs())
+            .sum();
+        if diff / FP_FRAME_BYTES as f64 >= STILL_DIFF {
+            return false;
+        }
+        count += 1;
+    }
+    count >= MIN_OVERLAP_FRAMES
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -227,6 +255,16 @@ pub(crate) mod synth {
             .collect()
     }
 
+    /// A slate: one frame of `seed` held for 125 frames, with encoder grain.
+    pub fn still(seed: u32) -> Vec<u8> {
+        let frame = &plain(seed)[..FP_FRAME_BYTES];
+        let mut r = rng(seed + 1);
+        (0..125)
+            .flat_map(|_| frame.to_vec())
+            .map(|v| (v as f64 + (r() - 0.5).round()).clamp(0.0, 255.0) as u8)
+            .collect()
+    }
+
     /// iptvFeedVerify.test.ts `slice`: 125 frames from `start`, re-graded.
     pub fn slice(src: &[u8], start: usize) -> Vec<u8> {
         src[start * FP_FRAME_BYTES..(start + 125) * FP_FRAME_BYTES]
@@ -258,6 +296,16 @@ mod tests {
 
     fn cmp(a: &[u8], b: &[u8]) -> Option<Match> {
         compare(a, b, MIN_OVERLAP_FRAMES)
+    }
+
+    #[test]
+    fn calls_a_held_slate_still_and_moving_footage_not() {
+        assert!(is_still(&still(5)));
+        assert!(!is_still(&plain(5)));
+        assert!(!is_still(&noisy(5, 125)));
+        // Too short to tell.
+        assert!(!is_still(&still(5)[..30 * FP_FRAME_BYTES]));
+        assert!(!is_still(&[]));
     }
 
     #[test]

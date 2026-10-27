@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use super::*;
 use crate::catalog::tests::pool;
 use crate::feed_checks::tests::{chan, check, ms, prog, sql};
-use crate::fingerprint::synth::{blend, plain, slice};
+use crate::fingerprint::synth::{blend, plain, slice, still};
 
 /// What a faked upstream capture does.
 pub(crate) enum Up {
@@ -274,6 +274,107 @@ async fn catches_a_stream_carrying_the_west_feed_and_switches_to_east() {
     assert_eq!(carries(&c.outcome), ("showtimewest.us", Some(5866), false));
     assert_eq!(c.switch_to, Some(5864));
     assert_eq!(h.io.captured(), [5864, 5866]);
+}
+
+/// 2026-10-25 "US: Showtime Women": the guide listed East, the stream carried
+/// West, and no West stream had a listing (the provider files the West name
+/// under the East id). The unlisted West stream stands for the West twin.
+#[tokio::test]
+async fn catches_the_west_feed_when_no_west_stream_has_a_listing() {
+    let west = plain(4);
+    let mut f = feeds();
+    f.insert(22598, slice(&west, 140));
+    let h = harness(west, f).await;
+    chan(&h.pool, 22598, 7281, "US Showtime (West) (H)", None, None).await;
+    prog(
+        &h.pool,
+        "showtimewest.us",
+        "2026-01-01T00:00:00Z",
+        "2099-01-01T00:00:00Z",
+        "V for Vendetta",
+    )
+    .await;
+    let c = h.live().await;
+    assert_eq!(carries(&c.outcome), ("showtimewest.us", Some(22598), false));
+    assert_eq!(c.switch_to, Some(5864));
+    assert_eq!(h.io.captured(), [5864, 22598]);
+    let rec = check(&h.pool, SUBJECT).await.unwrap();
+    assert_eq!(
+        (rec.verdict.as_str(), rec.actual_epg_id.as_deref()),
+        ("mislabeled", Some("showtimewest.us"))
+    );
+    // The West stream has no listing to confirm.
+    assert_eq!(h.verdict(22598).await, None);
+}
+
+/// 2026-10-25 at 22:08Z the first-ranked East stream showed the provider's
+/// "Channel temporarily unavailable" card. A slate is no evidence either way:
+/// skip it, use the next East stream, and switch the viewer to the East
+/// stream seen to differ, never to the slate.
+#[tokio::test]
+async fn skips_slates_and_switches_to_the_east_stream_seen_to_differ() {
+    let west = plain(4);
+    let mut f = feeds();
+    f.insert(5864, still(9));
+    f.insert(400124927, still(9));
+    f.insert(22598, slice(&west, 140));
+    let h = harness(west, f).await;
+    chan(&h.pool, 400124927, 1490, "US: SHOWTIME WEST", None, None).await;
+    chan(&h.pool, 22598, 7281, "US Showtime (West) (H)", None, None).await;
+    prog(
+        &h.pool,
+        "showtimewest.us",
+        "2026-01-01T00:00:00Z",
+        "2099-01-01T00:00:00Z",
+        "V for Vendetta",
+    )
+    .await;
+    let c = h.live().await;
+    assert_eq!(carries(&c.outcome), ("showtimewest.us", Some(22598), false));
+    assert_eq!(c.switch_to, Some(22597));
+    assert_eq!(h.io.captured(), [5864, 22597, 400124927, 22598]);
+}
+
+/// Two slates of one template line up perfectly; that is no match.
+#[tokio::test]
+async fn never_matches_a_slate_against_a_slate() {
+    let mut f = feeds();
+    f.insert(5864, still(9));
+    let h = harness(still(9), f).await;
+    let c = h.live().await;
+    assert_eq!(reason(&c.outcome), "subject shows a still picture");
+    assert_eq!(c.switch_to, None);
+    assert_eq!(h.verdict(SUBJECT).await.as_deref(), Some("inconclusive"));
+}
+
+/// A day-old match is checked again on tune: the provider may have re-pointed
+/// the stream since.
+#[tokio::test]
+async fn re_checks_on_tune_once_a_match_is_a_day_old() {
+    let h = harness(plain(2), feeds()).await;
+    let old = FeedCheck::new(
+        SUBJECT,
+        "match",
+        Some("showtime.us"),
+        None,
+        Some(5864),
+        Some(0.98),
+    );
+    record_feed_check(&h.pool, &old, h.io.now_ms() - 23 * 3_600_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        carries(&h.live().await.outcome),
+        ("showtime.us", Some(5864), true)
+    );
+    assert_eq!(h.io.captured(), Vec::<i64>::new());
+
+    record_feed_check(&h.pool, &old, h.io.now_ms() - 25 * 3_600_000)
+        .await
+        .unwrap();
+    let c = h.live().await;
+    assert_eq!(carries(&c.outcome), ("showtime2.us", Some(22599), false));
+    assert_eq!(c.switch_to, Some(5864));
 }
 
 #[tokio::test]
