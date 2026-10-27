@@ -6,11 +6,14 @@
 //! capture ~15 s of one candidate stream through a spare upstream slot and
 //! compare it with the session's own segments, so a comparison costs ONE extra
 //! provider connection. Candidates (`feed_checks::feed_check_candidates`):
-//! another stream of the listed channel, then related channels, then a second
-//! listed-channel stream. The first clear match decides which guide id the
-//! stream carries. A stream carrying another channel is recorded 'mislabeled'
+//! another stream of the listed channel, then related channels (the other
+//! coast first), then a second listed-channel stream. The first clear match
+//! decides which guide id the stream carries. A still picture (a slate, a
+//! frozen feed) is no evidence: such a candidate is skipped, such a subject
+//! ends the check. A stream carrying another channel is recorded 'mislabeled'
 //! (the guide then lists that channel's programmes on it) and, when the viewer
-//! picked it for its listing, the caller redirects them to a stream of it.
+//! picked it for its listing, the caller redirects them to the listed-channel
+//! stream seen to differ from it.
 //!
 //! Standalone ([`check_feed_standalone`], the idle sweep): no viewer session,
 //! so subject and candidate are captured side by side (two slots).
@@ -41,7 +44,7 @@ use crate::feed_checks::{
     listed_epg_id, listings_differ, record_feed_check, same_schedule_epg_ids,
 };
 use crate::fingerprint::{
-    MIN_OVERLAP_FRAMES, Match, compare, live_capture_args, segment_capture_args,
+    MIN_OVERLAP_FRAMES, Match, compare, is_still, live_capture_args, segment_capture_args,
 };
 use crate::remux::{Capture, CaptureTask, Remux};
 use crate::streams::{DeadFeeds, UPSTREAM_USER_AGENT, encode_uri_component};
@@ -353,7 +356,8 @@ async fn footage<I: FeedIo>(
     }
 }
 
-/// Walk the candidates until one clearly matches the subject's picture.
+/// Walk the candidates until one clearly matches the subject's picture. Also
+/// returns the first sibling whose picture clearly differed from it.
 #[allow(clippy::too_many_arguments)]
 async fn compare_against<I: FeedIo>(
     io: &I,
@@ -364,12 +368,12 @@ async fn compare_against<I: FeedIo>(
     mode: &Mode<'_>,
     still_wanted: &Wanted<'_>,
     gap_ms: u64,
-) -> Result<Outcome, sqlx::Error> {
+) -> Result<(Outcome, Option<i64>), sqlx::Error> {
     let mut best: Option<f64> = None;
     // A related channel's match alone is symmetric: the subject may carry that
     // channel, or that stream may carry the subject's. Only a stream of the
     // subject's own listing that clearly differs breaks the tie.
-    let mut sibling_differed = false;
+    let mut differed: Option<i64> = None;
     let mut queue: VecDeque<Candidate> = candidates.iter().cloned().collect();
     let mut first = true;
     while let Some(candidate) = queue.pop_front() {
@@ -378,13 +382,22 @@ async fn compare_against<I: FeedIo>(
         }
         first = false;
         if !still_wanted().await {
-            return Ok(aborted("no longer wanted"));
+            return Ok((aborted("no longer wanted"), differed));
         }
         let captured_at = io.now_ms();
-        let (subj, cand) = match footage(io, subject, mode, &candidate).await {
+        let footage = match footage(io, subject, mode, &candidate).await {
+            Footage::Frames { subject, .. } if is_still(&subject) => {
+                Footage::SubjectFailed("subject shows a still picture")
+            }
+            Footage::Frames { candidate, .. } if is_still(&candidate) => {
+                Footage::Skip("candidate shows a still picture")
+            }
+            f => f,
+        };
+        let (subj, cand) = match footage {
             Footage::Frames { subject, candidate } => (subject, candidate),
-            Footage::Abort(r) => return Ok(aborted(r)),
-            Footage::SubjectFailed(r) => return Ok(unknown(r, best)),
+            Footage::Abort(r) => return Ok((aborted(r), differed)),
+            Footage::SubjectFailed(r) => return Ok((unknown(r, best), differed)),
             Footage::Skip(r) => {
                 tracing::info!(
                     subject,
@@ -427,29 +440,40 @@ async fn compare_against<I: FeedIo>(
         }
         match verdict {
             CompareVerdict::Same => {
-                if candidate.role == Role::Family && !sibling_differed {
-                    return Ok(unknown(
-                        "matches a related channel with no listed stream to compare",
-                        best,
+                if candidate.role == Role::Family && differed.is_none() {
+                    return Ok((
+                        unknown(
+                            "matches a related channel with no listed stream to compare",
+                            best,
+                        ),
+                        differed,
                     ));
                 }
                 if candidate.role == Role::Family
                     && !listings_differ(pool, intended, &candidate.epg_id, captured_at).await?
                 {
-                    return Ok(unknown(
-                        "matches a related channel listing the same programme (simulcast)",
-                        best,
+                    return Ok((
+                        unknown(
+                            "matches a related channel listing the same programme (simulcast)",
+                            best,
+                        ),
+                        differed,
                     ));
                 }
-                return Ok(Outcome::Carries {
+                let carries = Outcome::Carries {
                     epg_id: candidate.epg_id,
                     matched_stream_id: Some(candidate.stream_id),
                     score: m.map(|m| m.score),
                     cached: false,
-                });
+                };
+                return Ok((carries, differed));
             }
-            CompareVerdict::Unsure => return Ok(unknown("picture inconclusive", best)),
-            CompareVerdict::Different if candidate.role == Role::Sibling => sibling_differed = true,
+            CompareVerdict::Unsure => {
+                return Ok((unknown("picture inconclusive", best), differed));
+            }
+            CompareVerdict::Different if candidate.role == Role::Sibling => {
+                differed = differed.or(Some(candidate.stream_id));
+            }
             CompareVerdict::Different => {}
         }
     }
@@ -458,7 +482,7 @@ async fn compare_against<I: FeedIo>(
     } else {
         "no candidate matched"
     };
-    Ok(unknown(reason, best))
+    Ok((unknown(reason, best), differed))
 }
 
 #[derive(Clone, Debug)]
@@ -519,11 +543,14 @@ pub async fn check_live_session<I: FeedIo>(
         now_ms: io.now_ms(),
     };
     let list = feed_check_candidates(pool, subject, &intended, &opts).await?;
-    let switch_target = |o: &Outcome| match o {
-        Outcome::Carries { epg_id, .. } if *epg_id != intended => list
-            .iter()
-            .find(|c| c.role == Role::Sibling)
-            .map(|c| c.stream_id),
+    // The sibling whose picture was seen to differ from the subject's beats
+    // the first one listed, which may have been skipped as a slate.
+    let switch_target = |o: &Outcome, differed: Option<i64>| match o {
+        Outcome::Carries { epg_id, .. } if *epg_id != intended => differed.or_else(|| {
+            list.iter()
+                .find(|c| c.role == Role::Sibling)
+                .map(|c| c.stream_id)
+        }),
         _ => None,
     };
 
@@ -539,7 +566,7 @@ pub async fn check_live_session<I: FeedIo>(
             },
             None => unknown("recently inconclusive", prior.score),
         };
-        let switch_to = switch_target(&outcome);
+        let switch_to = switch_target(&outcome, None);
         return Ok(LiveCheck {
             outcome,
             intended_epg: Some(intended.clone()),
@@ -569,7 +596,7 @@ pub async fn check_live_session<I: FeedIo>(
 
     let wanted = sync_wanted(is_active);
     let mode = Mode::Session(r, is_active);
-    let outcome = compare_against(
+    let (outcome, differed) = compare_against(
         io,
         pool,
         subject,
@@ -581,7 +608,7 @@ pub async fn check_live_session<I: FeedIo>(
     )
     .await?;
     record(&outcome).await?;
-    let switch_to = switch_target(&outcome);
+    let switch_to = switch_target(&outcome, differed);
     tracing::info!(subject, tuned = r.tuned, listed, intended_epg = intended, outcome = ?outcome, switch_to, "feed check");
     Ok(LiveCheck {
         outcome,
@@ -614,7 +641,7 @@ pub async fn check_feed_standalone<I: FeedIo>(
         record_outcome(pool, stream_id, listed.as_deref(), &outcome, io.now_ms()).await?;
         return Ok(outcome);
     }
-    let outcome = compare_against(
+    let (outcome, _) = compare_against(
         io,
         pool,
         stream_id,

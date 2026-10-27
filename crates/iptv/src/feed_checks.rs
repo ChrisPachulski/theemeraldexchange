@@ -16,6 +16,7 @@ use regex::Regex;
 use sqlx::SqlitePool;
 
 use crate::catalog::{EFFECTIVE_EPG, LISTED_EPG};
+use crate::epg_resolve::normalize_channel_name;
 use crate::siblings::sibling_feed_key;
 
 /// The reason a check records when no other stream of its listing exists.
@@ -158,11 +159,12 @@ pub async fn record_feed_check(
 /// Fresh = still answers for the stream as listed now. A verdict about another
 /// listing says nothing about what the guide shows today (2026-10-15).
 ///
-/// How long a verdict stands: a match 7 days, a mislabel a day (so a provider
-/// fix stops overriding the guide soon after), an inconclusive 6 hours. A
-/// check that compared nothing (a capture failed, or the picture was dark)
-/// waits a day and an hour, so each retry lands an hour later in the overnight
-/// window: a channel off air at 10:00 every night still gets seen.
+/// How long a verdict stands: a match or a mislabel a day (the provider
+/// re-points streams within days: 200163572 matched East on 2026-10-22 and
+/// carried West on 2026-10-25, unchecked under a 7-day match), an inconclusive
+/// 6 hours. A check that compared nothing (a capture failed, or the picture
+/// was dark) waits a day and an hour, so each retry lands an hour later in the
+/// overnight window: a channel off air at 10:00 every night still gets seen.
 pub fn feed_check_is_fresh(c: &FeedCheck, listed: Option<&str>, now_ms: i64) -> bool {
     if c.listed_epg_id.as_deref() != listed {
         return false;
@@ -172,8 +174,7 @@ pub fn feed_check_is_fresh(c: &FeedCheck, listed: Option<&str>, now_ms: i64) -> 
         && c.reason.as_deref().is_some_and(|r| r != NO_SIBLING_REASON);
     let window = match c.verdict.as_str() {
         _ if compared_nothing => 25 * HOUR_MS,
-        "match" => 7 * 24 * HOUR_MS,
-        "mislabeled" => 24 * HOUR_MS,
+        "match" | "mislabeled" => 24 * HOUR_MS,
         "inconclusive" => 6 * HOUR_MS,
         _ => return false,
     };
@@ -554,6 +555,13 @@ pub struct CandidateOpts<'a> {
 /// name. Sharing a name-resolved id is not enough (2026-10-14: WTAE Pittsburgh
 /// "confirmed" against WPVI Philadelphia, both name-resolved to abc5.us). When
 /// that leaves fewer than two, streams of an id with the same schedule count.
+///
+/// A West stream of the subject's channel that resolves to no listing still
+/// stands for the intended id's West twin ("showtimewomen.us" ->
+/// "showtimewomenwest.us") when that id has a schedule: the provider files
+/// "Showtime Women (West) (H)" under the East id too, so the resolver drops
+/// the name as ambiguous (2026-10-25: "US: Showtime Women" carried the West
+/// feed and no West stream was there to say so).
 pub async fn feed_check_candidates(
     pool: &SqlitePool,
     subject: i64,
@@ -652,12 +660,7 @@ pub async fn feed_check_candidates(
         if !related_epg_ids(intended, epg) || aliases.contains(epg) {
             continue;
         }
-        let has: Option<i64> =
-            sqlx::query_scalar("SELECT 1 FROM epg_programs WHERE channel_id = ? LIMIT 1")
-                .bind(epg)
-                .fetch_optional(pool)
-                .await?;
-        if has.is_some() {
+        if has_programmes(pool, epg).await? {
             family_ids.push(epg.clone());
         }
     }
@@ -679,19 +682,75 @@ pub async fn feed_check_candidates(
         role: Role::Sibling,
     };
     out.extend(siblings.first().map(sibling));
-    for epg in family_ids.into_iter().take(o.max_family) {
+    let mut family = Vec::new();
+    if let Some(head) = intended
+        .strip_suffix(".us")
+        .filter(|_| !west_feed(intended))
+        && let twin = format!("{head}west.us")
+        && !family_ids.contains(&twin)
+        && has_programmes(pool, &twin).await?
+    {
+        let sql = format!(
+            "SELECT stream_id, num, name, epg_channel_id AS tvg, NULL AS epg FROM channels \
+             WHERE COALESCE({LISTED_EPG}, '') = '' AND (name LIKE '%west%' OR name LIKE '%pacific%')"
+        );
+        let unlisted: Vec<Row> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .fetch_all(pool)
+            .await?;
+        // Named as the West id reads ("US FX (West) (H)" -> "fxwest"), so a
+        // short or differently named subject ("US: FX", "US: Discovery ID")
+        // still finds them.
+        let want = normalize_channel_name(Some(&format!("{head}west")));
+        let mut west: Vec<&Row> = unlisted
+            .iter()
+            .filter(|r| {
+                r.stream_id != subject
+                    && !o.exclude.contains(&r.stream_id)
+                    && !(o.is_dead)(r.stream_id)
+                    && want.is_some()
+                    && normalize_channel_name(Some(&r.name)) == want
+            })
+            .collect();
+        west.sort_by_key(|r| rank(r));
+        // A second from another provider source, in case the first is down.
+        let first = west.first().map(|r| source_group(r.stream_id));
+        let second = west
+            .iter()
+            .find(|r| Some(source_group(r.stream_id)) != first);
+        for r in west.first().into_iter().chain(second) {
+            family.push(Candidate {
+                stream_id: r.stream_id,
+                epg_id: twin.clone(),
+                role: Role::Family,
+            });
+        }
+    }
+    for epg in family_ids
+        .into_iter()
+        .take(o.max_family.saturating_sub(family.len()))
+    {
         let best = by_epg[&epg]
             .iter()
             .min_by_key(|r| rank(r))
             .expect("an id has a stream");
-        out.push(Candidate {
+        family.push(Candidate {
             stream_id: best.stream_id,
             epg_id: epg,
             role: Role::Family,
         });
     }
+    out.extend(family.into_iter().take(o.max_family));
     out.extend(siblings.get(1).map(sibling));
     Ok(out)
+}
+
+async fn has_programmes(pool: &SqlitePool, epg: &str) -> Result<bool, sqlx::Error> {
+    let has: Option<i64> =
+        sqlx::query_scalar("SELECT 1 FROM epg_programs WHERE channel_id = ? LIMIT 1")
+            .bind(epg)
+            .fetch_optional(pool)
+            .await?;
+    Ok(has.is_some())
 }
 
 #[cfg(test)]
