@@ -144,205 +144,207 @@ export function InvitesPanel() {
         <span className="user-menu__eyebrow">Invites &amp; members</span>
         <span className="user-menu__disclosure-status">{summary}</span>
       </summary>
+      <div className="user-menu__disclosure-body">
 
-      <p className="invites-panel__hint">
-        Generate an invite link, then send it to the new household member. It
-        fills their one-time code automatically; after that their sign-in
-        is remembered. Invites are single-use and expire.
-      </p>
+        <p className="invites-panel__hint">
+          Send a new household member an invite link. Each link works once and
+          expires; after that, their sign-in is remembered.
+        </p>
 
-      {/* Create */}
-      <div className="invites-panel__create">
-        <div className="invites-panel__create-row">
+        {/* Create */}
+        <div className="invites-panel__create">
           <input
             className="invites-panel__input"
             type="text"
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             placeholder="Label (e.g. Mom's iPad)"
+            aria-label="Invite label"
             maxLength={120}
           />
-          <label className="invites-panel__expiry">
-            Expires
-            <select
-              className="invites-panel__select"
-              value={expiresInDays}
-              onChange={(e) => setExpiresInDays(Number(e.target.value))}
-            >
-              <option value={1}>1 day</option>
-              <option value={7}>7 days</option>
-              <option value={14}>14 days</option>
-              <option value={30}>30 days</option>
-              <option value={90}>90 days</option>
-            </select>
-          </label>
-        </div>
-        <button
-          type="button"
-          className="invites-panel__btn invites-panel__btn--primary"
-          onClick={() => create.mutate()}
-          disabled={create.isPending}
-        >
-          {create.isPending ? 'Creating…' : 'Create invite'}
-        </button>
-      </div>
-
-      {/* One-time code reveal */}
-      {justCreated && (
-        <div className="invites-panel__reveal" role="status">
-          <p className="invites-panel__reveal-title">
-            Copy this invite now; it won&apos;t be shown again.
-          </p>
-          <div className="invites-panel__reveal-row">
-            <code className="invites-panel__code">{justCreated.code}</code>
+          <div className="invites-panel__create-row">
+            <label className="invites-panel__expiry">
+              Expires
+              <select
+                className="invites-panel__select"
+                value={expiresInDays}
+                onChange={(e) => setExpiresInDays(Number(e.target.value))}
+              >
+                <option value={1}>1 day</option>
+                <option value={7}>7 days</option>
+                <option value={14}>14 days</option>
+                <option value={30}>30 days</option>
+                <option value={90}>90 days</option>
+              </select>
+            </label>
             <button
               type="button"
-              className="invites-panel__btn"
-              onClick={() => void copyInviteLink(justCreated.code)}
+              className="invites-panel__btn invites-panel__btn--primary"
+              onClick={() => create.mutate()}
+              disabled={create.isPending}
             >
-              {copied ? 'Link copied' : 'Copy invite link'}
+              {create.isPending ? 'Creating…' : 'Create invite'}
             </button>
           </div>
-          <button
-            type="button"
-            className="invites-panel__btn invites-panel__btn--ghost"
-            onClick={() => {
-              setJustCreated(null)
-              setCopied(false)
-            }}
-          >
-            Done
-          </button>
         </div>
-      )}
 
-      {/* Outstanding invites */}
-      <section className="invites-panel__section" aria-label="Outstanding invites">
-        <p className="invites-panel__section-title">Outstanding invites</p>
-        <label className="invites-panel__history-toggle">
-          <input
-            type="checkbox"
-            checked={showHistory}
-            onChange={(e) => setShowHistory(e.target.checked)}
-          />
-          Show used &amp; expired
-        </label>
-        {invitesQ.isLoading && <p className="invites-panel__loading">Loading…</p>}
-        {!invitesQ.isLoading && invites.length === 0 && (
-          <p className="invites-panel__empty">
-            {showHistory ? 'No invites yet.' : 'No outstanding invites.'}
-          </p>
+        {/* One-time code reveal */}
+        {justCreated && (
+          <div className="invites-panel__reveal" role="status">
+            <p className="invites-panel__reveal-title">
+              Copy this invite now; it won&apos;t be shown again.
+            </p>
+            <div className="invites-panel__reveal-row">
+              <code className="invites-panel__code">{justCreated.code}</code>
+              <button
+                type="button"
+                className="invites-panel__btn"
+                onClick={() => void copyInviteLink(justCreated.code)}
+              >
+                {copied ? 'Link copied' : 'Copy invite link'}
+              </button>
+            </div>
+            <button
+              type="button"
+              className="invites-panel__btn invites-panel__btn--ghost"
+              onClick={() => {
+                setJustCreated(null)
+                setCopied(false)
+              }}
+            >
+              Done
+            </button>
+          </div>
         )}
-        {invites.length > 0 && (
-          <ul className="invites-panel__list">
-            {invites.map((inv) => (
-              <li key={inv.code_hash_prefix} className="invites-panel__item">
-                <div className="invites-panel__item-main">
-                  <span className="invites-panel__item-name">
-                    {inv.label || <code>{inv.code_hash_prefix}…</code>}
-                  </span>
-                  <span className="invites-panel__item-meta">
-                    <span className={`invites-panel__status invites-panel__status--${inv.status}`}>
-                      {inv.status}
+
+        {/* Outstanding invites */}
+        <section className="invites-panel__section" aria-label="Outstanding invites">
+          <div className="invites-panel__section-head">
+            <p className="invites-panel__section-title">Outstanding invites</p>
+            <label className="invites-panel__history-toggle">
+              <input
+                type="checkbox"
+                checked={showHistory}
+                onChange={(e) => setShowHistory(e.target.checked)}
+              />
+              Show used &amp; expired
+            </label>
+          </div>
+          {invitesQ.isLoading && <p className="invites-panel__loading">Loading…</p>}
+          {!invitesQ.isLoading && invites.length === 0 && (
+            <p className="invites-panel__empty">
+              {showHistory ? 'No invites yet.' : 'No outstanding invites.'}
+            </p>
+          )}
+          {invites.length > 0 && (
+            <ul className="invites-panel__list">
+              {invites.map((inv) => (
+                <li key={inv.code_hash_prefix} className="invites-panel__item">
+                  <div className="invites-panel__item-main">
+                    <span className="invites-panel__item-name">
+                      {inv.label || <code>{inv.code_hash_prefix}…</code>}
+                      <span className={`invites-panel__status invites-panel__status--${inv.status}`}>
+                        {inv.status}
+                      </span>
                     </span>
-                    {' · '}
-                    {inv.used_count}/{inv.max_uses} used · expires {fmtDate(inv.expires_at)}
-                  </span>
-                </div>
-                {inv.status === 'active' && (
-                  <button
-                    type="button"
-                    className="invites-panel__btn invites-panel__btn--danger"
-                    onClick={() => revokeInv.mutate(inv.code_hash_prefix)}
-                    disabled={revokeInv.isPending}
-                  >
-                    Revoke
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {/* Members */}
-      <section className="invites-panel__section" aria-label="Members">
-        <p className="invites-panel__section-title">Members</p>
-        {/* Always shown: Restrictions sits only on non-owner rows, so an
-            owner-only household would otherwise never learn it exists. */}
-        <p className="invites-panel__hint">
-          Parental controls: choose Restrictions on a member to set a rating cap
-          (G to R), limit sections, or mark a kid profile. Owners are never
-          restricted.
-        </p>
-        {membersQ.isLoading && <p className="invites-panel__loading">Loading…</p>}
-        {!membersQ.isLoading && members.length === 0 && (
-          <p className="invites-panel__empty">No members yet.</p>
-        )}
-        {members.length > 0 && (
-          <ul className="invites-panel__list">
-            {members.map((m) => (
-              <li key={m.sub} className="invites-panel__item">
-                <div className="invites-panel__item-main">
-                  <span className="invites-panel__item-name">
-                    {m.display_name || m.sub}
-                    {m.is_admin && <span className="invites-panel__badge">owner</span>}
-                  </span>
-                  <span className="invites-panel__item-meta">
-                    {providerLabel(m.auth_mode)}
-                    {' · joined '}
-                    {fmtDate(m.joined_at)}
-                    {m.revoked_at && ' · revoked'}
-                  </span>
-                </div>
-                {!m.revoked_at && !m.is_admin && (
-                  <div className="invites-panel__item-actions">
-                    <button
-                      type="button"
-                      className="invites-panel__btn"
-                      aria-expanded={policyTarget?.sub === m.sub}
-                      onClick={() => setPolicyTarget(policyTarget?.sub === m.sub ? null : m)}
-                    >
-                      Restrictions
-                    </button>
+                    <span className="invites-panel__item-meta">
+                      {inv.used_count}/{inv.max_uses} used · expires {fmtDate(inv.expires_at)}
+                    </span>
+                  </div>
+                  {inv.status === 'active' && (
                     <button
                       type="button"
                       className="invites-panel__btn invites-panel__btn--danger"
-                      onClick={() =>
-                        confirm({
-                          title: 'Revoke member?',
-                          body: `${m.display_name || m.sub} will lose access on every sign-in method.`,
-                          confirmLabel: 'Revoke',
-                          cancelLabel: 'Keep',
-                          onConfirm: async () => {
-                            await revokeMem.mutateAsync(m.sub)
-                          },
-                        })
-                      }
-                      disabled={revokeMem.isPending}
+                      onClick={() => revokeInv.mutate(inv.code_hash_prefix)}
+                      disabled={revokeInv.isPending}
                     >
                       Revoke
                     </button>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        {policyTarget && (
-          <MemberRestrictions
-            key={policyTarget.sub}
-            member={policyTarget}
-            onClose={() => setPolicyTarget(null)}
-          />
-        )}
-      </section>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
 
-      {error && (
-        <p className="invites-panel__error" role="alert">
-          {error}
-        </p>
-      )}
+        {/* Members */}
+        <section className="invites-panel__section" aria-label="Members">
+          <p className="invites-panel__section-title">Members</p>
+          {/* Always shown: Restrictions sits only on non-owner rows, so an
+              owner-only household would otherwise never learn it exists. */}
+          <p className="invites-panel__hint">
+            Restrictions sets a rating cap, limits sections, or marks a kid
+            profile. Owners are never restricted.
+          </p>
+          {membersQ.isLoading && <p className="invites-panel__loading">Loading…</p>}
+          {!membersQ.isLoading && members.length === 0 && (
+            <p className="invites-panel__empty">No members yet.</p>
+          )}
+          {members.length > 0 && (
+            <ul className="invites-panel__list">
+              {members.map((m) => (
+                <li key={m.sub} className="invites-panel__item">
+                  <div className="invites-panel__item-main">
+                    <span className="invites-panel__item-name">
+                      {m.display_name || m.sub}
+                      {m.is_admin && <span className="invites-panel__badge">owner</span>}
+                    </span>
+                    <span className="invites-panel__item-meta">
+                      {providerLabel(m.auth_mode)}
+                      {' · joined '}
+                      {fmtDate(m.joined_at)}
+                      {m.revoked_at && ' · revoked'}
+                    </span>
+                  </div>
+                  {!m.revoked_at && !m.is_admin && (
+                    <div className="invites-panel__item-actions">
+                      <button
+                        type="button"
+                        className="invites-panel__btn"
+                        aria-expanded={policyTarget?.sub === m.sub}
+                        onClick={() => setPolicyTarget(policyTarget?.sub === m.sub ? null : m)}
+                      >
+                        Restrictions
+                      </button>
+                      <button
+                        type="button"
+                        className="invites-panel__btn invites-panel__btn--danger"
+                        onClick={() =>
+                          confirm({
+                            title: 'Revoke member?',
+                            body: `${m.display_name || m.sub} will lose access on every sign-in method.`,
+                            confirmLabel: 'Revoke',
+                            cancelLabel: 'Keep',
+                            onConfirm: async () => {
+                              await revokeMem.mutateAsync(m.sub)
+                            },
+                          })
+                        }
+                        disabled={revokeMem.isPending}
+                      >
+                        Revoke
+                      </button>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {policyTarget && (
+            <MemberRestrictions
+              key={policyTarget.sub}
+              member={policyTarget}
+              onClose={() => setPolicyTarget(null)}
+            />
+          )}
+        </section>
+
+        {error && (
+          <p className="invites-panel__error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
     </details>
   )
 }

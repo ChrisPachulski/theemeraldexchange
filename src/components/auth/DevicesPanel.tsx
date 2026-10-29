@@ -137,136 +137,138 @@ export function DevicesPanel() {
         <span className="user-menu__eyebrow">Paired devices</span>
         <span className="user-menu__disclosure-status">{summary}</span>
       </summary>
-      <p className="devices-panel__hint">
-        Apple TV, iPhone, and iPad apps you've paired via the PIN flow. Revoke a
-        device to force it back to the pairing screen on its next request.
-      </p>
-
-      {q.isLoading && <p className="devices-panel__loading">Loading…</p>}
-
-      {!q.isLoading && devices.length === 0 && (
-        <p className="devices-panel__empty">
-          Nothing paired yet. Open the EmeraldTV / EmeraldiOS app and visit{' '}
-          <code>plex.tv/link</code> with the code it displays to add this server.
+      <div className="user-menu__disclosure-body">
+        <p className="devices-panel__hint">
+          Apple TV, iPhone, and iPad apps you've paired via the PIN flow. Revoke a
+          device to force it back to the pairing screen on its next request.
         </p>
-      )}
 
-      {devices.length > 0 && (
-        <>
-          <ul className="devices-panel__list">
-            {devices.map((d) => (
-              <li key={d.jti} className="devices-panel__item">
-                <div className="devices-panel__item-main">
-                  <div className="devices-panel__item-header">
-                    <span className="devices-panel__platform">{platformLabel(d.platform)}</span>
+        {q.isLoading && <p className="devices-panel__loading">Loading…</p>}
+
+        {!q.isLoading && devices.length === 0 && (
+          <p className="devices-panel__empty">
+            Nothing paired yet. Open the EmeraldTV / EmeraldiOS app and visit{' '}
+            <code>plex.tv/link</code> with the code it displays to add this server.
+          </p>
+        )}
+
+        {devices.length > 0 && (
+          <>
+            <ul className="devices-panel__list">
+              {devices.map((d) => (
+                <li key={d.jti} className="devices-panel__item">
+                  <div className="devices-panel__item-main">
+                    <div className="devices-panel__item-header">
+                      <span className="devices-panel__platform">{platformLabel(d.platform)}</span>
+                      {editing === d.jti ? (
+                        <input
+                          className="devices-panel__rename-input"
+                          type="text"
+                          value={draftName}
+                          onChange={(e) => setDraftName(e.target.value)}
+                          autoFocus
+                          maxLength={128}
+                        />
+                      ) : (
+                        <span className="devices-panel__name">{d.device_name}</span>
+                      )}
+                    </div>
+                    <div className="devices-panel__item-meta">
+                      Last seen {fmtRelative(d.last_seen_at)}
+                      {d.last_seen_version ? ` · v${d.last_seen_version}` : ''}
+                    </div>
+                  </div>
+                  <div className="devices-panel__actions">
                     {editing === d.jti ? (
-                      <input
-                        className="devices-panel__rename-input"
-                        type="text"
-                        value={draftName}
-                        onChange={(e) => setDraftName(e.target.value)}
-                        autoFocus
-                        maxLength={128}
-                      />
+                      <>
+                        <button
+                          type="button"
+                          className="devices-panel__btn"
+                          onClick={() => rename.mutate({ jti: d.jti, name: draftName.trim() })}
+                          disabled={draftName.trim().length === 0 || rename.isPending}
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="devices-panel__btn devices-panel__btn--ghost"
+                          onClick={() => {
+                            setEditing(null)
+                            setDraftName('')
+                            setError(null)
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </>
                     ) : (
-                      <span className="devices-panel__name">{d.device_name}</span>
+                      <>
+                        <button
+                          type="button"
+                          className="devices-panel__btn devices-panel__btn--ghost"
+                          onClick={() => {
+                            setEditing(d.jti)
+                            setDraftName(d.device_name)
+                            setError(null)
+                          }}
+                        >
+                          Rename
+                        </button>
+                        <button
+                          type="button"
+                          className="devices-panel__btn devices-panel__btn--danger"
+                          onClick={() =>
+                            confirm({
+                              title: 'Revoke this device?',
+                              body: `“${d.device_name}” will be signed out.`,
+                              confirmLabel: 'Revoke',
+                              cancelLabel: 'Keep',
+                              onConfirm: async () => {
+                                await revoke.mutateAsync(d.jti)
+                              },
+                            })
+                          }
+                          disabled={revoke.isPending}
+                        >
+                          Revoke
+                        </button>
+                      </>
                     )}
                   </div>
-                  <div className="devices-panel__item-meta">
-                    Last seen {fmtRelative(d.last_seen_at)}
-                    {d.last_seen_version ? ` · v${d.last_seen_version}` : ''}
-                  </div>
-                </div>
-                <div className="devices-panel__actions">
-                  {editing === d.jti ? (
-                    <>
-                      <button
-                        type="button"
-                        className="devices-panel__btn"
-                        onClick={() => rename.mutate({ jti: d.jti, name: draftName.trim() })}
-                        disabled={draftName.trim().length === 0 || rename.isPending}
-                      >
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        className="devices-panel__btn devices-panel__btn--ghost"
-                        onClick={() => {
-                          setEditing(null)
-                          setDraftName('')
-                          setError(null)
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="devices-panel__btn devices-panel__btn--ghost"
-                        onClick={() => {
-                          setEditing(d.jti)
-                          setDraftName(d.device_name)
-                          setError(null)
-                        }}
-                      >
-                        Rename
-                      </button>
-                      <button
-                        type="button"
-                        className="devices-panel__btn devices-panel__btn--danger"
-                        onClick={() =>
-                          confirm({
-                            title: 'Revoke this device?',
-                            body: `“${d.device_name}” will be signed out.`,
-                            confirmLabel: 'Revoke',
-                            cancelLabel: 'Keep',
-                            onConfirm: async () => {
-                              await revoke.mutateAsync(d.jti)
-                            },
-                          })
-                        }
-                        disabled={revoke.isPending}
-                      >
-                        Revoke
-                      </button>
-                    </>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
+                </li>
+              ))}
+            </ul>
 
-          <div className="devices-panel__footer">
-            <button
-              type="button"
-              className="devices-panel__btn devices-panel__btn--danger"
-              onClick={() =>
-                confirm({
-                  title: 'Sign out everywhere?',
-                  // Unlike the Apple app's copy, no "including this one": the
-                  // browser's cookie session is not a device token, so it stays.
-                  body: 'Every paired device will need to pair again.',
-                  confirmLabel: 'Sign out all',
-                  onConfirm: async () => {
-                    await logout.mutateAsync()
-                  },
-                })
-              }
-              disabled={logout.isPending}
-            >
-              Sign out everywhere
-            </button>
-          </div>
-        </>
-      )}
+            <div className="devices-panel__footer">
+              <button
+                type="button"
+                className="devices-panel__btn devices-panel__btn--danger"
+                onClick={() =>
+                  confirm({
+                    title: 'Sign out everywhere?',
+                    // Unlike the Apple app's copy, no "including this one": the
+                    // browser's cookie session is not a device token, so it stays.
+                    body: 'Every paired device will need to pair again.',
+                    confirmLabel: 'Sign out all',
+                    onConfirm: async () => {
+                      await logout.mutateAsync()
+                    },
+                  })
+                }
+                disabled={logout.isPending}
+              >
+                Sign out everywhere
+              </button>
+            </div>
+          </>
+        )}
 
-      {error && (
-        <p className="devices-panel__error" role="alert">
-          {error}
-        </p>
-      )}
+        {error && (
+          <p className="devices-panel__error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
     </details>
   )
 }

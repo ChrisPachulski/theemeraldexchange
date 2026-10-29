@@ -6,7 +6,9 @@
   position: fixed;
   right: var(--pod-inset, 16px);
   bottom: var(--pod-inset, 16px);
-  z-index: var(--z-nav, 50);
+  /* One under the nav layer: the open user menu (inside the nav) must
+     cover this pill, not sit beneath it. */
+  z-index: calc(var(--z-nav, 200) - 1);
   display: inline-flex;
   align-items: center;
   gap: var(--s-2);

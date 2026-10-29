@@ -22,9 +22,10 @@ import './UserMenu.css'
 //              (hidden when viewing-as-user). Links use the LAN hostname
 //              only — no IP — so the public bundle leaks nothing about
 //              the home network.
-//   4. Discord notifications: admin-only webhook config that drives
-//              Sonarr + Radarr's Discord notification connections.
-//   5. Sign out, and Delete account when the server offers self-deletion
+//   4. Cards:  collapsible settings — admin-only Discord webhook config and
+//              invites, then everyone's AI key, devices, preferences, playback
+//   5. Actions: link a device, sign out, and Delete account when the server
+//              offers self-deletion
 
 const APP_LINKS = [
   { name: 'Sonarr', href: 'https://sonarr.theemeraldexchange.com' },
@@ -182,76 +183,76 @@ export function UserMenu() {
                   ))}
                 </ul>
               </section>
-
-              <hr className="user-menu__divider" />
-              <DiscordNotifications onClose={() => setOpen(false)} />
-
-              <hr className="user-menu__divider" />
-              <InvitesPanel />
             </>
           )}
 
           <hr className="user-menu__divider" />
-          <ApiKeySettings />
+          <div className="user-menu__cards">
+            {isAdmin && (
+              <>
+                <DiscordNotifications onClose={() => setOpen(false)} />
+                <InvitesPanel />
+              </>
+            )}
+            <ApiKeySettings />
+            <DevicesPanel />
+            <PreferencesPanel />
+            <PlaybackSettings />
+          </div>
 
           <hr className="user-menu__divider" />
-          <DevicesPanel />
-
-          <hr className="user-menu__divider" />
-          <PreferencesPanel />
-          <PlaybackSettings />
-
-          <hr className="user-menu__divider" />
-          <button
-            type="button"
-            className="user-menu__signout"
-            onClick={() => {
-              setOpen(false)
-              setLinking(true)
-            }}
-          >
-            Link a TV or phone
-          </button>
-          <button
-            type="button"
-            className="user-menu__signout"
-            onClick={() => {
-              void signOut()
-                .then(() => setOpen(false))
-                .catch(() => {})
-            }}
-          >
-            Sign out
-          </button>
-          {limits?.accountDeletionEnabled && (
+          <div className="user-menu__actions">
             <button
               type="button"
-              className="user-menu__signout user-menu__signout--danger"
-              onClick={() =>
-                confirm({
-                  title: 'Delete your account?',
-                  body:
-                    'This deletes your account on this server, signs out every device paired to it, ' +
-                    'and clears everything Emerald stored in this browser. This cannot be undone. ' +
-                    'Rejoining needs a new invite from the person who runs the server.',
-                  confirmLabel: 'Delete account',
-                  cancelLabel: 'Keep account',
-                  onConfirm: async () => {
-                    await deleteOwnAccount()
-                    clearLocalData()
-                    // The account is gone either way; signOut clears the local
-                    // session even when its logout call fails.
-                    await signOut().catch(() => {})
-                  },
-                })
-              }
+              className="user-menu__signout"
+              onClick={() => {
+                setOpen(false)
+                setLinking(true)
+              }}
             >
-              Delete account
+              Link a TV or phone
             </button>
-          )}
-          {signOutError && (
-            <p className="user-menu__signout-error" role="alert">{signOutError}</p>
-          )}
+            <button
+              type="button"
+              className="user-menu__signout"
+              onClick={() => {
+                void signOut()
+                  .then(() => setOpen(false))
+                  .catch(() => {})
+              }}
+            >
+              Sign out
+            </button>
+            {limits?.accountDeletionEnabled && (
+              <button
+                type="button"
+                className="user-menu__signout user-menu__signout--danger"
+                onClick={() =>
+                  confirm({
+                    title: 'Delete your account?',
+                    body:
+                      'This deletes your account on this server, signs out every device paired to it, ' +
+                      'and clears everything Emerald stored in this browser. This cannot be undone. ' +
+                      'Rejoining needs a new invite from the person who runs the server.',
+                    confirmLabel: 'Delete account',
+                    cancelLabel: 'Keep account',
+                    onConfirm: async () => {
+                      await deleteOwnAccount()
+                      clearLocalData()
+                      // The account is gone either way; signOut clears the local
+                      // session even when its logout call fails.
+                      await signOut().catch(() => {})
+                    },
+                  })
+                }
+              >
+                Delete account
+              </button>
+            )}
+            {signOutError && (
+              <p className="user-menu__signout-error" role="alert">{signOutError}</p>
+            )}
+          </div>
         </div>
       )}
       {linking && <LinkDeviceModal initialCode="" onClose={() => setLinking(false)} />}

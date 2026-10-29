@@ -105,121 +105,123 @@ export function ApiKeySettings() {
         <span className="user-menu__eyebrow">Your AI key</span>
         <span className="user-menu__disclosure-status">{summaryStatus}</span>
       </summary>
-      <p className="api-key-settings__hint">
-        Personalized picks call the Anthropic API on each refresh. You bring
-        your own key so you only pay for what you use. The key is encrypted
-        and stored with your account on this server; it is never shown again
-        after you save it.
-      </p>
+      <div className="user-menu__disclosure-body">
+        <p className="api-key-settings__hint">
+          Personalized picks call the Anthropic API on each refresh. You bring
+          your own key so you only pay for what you use. The key is encrypted
+          and stored with your account on this server; it is never shown again
+          after you save it.
+        </p>
 
-      {hasKey && (
-        <div className="api-key-settings__live">
-          <div className="api-key-settings__current">
-            {/* Masked fingerprint only (last 4 chars). The key is fully
-                opaque from this UI once saved; the "lost key" path is
-                the Anthropic console, not a reveal button. */}
-            <span className="api-key-settings__masked" aria-label="Key saved to your account">
-              <span aria-hidden="true">••••••••••••</span>
-              <span className="api-key-settings__masked-tail">{fingerprint ?? ''}</span>
-              <span className="api-key-settings__masked-tag">saved to your account</span>
-            </span>
-            {!replacing && (
+        {hasKey && (
+          <div className="api-key-settings__live">
+            <div className="api-key-settings__current">
+              {/* Masked fingerprint only (last 4 chars). The key is fully
+                  opaque from this UI once saved; the "lost key" path is
+                  the Anthropic console, not a reveal button. */}
+              <span className="api-key-settings__masked" aria-label="Key saved to your account">
+                <span aria-hidden="true">••••••••••••</span>
+                <span className="api-key-settings__masked-tail">{fingerprint ?? ''}</span>
+                <span className="api-key-settings__masked-tag">saved to your account</span>
+              </span>
+              {!replacing && (
+                <button
+                  type="button"
+                  className="api-key-settings__small-btn"
+                  onClick={() => setReplacing(true)}
+                  disabled={busy}
+                >
+                  Replace
+                </button>
+              )}
+              <button
+                type="button"
+                className="api-key-settings__small-btn api-key-settings__small-btn--danger"
+                onClick={onClear}
+                disabled={busy}
+              >
+                Clear
+              </button>
+            </div>
+
+            <dl className="api-key-settings__usage">
+              <div>
+                <dt>Calls (30d)</dt>
+                <dd>{usage.data?.calls ?? 0}</dd>
+              </div>
+              <div>
+                <dt>Errors</dt>
+                <dd>{usage.data?.errors ?? 0}</dd>
+              </div>
+              <div>
+                <dt>Cost (30d)</dt>
+                <dd>{fmtCost(usage.data?.costCents ?? 0)}</dd>
+              </div>
+            </dl>
+          </div>
+        )}
+
+        {showForm && (
+          <div className="api-key-settings__form">
+            <label className="api-key-settings__label" htmlFor="api-key-input">
+              Paste your <code>sk-ant-…</code> key
+            </label>
+            <div className="api-key-settings__row">
+              <input
+                id="api-key-input"
+                type={typeReveal ? 'text' : 'password'}
+                className="api-key-settings__input"
+                value={draft}
+                onChange={(e) => {
+                  setDraft(e.target.value)
+                  if (error) setError(null)
+                }}
+                placeholder="sk-ant-…"
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                // Hint to password managers + Safari that this is a
+                // credential field even though we're using type=text
+                // when revealed.
+                data-1p-ignore="false"
+              />
+              {/* Reveal is only for the typing flow — verify your paste
+                  before you hit Save. Disappears the moment the key is
+                  saved (see the masked block above). */}
               <button
                 type="button"
                 className="api-key-settings__small-btn"
-                onClick={() => setReplacing(true)}
-                disabled={busy}
+                onClick={() => setTypeReveal((v) => !v)}
+                aria-pressed={typeReveal}
               >
-                Replace
+                {typeReveal ? 'Hide' : 'Show'}
               </button>
-            )}
-            <button
-              type="button"
-              className="api-key-settings__small-btn api-key-settings__small-btn--danger"
-              onClick={onClear}
-              disabled={busy}
-            >
-              Clear
-            </button>
-          </div>
-
-          <dl className="api-key-settings__usage">
-            <div>
-              <dt>Calls (30d)</dt>
-              <dd>{usage.data?.calls ?? 0}</dd>
-            </div>
-            <div>
-              <dt>Errors</dt>
-              <dd>{usage.data?.errors ?? 0}</dd>
-            </div>
-            <div>
-              <dt>Cost (30d)</dt>
-              <dd>{fmtCost(usage.data?.costCents ?? 0)}</dd>
-            </div>
-          </dl>
-        </div>
-      )}
-
-      {showForm && (
-        <div className="api-key-settings__form">
-          <label className="api-key-settings__label" htmlFor="api-key-input">
-            Paste your <code>sk-ant-…</code> key
-          </label>
-          <div className="api-key-settings__row">
-            <input
-              id="api-key-input"
-              type={typeReveal ? 'text' : 'password'}
-              className="api-key-settings__input"
-              value={draft}
-              onChange={(e) => {
-                setDraft(e.target.value)
-                if (error) setError(null)
-              }}
-              placeholder="sk-ant-…"
-              autoComplete="off"
-              autoCorrect="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              // Hint to password managers + Safari that this is a
-              // credential field even though we're using type=text
-              // when revealed.
-              data-1p-ignore="false"
-            />
-            {/* Reveal is only for the typing flow — verify your paste
-                before you hit Save. Disappears the moment the key is
-                saved (see the masked block above). */}
-            <button
-              type="button"
-              className="api-key-settings__small-btn"
-              onClick={() => setTypeReveal((v) => !v)}
-              aria-pressed={typeReveal}
-            >
-              {typeReveal ? 'Hide' : 'Show'}
-            </button>
-            <button
-              type="button"
-              className="api-key-settings__save"
-              onClick={onSave}
-              disabled={busy || draft.trim().length === 0}
-            >
-              {hasKey ? 'Replace' : 'Save'}
-            </button>
-          </div>
-          {error && <p className="api-key-settings__error">{error}</p>}
-          {!hasKey && (
-            <p className="api-key-settings__cta">
-              Need one?{' '}
-              <a
-                href="https://console.anthropic.com/settings/keys"
-                target="_blank"
-                rel="noreferrer"
+              <button
+                type="button"
+                className="api-key-settings__save"
+                onClick={onSave}
+                disabled={busy || draft.trim().length === 0}
               >
-                Create a key -&gt;
-              </a>
-            </p>
-          )}
-        </div>
-      )}
+                {hasKey ? 'Replace' : 'Save'}
+              </button>
+            </div>
+            {error && <p className="api-key-settings__error">{error}</p>}
+            {!hasKey && (
+              <p className="api-key-settings__cta">
+                Need one?{' '}
+                <a
+                  href="https://console.anthropic.com/settings/keys"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Create a key -&gt;
+                </a>
+              </p>
+            )}
+          </div>
+        )}
+      </div>
     </details>
   )
 }

@@ -133,72 +133,74 @@ export function DiscordNotifications({ onClose }: Props) {
         <span className="user-menu__eyebrow">Discord notifications</span>
         <span className="user-menu__disclosure-status">{summaryStatus}</span>
       </summary>
-      <p className="user-menu__discord-status">
-        {status === null
-          ? 'Checking…'
-          : configured
-            ? 'Configured · firing on grab / download / failure'
-            : 'Not configured'}
-      </p>
-      {!configured && (
-        <>
-          <input
-            type="url"
-            className="user-menu__discord-input"
-            placeholder="https://discord.com/api/webhooks/..."
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            disabled={busy !== null}
-            spellCheck={false}
-            autoComplete="off"
-          />
-          <button
-            type="button"
-            className="user-menu__discord-action"
-            onClick={save}
-            disabled={busy !== null || url.trim().length === 0}
-          >
-            {busy === 'save' ? 'Saving…' : 'Save webhook'}
-          </button>
-        </>
-      )}
-      {configured && (
-        <div className="user-menu__discord-actions">
-          <button
-            type="button"
-            className="user-menu__discord-action"
-            onClick={test}
-            disabled={busy !== null}
-          >
-            {busy === 'test' ? 'Sending…' : 'Send test ping'}
-          </button>
-          <button
-            type="button"
-            className="user-menu__discord-action user-menu__discord-action--danger"
-            onClick={() => {
-              if (window.confirm('Remove Discord notifications from Sonarr + Radarr?')) {
-                void remove().then((ok) => {
-                  // Only close on success. On failure the menu stays
-                  // open so the user can read the error and retry —
-                  // closing would hide the message the backend went
-                  // through the trouble of returning (partial-delete
-                  // failures, in particular, mean a connector may
-                  // still be active).
-                  if (ok) onClose()
-                })
-              }
-            }}
-            disabled={busy !== null}
-          >
-            {busy === 'remove' ? 'Removing…' : 'Remove'}
-          </button>
-        </div>
-      )}
-      {message && (
-        <p className="user-menu__discord-message" role="status">
-          {message}
+      <div className="user-menu__disclosure-body">
+        <p className="user-menu__discord-status">
+          {status === null
+            ? 'Checking…'
+            : configured
+              ? 'Configured · firing on grab / download / failure'
+              : 'Not configured'}
         </p>
-      )}
+        {!configured && (
+          <>
+            <input
+              type="url"
+              className="user-menu__discord-input"
+              placeholder="https://discord.com/api/webhooks/..."
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              disabled={busy !== null}
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <button
+              type="button"
+              className="user-menu__discord-action"
+              onClick={save}
+              disabled={busy !== null || url.trim().length === 0}
+            >
+              {busy === 'save' ? 'Saving…' : 'Save webhook'}
+            </button>
+          </>
+        )}
+        {configured && (
+          <div className="user-menu__discord-actions">
+            <button
+              type="button"
+              className="user-menu__discord-action"
+              onClick={test}
+              disabled={busy !== null}
+            >
+              {busy === 'test' ? 'Sending…' : 'Send test ping'}
+            </button>
+            <button
+              type="button"
+              className="user-menu__discord-action user-menu__discord-action--danger"
+              onClick={() => {
+                if (window.confirm('Remove Discord notifications from Sonarr + Radarr?')) {
+                  void remove().then((ok) => {
+                    // Only close on success. On failure the menu stays
+                    // open so the user can read the error and retry —
+                    // closing would hide the message the backend went
+                    // through the trouble of returning (partial-delete
+                    // failures, in particular, mean a connector may
+                    // still be active).
+                    if (ok) onClose()
+                  })
+                }
+              }}
+              disabled={busy !== null}
+            >
+              {busy === 'remove' ? 'Removing…' : 'Remove'}
+            </button>
+          </div>
+        )}
+        {message && (
+          <p className="user-menu__discord-message" role="status">
+            {message}
+          </p>
+        )}
+      </div>
     </details>
   )
 }

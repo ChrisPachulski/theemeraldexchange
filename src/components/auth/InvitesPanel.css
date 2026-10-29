@@ -1,22 +1,13 @@
-/* Owner-only invites + members management. Matches DevicesPanel's
-   disclosure vocabulary so the two admin panels in UserMenu read as a
-   set. */
-
-.invites-panel {
-  display: grid;
-  gap: var(--s-2);
-  padding: var(--s-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: color-mix(in oklch, var(--surface) 80%, transparent);
-}
+/* Owner-only invites + members management. The card frame, padding and
+   spacing come from .user-menu__disclosure in UserMenu.css; this file
+   styles only what sits inside it. */
 
 .invites-panel__hint {
   margin: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
   font-size: var(--t-xs);
   color: var(--text-subtle);
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .invites-panel__loading,
@@ -36,17 +27,16 @@
 
 .invites-panel__create-row {
   display: flex;
-  gap: var(--s-2);
-  flex-wrap: wrap;
+  justify-content: space-between;
   align-items: center;
+  gap: var(--s-2);
 }
 
 .invites-panel__input {
-  flex: 1 1 12rem;
-  min-width: 0;
+  width: 100%;
   font-family: var(--font-body);
   font-size: var(--t-sm);
-  padding: var(--s-1) var(--s-2);
+  padding: var(--s-2) var(--s-3);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--surface);
@@ -62,8 +52,9 @@
 .invites-panel__history-toggle {
   display: inline-flex;
   align-items: center;
-  gap: var(--s-1);
-  font-family: var(--font-mono);
+  gap: var(--s-2);
+  white-space: nowrap;
+  font-family: var(--font-body);
   font-size: var(--t-xs);
   color: var(--text-subtle);
 }
@@ -122,10 +113,20 @@
 .invites-panel__section {
   display: grid;
   gap: var(--s-2);
+  padding-top: var(--s-3);
+  border-top: 1px solid var(--border);
+}
+
+.invites-panel__section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s-3);
 }
 
 .invites-panel__section-title {
   margin: 0;
+  white-space: nowrap;
   font-family: var(--font-display);
   font-size: var(--t-xs);
   font-weight: var(--w-ui);
@@ -144,9 +145,10 @@
 
 .invites-panel__item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--s-3);
+  gap: var(--s-2) var(--s-3);
   padding: var(--s-2) var(--s-3);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
@@ -154,15 +156,13 @@
 }
 
 .invites-panel__item-main {
+  flex: 1 1 11rem;
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
 .invites-panel__item-name {
-  display: flex;
-  align-items: baseline;
-  gap: var(--s-2);
   font-family: var(--font-body);
   font-size: var(--t-sm);
   color: var(--text);
@@ -183,6 +183,8 @@
 }
 
 .invites-panel__badge {
+  margin-left: var(--s-2);
+  vertical-align: 1px;
   font-family: var(--font-mono);
   font-size: 0.625rem;
   text-transform: uppercase;
@@ -195,6 +197,9 @@
 }
 
 .invites-panel__status {
+  margin-left: var(--s-2);
+  vertical-align: 1px;
+  font-family: var(--font-mono);
   text-transform: uppercase;
   letter-spacing: var(--tr-hud);
   font-size: 0.625rem;
@@ -216,6 +221,10 @@
   gap: var(--s-2);
 }
 
+.invites-panel__item > .invites-panel__item-actions {
+  margin-left: auto;
+}
+
 /* ── Member restrictions editor ─────────────────────────────────── */
 
 .invites-panel__restrictions {
@@ -230,7 +239,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--s-2);
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
   font-size: var(--t-xs);
   color: var(--text);
 }
@@ -238,9 +247,13 @@
 /* ── Buttons (mirror DevicesPanel) ──────────────────────────────── */
 
 .invites-panel__btn {
-  font-family: var(--font-mono);
-  font-size: var(--t-xs);
-  padding: var(--s-1) var(--s-2);
+  font-family: var(--font-display);
+  font-size: 0.6875rem;
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  padding: var(--s-1) var(--s-3);
+  min-height: 28px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
   background: var(--surface);

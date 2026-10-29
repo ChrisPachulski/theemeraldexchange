@@ -187,3 +187,25 @@ test('Preferences: Reduce motion survives a reload and crash reports can be swit
   await page.reload()
   await expect(page.locator('html')).toHaveAttribute('data-reduce-motion', '')
 })
+
+test('the admin menu fits a phone: one-line card headings, and it covers the Replay pill', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await signedIn(page, ADMIN_USER)
+  await page.route('**/api/admin/invites', (route) => route.fulfill(json({ invites: [] })))
+  await page.route('**/api/admin/members**', (route) => route.fulfill(json({ members: [] })))
+  await page.goto('/')
+  // The username is only visually hidden on phones; it stays the trigger's name.
+  await page.getByRole('button', { name: ADMIN_USER.username, exact: true }).click()
+  await page.getByText('Invites & members', { exact: true }).click()
+
+  for (const summary of await page.locator('.user-menu__disclosure-summary').all()) {
+    const box = (await summary.boundingBox())!
+    expect(box.height, await summary.innerText()).toBeLessThan(48)
+  }
+  const onTop = await page.evaluate(() => {
+    const r = document.querySelector('.replay-btn')!.getBoundingClientRect()
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+    return !!hit?.closest('.user-menu__dropdown')
+  })
+  expect(onTop).toBe(true)
+})

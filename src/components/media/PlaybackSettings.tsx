@@ -121,7 +121,9 @@ export function PlaybackSettings() {
           {autoplayNext ? 'Autoplay on' : 'Autoplay off'}
         </span>
       </summary>
-      <PlaybackSettingsFields />
+      <div className="user-menu__disclosure-body">
+        <PlaybackSettingsFields />
+      </div>
     </details>
   )
 }

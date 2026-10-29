@@ -35,26 +35,28 @@ export function PreferencesPanel() {
       <summary className="user-menu__disclosure-summary">
         <span className="user-menu__eyebrow">Preferences</span>
       </summary>
-      <Switch
-        label="Reduce motion"
-        on={reduceMotion}
-        onChange={(on) => {
-          setReduceMotion(on)
-          setReduceMotionState(on)
-        }}
-      />
-      <Switch
-        label="Send crash reports to my server"
-        on={crashReports}
-        onChange={(on) => {
-          setCrashReportsEnabled(on)
-          setCrashReports(on)
-        }}
-      />
-      <p className="user-menu__hint">
-        Crash reports go only to the error service your server names, and never include your
-        token, server address, or identity.
-      </p>
+      <div className="user-menu__disclosure-body">
+        <Switch
+          label="Reduce motion"
+          on={reduceMotion}
+          onChange={(on) => {
+            setReduceMotion(on)
+            setReduceMotionState(on)
+          }}
+        />
+        <Switch
+          label="Send crash reports to my server"
+          on={crashReports}
+          onChange={(on) => {
+            setCrashReportsEnabled(on)
+            setCrashReports(on)
+          }}
+        />
+        <p className="user-menu__hint">
+          Crash reports go only to the error service your server names, and never include your
+          token, server address, or identity.
+        </p>
+      </div>
     </details>
   )
 }

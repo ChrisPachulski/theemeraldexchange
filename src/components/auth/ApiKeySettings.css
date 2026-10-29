@@ -1,12 +1,3 @@
-.api-key-settings {
-  display: grid;
-  gap: var(--s-2);
-  padding: var(--s-3);
-  border: 1px solid var(--border);
-  border-radius: var(--r-md);
-  background: color-mix(in oklch, var(--surface) 80%, transparent);
-}
-
 .api-key-settings__heading {
   margin: 0;
   font-family: var(--font-display);
@@ -19,17 +10,16 @@
 
 .api-key-settings__hint {
   margin: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
   font-size: var(--t-xs);
   color: var(--text-subtle);
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .api-key-settings__form,
 .api-key-settings__live {
   display: grid;
   gap: var(--s-2);
-  margin-top: var(--s-2);
 }
 
 .api-key-settings__label {
