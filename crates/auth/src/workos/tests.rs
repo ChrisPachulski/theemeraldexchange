@@ -710,6 +710,36 @@ async fn callback_redeems_the_invite_parked_at_start() {
     assert_eq!(row, (Some("Ana".into()), "workos".into()));
 }
 
+/// A stale link must say why it failed, not claim the invitee has no invite.
+#[tokio::test]
+async fn callback_names_why_an_invite_was_refused() {
+    let h = harness(&[]).await;
+    let expired = invite(&h).await;
+    sqlx::query("UPDATE invites SET expires_at = '2020-01-01T00:00:00.000Z'")
+        .execute(&*h.db)
+        .await
+        .unwrap();
+    let used = invite(&h).await;
+    sqlx::query("UPDATE invites SET used_count = max_uses WHERE expires_at IS NULL OR expires_at > '2020-01-02'")
+        .execute(&*h.db)
+        .await
+        .unwrap();
+    let unknown = "A".repeat(22);
+    for (code, reason) in [
+        (expired.as_str(), "invite_expired"),
+        (used.as_str(), "invite_used"),
+        (unknown.as_str(), "invite_invalid"),
+    ] {
+        let r = round_trip(&h, &format!("?invite={code}"), None, "c").await;
+        assert_eq!(
+            r.location,
+            Some(format!("https://app.example.test/?auth_error={reason}")),
+            "{reason}"
+        );
+        assert!(r.cookie("eex.session").is_none(), "{reason}");
+    }
+}
+
 #[tokio::test]
 async fn callback_admin_subs_identity_gets_an_admin_session() {
     let h = harness(&[]).await;

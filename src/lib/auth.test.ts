@@ -64,6 +64,12 @@ describe('deniedMessage', () => {
   it('maps not_authorized to the same invitation copy', () => {
     expect(deniedMessage('not_authorized')).toMatch(/invite code/i)
   })
+  it('tells a stale invite apart from no invite at all', () => {
+    expect(deniedMessage('invite_expired')).toMatch(/expired/i)
+    expect(deniedMessage('invite_used')).toMatch(/already been used/i)
+    expect(deniedMessage('invite_revoked')).toMatch(/cancelled/i)
+    expect(deniedMessage('invite_invalid')).toMatch(/isn't valid/i)
+  })
   it('falls back to a generic message for unknown reasons', () => {
     expect(deniedMessage(undefined)).toBe('Access denied.')
     expect(deniedMessage('something_else')).toBe('Access denied.')

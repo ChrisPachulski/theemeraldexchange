@@ -6,6 +6,17 @@ export function deniedMessage(reason: unknown): string {
     case 'no_invite':
     case 'not_authorized':
       return 'Invitation-only. Ask the owner for an invite code, then sign in again.'
+    case 'invite_expired':
+      return 'This invite has expired. Ask the owner for a new invite link.'
+    case 'invite_used':
+      return (
+        'This invite has already been used. If you used it, sign in the same way you did ' +
+        'the first time (Google, Apple or email); otherwise ask the owner for a new one.'
+      )
+    case 'invite_revoked':
+      return 'This invite was cancelled. Ask the owner for a new one.'
+    case 'invite_invalid':
+      return "That invite code isn't valid. Open the full link the owner sent, or ask for a new one."
     case 'access_revoked':
       return 'Your access to this library has been revoked. Ask the owner to restore it.'
     case 'workos_state_invalid':

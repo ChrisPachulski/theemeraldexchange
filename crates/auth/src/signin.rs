@@ -450,17 +450,37 @@ pub(crate) async fn authorize_or_redeem(
     display_name: &str,
     mode: AuthMode,
 ) -> Result<bool> {
+    Ok(admit_or_reason(st, sub, invite_code, display_name, mode)
+        .await?
+        .is_ok())
+}
+
+/// `authorize_or_redeem`, keeping why a non-member was refused: the
+/// browser's `auth_error`, so an invitee holding a stale link learns it
+/// expired or was used instead of being told they have no invite.
+pub(crate) async fn admit_or_reason(
+    st: &AuthState,
+    sub: &str,
+    invite_code: Option<&str>,
+    display_name: &str,
+    mode: AuthMode,
+) -> Result<std::result::Result<(), &'static str>> {
     if members::member_status(&st.pool, &st.config.admin_subs, sub).await? == MemberStatus::Allowed
     {
-        return Ok(true);
+        return Ok(Ok(()));
     }
     let Some(code) = invite_code.filter(|c| !c.is_empty()) else {
-        return Ok(false);
+        return Ok(Err("no_invite"));
     };
-    Ok(matches!(
-        invites::redeem(&st.pool, code, sub, Some(display_name), mode).await?,
-        Redeem::Created | Redeem::AlreadyMember
-    ))
+    Ok(
+        match invites::redeem(&st.pool, code, sub, Some(display_name), mode).await? {
+            Redeem::Created | Redeem::AlreadyMember => Ok(()),
+            Redeem::Invalid => Err("invite_invalid"),
+            Redeem::Expired => Err("invite_expired"),
+            Redeem::Exhausted => Err("invite_used"),
+            Redeem::Revoked => Err("invite_revoked"),
+        },
+    )
 }
 
 pub(crate) struct DeviceIdentity<'a> {

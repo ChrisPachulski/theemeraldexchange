@@ -37,8 +37,8 @@ use crate::outcome::{Outcome, Phase, Provider, Reason, Reporter};
 use crate::ratelimit::Kind;
 use crate::session::{self, Session};
 use crate::signin::{
-    DeviceIdentity, Nonces, authorize_or_redeem, display_name, error, internal, json_body,
-    maybe_mint_device_token, not_configured, read_body, text,
+    DeviceIdentity, Nonces, admit_or_reason, authorize_or_redeem, display_name, error, internal,
+    json_body, maybe_mint_device_token, not_configured, read_body, text,
 };
 use crate::{AuthMode, AuthState, Result};
 
@@ -381,9 +381,9 @@ async fn callback_inner(
     };
     let name = display_name(&identity);
     let sub = identity.sub;
-    if !authorize_or_redeem(st, &sub, invite, &name, AuthMode::Workos).await? {
+    if let Err(reason) = admit_or_reason(st, &sub, invite, &name, AuthMode::Workos).await? {
         outcome.record(Outcome::Denied, Reason::NoInvite);
-        return Ok(redirect(Some("no_invite"), std::slice::from_ref(&clear)));
+        return Ok(redirect(Some(reason), std::slice::from_ref(&clear)));
     }
     let role = members::effective_role(&st.pool, &st.config.admin_subs, &sub).await?;
     let cookie = session::mint(
