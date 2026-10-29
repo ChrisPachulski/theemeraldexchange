@@ -484,7 +484,6 @@ export function DownloadsTab() {
                 type="button"
                 className="downloads-tab__recent-card"
                 onClick={() => openIntent(item.route, item.id)}
-                title={`${item.title}${item.year ? ` (${item.year})` : ''}`}
               >
                 {item.img ? (
                   <img

@@ -373,14 +373,11 @@ export function TrendingRow({
           // Trust scaffolding: card carries a provenance modifier class
           // so the styling can differentiate a Claude pick from a
           // discover/trending fill (the actual visual contract lives in
-          // TrendingRow.css). Reason — when present — populates the
-          // browser tooltip alongside the title, AND renders as a small
-          // ground-line below the title on hover/focus. Quiet by
+          // TrendingRow.css). Reason — when present — renders as a small
+          // ground-line below the title on hover/focus. No browser
+          // tooltip: the caption already names the title. Quiet by
           // default; visible when the user looks for it.
           const provClass = item.provenance ? ` trending__card--${item.provenance}` : ''
-          const tipParts = [item.title]
-          if (item.reason) tipParts.push(item.reason)
-          const tooltip = tipParts.join(' · ')
           const poster = posterImg(item.posterPath)
           return (
             <div key={item.id} className="trending__card-wrap">
@@ -389,7 +386,6 @@ export function TrendingRow({
                 className={`trending__card${isPending ? ' trending__card--pending' : ''}${provClass}`}
                 onClick={() => onPick(item.id)}
                 disabled={isPending}
-                title={tooltip}
                 data-provenance={item.provenance ?? undefined}
               >
                 {/* Provenance pip — faint dot in the top-left corner for

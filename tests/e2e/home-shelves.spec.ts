@@ -74,7 +74,10 @@ test('a Recently added movie opens its detail in the Movies tab', async ({ page 
   await page.route('**/api/radarr/api/v3/movie', (route) => route.fulfill(json([DUNE])))
 
   await page.goto('/#/home')
-  await page.getByRole('region', { name: 'Recently added movies' }).getByRole('button', { name: /Dune/ }).click()
+  const card = page.getByRole('region', { name: 'Recently added movies' }).getByRole('button', { name: /Dune/ })
+  // The caption names the card; a browser tooltip repeating it is noise.
+  await expect(card).not.toHaveAttribute('title')
+  await card.click()
 
   await expect(page.getByRole('dialog', { name: 'Dune' })).toBeVisible()
   // The intent is consumed: the URL settles on the plain tab route.
@@ -86,7 +89,9 @@ test('the Downloads "Recently added" card opens the title, not just the tab', as
   await page.route('**/api/radarr/api/v3/movie', (route) => route.fulfill(json([DUNE])))
 
   await page.goto('/#/downloads')
-  await page.getByRole('region', { name: 'Recently added to the library' }).getByRole('button', { name: /Dune/ }).click()
+  const card = page.getByRole('region', { name: 'Recently added to the library' }).getByRole('button', { name: /Dune/ })
+  await expect(card).not.toHaveAttribute('title')
+  await card.click()
 
   await expect(page.getByRole('dialog', { name: 'Dune' })).toBeVisible()
 })

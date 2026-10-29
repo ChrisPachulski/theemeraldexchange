@@ -63,7 +63,7 @@ export function PosterShelf({ label, cards, empty }: { label: string; cards: Car
             const img = posterImg(c.poster, c.blurhash)
             return (
               <div key={c.key} className="trending__card-wrap">
-                <button type="button" className="trending__card" onClick={c.onOpen} title={c.title}>
+                <button type="button" className="trending__card" onClick={c.onOpen}>
                   {img ? (
                     <img
                       className="trending__poster"
