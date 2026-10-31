@@ -68,7 +68,8 @@ function inviteMessage(origin: string, code: string, expiresAt: string | null): 
     'You’re invited to The Emerald Exchange, our household media library.',
     '',
     `1. Open this link: ${origin}/#/invite/${code}`,
-    '2. Pick one way to sign in (Google, Apple, email, or Plex). Email sends a 6-digit code; there is no password.',
+    '2. Pick one way to sign in: Google, Apple, email, or Plex.',
+    '   Email opens a plain white page from WorkOS, our sign-in service. The first time, press Sign up, enter your email, then type the 6-digit code it sends you. There is no password.',
     `3. Next time, go to ${origin} and sign in the same way. No code needed.`,
     '',
     `The link works once${expiresAt ? ` and expires ${fmtDate(expiresAt)}` : ''}.`,
@@ -167,7 +168,12 @@ export function InvitesPanel() {
         <ol className="invites-panel__steps" aria-label="How inviting works">
           <li>Name the invite (who it&apos;s for) and press Create invite.</li>
           <li>Press Copy message and send it by text or email. It has the link and what to do.</li>
-          <li>They open the link and pick a sign-in. After that they show under Members and sign in the same way, no code.</li>
+          <li>
+            They open the link and pick Google, Apple, email or Plex. Email goes
+            through WorkOS, our sign-in service: a white page where they press
+            Sign up and type a 6-digit code. Then they show under Members and
+            sign in the same way, no code.
+          </li>
         </ol>
         <p className="invites-panel__hint">
           Each link works once and stops working after the expiry you pick.

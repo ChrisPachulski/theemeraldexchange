@@ -53,6 +53,7 @@ describe('Walkthrough invite handoff', () => {
     expect(screen.getAllByText('Invite attached')).toHaveLength(2)
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('You’re invited')
     expect(screen.getAllByText(/Pick one way to sign in/)).toHaveLength(2)
+    expect(screen.getAllByText(/WorkOS, our sign-in service/)).toHaveLength(2)
     // Both blocks' Google, Apple and email links carry the invite to the WorkOS start route.
     const links = screen.getAllByRole('link', { name: /Sign in with (Google|Apple|email)/ })
     expect(links).toHaveLength(6)

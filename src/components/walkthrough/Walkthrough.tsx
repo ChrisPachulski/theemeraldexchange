@@ -123,7 +123,13 @@ function SignInBlock({
       {invited ? (
         <ol className="walkthrough__steps">
           <li>Pick one way to sign in below. Any of them works.</li>
-          {showWorkos && <li>Email sends you a 6-digit code. There is no password.</li>}
+          {showWorkos && (
+            <li>
+              Email opens a plain white page from WorkOS, our sign-in service.
+              The first time, press Sign up, enter your email, then type the
+              6-digit code it sends you. There is no password.
+            </li>
+          )}
           <li>Next time, come back here and sign in the same way. No code needed.</li>
         </ol>
       ) : null}
