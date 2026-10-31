@@ -54,11 +54,15 @@ describe('Walkthrough sign-in', () => {
     expect(html).toContain('walkthrough__hero-gem')
   })
 
-  it('prefills an invite handed off from the scrubbed URL fragment', () => {
+  it('attaches an invite handed off from the scrubbed URL fragment', () => {
     const code = 'A'.repeat(22)
 
     const html = render(code)
 
-    expect(html).toContain(`value="${code}"`)
+    // The code rides on the sign-in, so the page confirms it instead of
+    // asking the guest to fill in a field.
+    expect(html).toContain('Invite attached')
+    expect(html).toContain('You’re invited')
+    expect(html).not.toContain('walkthrough__invite-input')
   })
 })

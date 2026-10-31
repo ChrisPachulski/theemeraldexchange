@@ -61,6 +61,20 @@ function providerLabel(mode: MemberView['auth_mode']): string {
   }
 }
 
+// The text the owner pastes into a text or email. The invitee's page repeats
+// these steps, so this only has to get them to the link.
+function inviteMessage(origin: string, code: string, expiresAt: string | null): string {
+  return [
+    'You’re invited to The Emerald Exchange, our household media library.',
+    '',
+    `1. Open this link: ${origin}/#/invite/${code}`,
+    '2. Pick one way to sign in (Google, Apple, email, or Plex). Email sends a 6-digit code; there is no password.',
+    `3. Next time, go to ${origin} and sign in the same way. No code needed.`,
+    '',
+    `The link works once${expiresAt ? ` and expires ${fmtDate(expiresAt)}` : ''}.`,
+  ].join('\n')
+}
+
 function errMessage(e: unknown, fallback: string): string {
   return e instanceof ApiError ? e.message : e instanceof Error ? e.message : fallback
 }
@@ -70,11 +84,12 @@ export function InvitesPanel() {
   const confirm = useConfirm()
   const [error, setError] = useState<string | null>(null)
   const [justCreated, setJustCreated] = useState<CreatedInvite | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'link' | 'message' | null>(null)
   const [label, setLabel] = useState('')
   const [expiresInDays, setExpiresInDays] = useState(14)
   const [policyTarget, setPolicyTarget] = useState<MemberView | null>(null)
   const [showHistory, setShowHistory] = useState(false)
+  const [showRevoked, setShowRevoked] = useState(false)
 
   const invitesQ = useQuery({
     queryKey: INVITES_KEY,
@@ -96,7 +111,7 @@ export function InvitesPanel() {
       }),
     onSuccess: (invite) => {
       setJustCreated(invite)
-      setCopied(false)
+      setCopied(null)
       setLabel('')
       setError(null)
       void qc.invalidateQueries({ queryKey: INVITES_KEY })
@@ -120,21 +135,24 @@ export function InvitesPanel() {
   const invites: InviteView[] = (invitesQ.data ?? []).filter(
     (i) => showHistory || i.status === 'active',
   )
-  const members: MemberView[] = membersQ.data ?? []
-  const activeMembers = members.filter((m) => !m.revoked_at)
+  const allMembers: MemberView[] = membersQ.data ?? []
+  const activeMembers = allMembers.filter((m) => !m.revoked_at)
+  const revokedCount = allMembers.length - activeMembers.length
+  // Revoked rows stay in the DB for audit; like old invites, hidden unless asked for.
+  const members = showRevoked ? allMembers : activeMembers
   const summary =
     activeMembers.length === 0
       ? 'No members yet'
       : `${activeMembers.length} member${activeMembers.length === 1 ? '' : 's'}`
 
-  const copyInviteLink = async (code: string) => {
+  const copyText = async (text: string, what: 'link' | 'message') => {
     try {
-      await navigator.clipboard.writeText(`${window.location.origin}/#/invite/${code}`)
-      setCopied(true)
+      await navigator.clipboard.writeText(text)
+      setCopied(what)
     } catch {
       // Clipboard blocked (insecure context / permissions) — the code is
       // still visible for manual copy; just don't flip the label.
-      setCopied(false)
+      setCopied(null)
     }
   }
 
@@ -146,9 +164,13 @@ export function InvitesPanel() {
       </summary>
       <div className="user-menu__disclosure-body">
 
+        <ol className="invites-panel__steps" aria-label="How inviting works">
+          <li>Name the invite (who it&apos;s for) and press Create invite.</li>
+          <li>Press Copy message and send it by text or email. It has the link and what to do.</li>
+          <li>They open the link and pick a sign-in. After that they show under Members and sign in the same way, no code.</li>
+        </ol>
         <p className="invites-panel__hint">
-          Send a new household member an invite link. Each link works once and
-          expires; after that, their sign-in is remembered.
+          Each link works once and stops working after the expiry you pick.
         </p>
 
         {/* Create */}
@@ -194,26 +216,42 @@ export function InvitesPanel() {
             <p className="invites-panel__reveal-title">
               Copy this invite now; it won&apos;t be shown again.
             </p>
-            <div className="invites-panel__reveal-row">
-              <code className="invites-panel__code">{justCreated.code}</code>
+            <pre className="invites-panel__message">
+              {inviteMessage(window.location.origin, justCreated.code, justCreated.expires_at)}
+            </pre>
+            <div className="invites-panel__item-actions">
+              <button
+                type="button"
+                className="invites-panel__btn invites-panel__btn--primary"
+                onClick={() =>
+                  void copyText(
+                    inviteMessage(window.location.origin, justCreated.code, justCreated.expires_at),
+                    'message',
+                  )
+                }
+              >
+                {copied === 'message' ? 'Message copied' : 'Copy message'}
+              </button>
               <button
                 type="button"
                 className="invites-panel__btn"
-                onClick={() => void copyInviteLink(justCreated.code)}
+                onClick={() =>
+                  void copyText(`${window.location.origin}/#/invite/${justCreated.code}`, 'link')
+                }
               >
-                {copied ? 'Link copied' : 'Copy invite link'}
+                {copied === 'link' ? 'Link copied' : 'Copy invite link'}
+              </button>
+              <button
+                type="button"
+                className="invites-panel__btn invites-panel__btn--ghost"
+                onClick={() => {
+                  setJustCreated(null)
+                  setCopied(null)
+                }}
+              >
+                Done
               </button>
             </div>
-            <button
-              type="button"
-              className="invites-panel__btn invites-panel__btn--ghost"
-              onClick={() => {
-                setJustCreated(null)
-                setCopied(false)
-              }}
-            >
-              Done
-            </button>
           </div>
         )}
 
@@ -269,7 +307,19 @@ export function InvitesPanel() {
 
         {/* Members */}
         <section className="invites-panel__section" aria-label="Members">
-          <p className="invites-panel__section-title">Members</p>
+          <div className="invites-panel__section-head">
+            <p className="invites-panel__section-title">Members</p>
+            {revokedCount > 0 && (
+              <label className="invites-panel__history-toggle">
+                <input
+                  type="checkbox"
+                  checked={showRevoked}
+                  onChange={(e) => setShowRevoked(e.target.checked)}
+                />
+                Show revoked ({revokedCount})
+              </label>
+            )}
+          </div>
           {/* Always shown: Restrictions sits only on non-owner rows, so an
               owner-only household would otherwise never learn it exists. */}
           <p className="invites-panel__hint">

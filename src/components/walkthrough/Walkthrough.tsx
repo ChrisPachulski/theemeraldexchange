@@ -29,6 +29,19 @@ const DEMO_STRIP: TrendingItem[] = [
   { id: 76479, title: 'The Boys', posterPath: '/2zmTngn1tYC1AvfnrFLhxeD82hz.jpg', year: 2019 },
 ]
 
+// Visitors paste whatever the owner sent: the bare code, or the whole invite
+// link. Pull the code out of a link so both work.
+function extractInviteCode(raw: string): string {
+  const value = raw.trim()
+  const match = value.match(/\/invite\/([^/?#\s]+)/)
+  if (!match) return value
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return match[1]
+  }
+}
+
 function SignInBlock({
   placement,
   initialInviteCode,
@@ -38,10 +51,14 @@ function SignInBlock({
 }) {
   const { signIn, activeSignIn, signInError, discoveredServers, authMethods } = useAuth()
   const [inviteCode, setInviteCode] = useState(initialInviteCode)
+  // Arriving through the invite link: the code is already attached, so the
+  // field stays out of the way unless the visitor asks to change it.
+  const [editingCode, setEditingCode] = useState(!initialInviteCode)
   const pending = activeSignIn !== null
   const plexPending = activeSignIn === 'plex'
-  const code = inviteCode.trim()
+  const code = extractInviteCode(inviteCode)
   const codeError = inviteCodeError(code)
+  const invited = Boolean(code) && !codeError
   // A unique id per placement so the two SignInBlock instances on the
   // page don't share an htmlFor target.
   const inviteFieldId = `walkthrough-invite-${placement}`
@@ -60,47 +77,63 @@ function SignInBlock({
       : new URLSearchParams(window.location.search).get('auth_error')
   return (
     <div className={`walkthrough__signin walkthrough__signin--${placement}`}>
-      <div className="walkthrough__invite">
-        <label className="walkthrough__invite-label" htmlFor={inviteFieldId}>
-          Invite code <span className="walkthrough__invite-optional">(first time only)</span>
-        </label>
-        <input
-          id={inviteFieldId}
-          className="walkthrough__invite-input"
-          type="text"
-          value={inviteCode}
-          onChange={(e) => setInviteCode(e.target.value)}
-          placeholder="Paste the code the owner sent you"
-          autoComplete="one-time-code"
-          autoCapitalize="none"
-          spellCheck={false}
-          disabled={pending}
-          aria-invalid={codeError ? true : undefined}
-          aria-describedby={codeError ? inviteErrorId : undefined}
-        />
-        {codeError && (
-          <p id={inviteErrorId} className="walkthrough__signin-error" role="alert">
-            {codeError}
-          </p>
-        )}
-      </div>
+      {editingCode ? (
+        <div className="walkthrough__invite">
+          <label className="walkthrough__invite-label" htmlFor={inviteFieldId}>
+            Invite code <span className="walkthrough__invite-optional">(first time only)</span>
+          </label>
+          <input
+            id={inviteFieldId}
+            className="walkthrough__invite-input"
+            type="text"
+            value={inviteCode}
+            onChange={(e) => setInviteCode(e.target.value)}
+            placeholder="Paste the invite link or code you were sent"
+            autoComplete="one-time-code"
+            autoCapitalize="none"
+            spellCheck={false}
+            disabled={pending}
+            aria-invalid={codeError ? true : undefined}
+            aria-describedby={codeError ? inviteErrorId : undefined}
+          />
+          {codeError && (
+            <p id={inviteErrorId} className="walkthrough__signin-error" role="alert">
+              {codeError}
+            </p>
+          )}
+        </div>
+      ) : (
+        <p className="walkthrough__invite-attached" role="status">
+          <span className="walkthrough__invite-check" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="14" height="14">
+              <path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z" fill="currentColor" />
+            </svg>
+          </span>
+          Invite attached
+          <button
+            type="button"
+            className="walkthrough__invite-change"
+            onClick={() => setEditingCode(true)}
+            disabled={pending}
+          >
+            Use a different code
+          </button>
+        </p>
+      )}
+      {invited ? (
+        <ol className="walkthrough__steps">
+          <li>Pick one way to sign in below. Any of them works.</li>
+          {showWorkos && <li>Email sends you a 6-digit code. There is no password.</li>}
+          <li>Next time, come back here and sign in the same way. No code needed.</li>
+        </ol>
+      ) : null}
       <fieldset
         className="walkthrough__signin-buttons"
         disabled={pending || Boolean(codeError)}
       >
-        {showPlex && (
-          <button
-            type="button"
-            className="walkthrough__signin-button"
-            onClick={() => void signIn(code || undefined)}
-            disabled={pending}
-          >
-            {plexPending ? 'Waiting for Plex…' : 'Sign in with Plex'}
-          </button>
-        )}
-        {showApple && <AppleSignInButton inviteCode={code || undefined} />}
         {/* No provider = the WorkOS hosted page, which carries email sign-in
-            for members whose identity is neither Google nor Apple. */}
+            for members whose identity is neither Google nor Apple. Listed
+            first: a new guest has one of these, rarely a Plex account. */}
         {showWorkos &&
           ([['google', 'Google'], ['apple', 'Apple'], [null, 'email']] as const).map(
             ([provider, label]) => (
@@ -117,14 +150,30 @@ function SignInBlock({
               </a>
             ),
           )}
+        {showApple && <AppleSignInButton inviteCode={code || undefined} />}
+        {showPlex && (
+          <button
+            type="button"
+            className="walkthrough__signin-button"
+            onClick={() => void signIn(code || undefined)}
+            disabled={pending}
+          >
+            {plexPending ? 'Waiting for Plex…' : 'Sign in with Plex'}
+          </button>
+        )}
       </fieldset>
-      <p className="walkthrough__signin-hint">
-        Invitation-only. Returning members sign in with Google, Apple
-        {showWorkos ? ', email' : ''}
-        {showPlex ? ', or the Plex account the library was shared to' : ''}; no
-        code needed. First-time guests: paste your invite code above, then sign
-        in with any provider.
-      </p>
+      {!invited && (
+        <div className="walkthrough__signin-hint">
+          <p>
+            <strong>Been here before?</strong> Sign in the same way you did last
+            time. No code needed.
+          </p>
+          <p>
+            <strong>New and invited?</strong> Open the invite link you were sent,
+            or paste it above, then pick any sign-in.
+          </p>
+        </div>
+      )}
       {!signInError && workosError && (
         <p className="walkthrough__signin-error" role="alert">{deniedMessage(workosError)}</p>
       )}
@@ -377,7 +426,9 @@ export function Walkthrough({ initialInviteCode = '' }: { initialInviteCode?: st
           <div className="walkthrough__hero-card">
             <p className="walkthrough__eyebrow">The Emerald Exchange</p>
             <h1 id="hero-title" className="walkthrough__hero-title">
-              A private members’ page for a household media library.
+              {initialInviteCode
+                ? 'You’re invited to a household media library.'
+                : 'A private members’ page for a household media library.'}
             </h1>
             <SignInBlock placement="hero" initialInviteCode={initialInviteCode} />
             <p className="walkthrough__hero-scroll">[ scroll for the tour ]</p>

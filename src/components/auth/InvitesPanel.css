@@ -304,3 +304,35 @@
   font-size: var(--t-xs);
   color: var(--danger, #d04949);
 }
+
+/* ── How-to + ready-to-send message ─────────────────────────────── */
+
+.invites-panel__steps {
+  display: grid;
+  gap: var(--s-1);
+  margin: 0;
+  padding-left: 1.25rem;
+  font-family: var(--font-body);
+  font-size: var(--t-xs);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.invites-panel__steps li::marker {
+  font-family: var(--font-mono);
+  color: var(--emerald);
+}
+
+.invites-panel__message {
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+  font-family: var(--font-body);
+  font-size: var(--t-xs);
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: color-mix(in oklch, var(--surface) 70%, transparent);
+  border-radius: var(--r-sm);
+  user-select: all;
+}

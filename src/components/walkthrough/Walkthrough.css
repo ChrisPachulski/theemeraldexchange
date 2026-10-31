@@ -515,11 +515,83 @@
 }
 
 .walkthrough__signin-hint {
+  display: grid;
+  gap: var(--s-1);
   margin: 0;
   font-size: var(--t-sm);
   color: var(--text-muted);
   line-height: 1.5;
   max-width: 60ch;
+}
+
+.walkthrough__signin-hint p {
+  margin: 0;
+}
+
+.walkthrough__signin-hint strong {
+  font-weight: var(--w-ui);
+  color: var(--text);
+}
+
+/* Invite link already carried the code: a confirmation instead of a field. */
+.walkthrough__invite-attached {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--emerald);
+}
+
+.walkthrough__invite-check {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--emerald-bg);
+  border: 1px solid var(--emerald);
+}
+
+.walkthrough__invite-change {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--font-body);
+  font-size: var(--t-xs);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-subtle);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.walkthrough__invite-change:hover,
+.walkthrough__invite-change:focus-visible {
+  color: var(--text);
+}
+
+/* Numbered first-visit steps shown only to an invited guest. */
+.walkthrough__steps {
+  display: grid;
+  gap: var(--s-1);
+  margin: 0;
+  padding-left: 1.25rem;
+  font-size: var(--t-sm);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.walkthrough__steps li::marker {
+  font-family: var(--font-mono);
+  color: var(--emerald);
 }
 
 .walkthrough__signin-error {

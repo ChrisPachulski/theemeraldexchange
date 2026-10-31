@@ -76,6 +76,20 @@ describe('InvitesPanel sharing', () => {
 
     expect(writeText).toHaveBeenCalledWith(`${window.location.origin}/#/invite/${code}`)
   })
+
+  it('copies a ready-to-send message carrying the link and the steps', async () => {
+    mount()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create invite' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy message' }))
+
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledTimes(1))
+    const text = writeText.mock.calls[0][0] as string
+    expect(text).toContain(`${window.location.origin}/#/invite/${code}`)
+    expect(text).toContain('Pick one way to sign in')
+    expect(text).toContain('No code needed')
+    expect(await screen.findByRole('button', { name: 'Message copied' })).toBeInTheDocument()
+  })
 })
 
 function invite(prefix: string, status: 'active' | 'expired' | 'exhausted' | 'revoked') {
@@ -118,6 +132,30 @@ describe('InvitesPanel history and confirmations', () => {
     }
     const active = screen.getByText('active invite').closest('li')!
     expect(within(active).getByRole('button', { name: 'Revoke' })).toBeInTheDocument()
+  })
+
+  it('hides revoked members until asked for', async () => {
+    const member = (sub: string, name: string, revoked: boolean) => ({
+      sub,
+      display_name: name,
+      role: 'user',
+      auth_mode: 'local',
+      invited_by: null,
+      joined_at: '2026-05-30T00:00:00.000Z',
+      revoked_at: revoked ? '2026-10-29T00:00:00.000Z' : null,
+      is_admin: true,
+    })
+    mocks.listInvites.mockResolvedValue([])
+    mocks.listMembers.mockResolvedValue([
+      member('workos:user_1', 'Current Owner', false),
+      member('local:old', 'Old Passkey', true),
+    ])
+    mount()
+
+    await screen.findByText('Current Owner')
+    expect(screen.queryByText('Old Passkey')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show revoked (1)' }))
+    expect(screen.getByText('Old Passkey')).toBeInTheDocument()
   })
 
   it('asks before revoking a member, and Keep changes nothing', async () => {
