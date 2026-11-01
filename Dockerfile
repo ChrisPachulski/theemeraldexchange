@@ -57,13 +57,13 @@ RUN npx vite build
 
 # Empty stand-in: BUNDLE_SPA=off yields an empty /spa/dist (no index.html), so
 # SERVE_SPA auto-detection stays off (the owner posture).
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS spa-off
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS spa-off
 RUN mkdir -p /spa/dist
 
 FROM spa-${BUNDLE_SPA} AS spa-dist
 
 # ---------------------------------------------------------------------------
-FROM debian:bookworm-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS runtime
+FROM debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3 AS runtime
 
 WORKDIR /app
 
