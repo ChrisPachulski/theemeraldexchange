@@ -10,6 +10,11 @@
 //! time, exchanges the code and redirects back to the SPA with a session
 //! cookie, or with `?auth_error=<reason>`.
 //!
+//! Email (browser): POST /email/start asks WorkOS to mail a one-time code
+//! (Magic Auth); POST /email/verify trades email + code for the WorkOS user and
+//! sets the session cookie. The guest never leaves our page, so the email
+//! leg carries our look instead of the unbranded hosted AuthKit page.
+//!
 //! Native (Apple app, PKCE): POST /native/start hands back the authorize URL
 //! and a single-use state; POST /native exchanges code + verifier and mints a
 //! device token. No cookie is involved.
@@ -55,6 +60,8 @@ pub(crate) fn routes() -> Router<AuthState> {
     Router::new()
         .route("/api/auth/workos/start", get(start))
         .route("/api/auth/workos/callback", get(callback))
+        .route("/api/auth/workos/email/start", post(email_start))
+        .route("/api/auth/workos/email/verify", post(email_verify))
         .route("/api/auth/workos/native/start", post(native_start))
         .route("/api/auth/workos/native", post(native))
 }
@@ -144,7 +151,6 @@ impl Workos {
         code: &str,
         verifier: Option<&str>,
     ) -> std::result::Result<Identity, ExchangeError> {
-        use ExchangeError::*;
         let mut body = json!({
             "client_id": config.workos_client_id,
             "client_secret": config.workos_api_key,
@@ -154,6 +160,56 @@ impl Workos {
         if let Some(v) = verifier {
             body["code_verifier"] = v.into();
         }
+        self.authenticate(body).await
+    }
+
+    /// Ask WorkOS to email a one-time sign-in code (Magic Auth). WorkOS
+    /// renders and sends the mail; the code itself is never read here.
+    pub async fn send_email_code(
+        &self,
+        config: &Config,
+        email: &str,
+    ) -> std::result::Result<(), ExchangeError> {
+        use ExchangeError::*;
+        let res = self
+            .http
+            .post(format!("{}/user_management/magic_auth", self.base))
+            .bearer_auth(config.workos_api_key.as_deref().unwrap_or_default())
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(json!({ "email": email }).to_string())
+            .timeout(self.timeout)
+            .send()
+            .await
+            .map_err(|_| ProviderUnavailable)?;
+        if res.status().is_server_error() {
+            return Err(ProviderUnavailable);
+        }
+        if !res.status().is_success() {
+            return Err(CodeInvalid);
+        }
+        Ok(())
+    }
+
+    /// Trade an emailed code for the WorkOS user. A first sign-in creates the
+    /// WorkOS user; membership is still decided by the allowlist / invite.
+    pub async fn exchange_email_code(
+        &self,
+        config: &Config,
+        email: &str,
+        code: &str,
+    ) -> std::result::Result<Identity, ExchangeError> {
+        self.authenticate(json!({
+            "client_id": config.workos_client_id,
+            "client_secret": config.workos_api_key,
+            "grant_type": "urn:workos:oauth:grant-type:magic-auth:code",
+            "code": code,
+            "email": email,
+        }))
+        .await
+    }
+
+    async fn authenticate(&self, body: Value) -> std::result::Result<Identity, ExchangeError> {
+        use ExchangeError::*;
         let res = self
             .http
             .post(format!("{}/user_management/authenticate", self.base))
@@ -403,6 +459,185 @@ async fn callback_inner(
         None,
         &[clear, session::set_cookie(&st.config, &cookie, https)],
     ))
+}
+
+/// A plausible mailbox, lowercased: one `@` with text on both sides, a dot
+/// in the domain, no whitespace, at most 254 bytes. WorkOS has the final say.
+fn normalize_email(raw: &str) -> Option<String> {
+    let email = raw.trim().to_ascii_lowercase();
+    let (local, domain) = email.split_once('@')?;
+    let ok = email.len() <= 254
+        && !local.is_empty()
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && !domain.contains('@')
+        && !email.chars().any(|c| c.is_whitespace() || c.is_control());
+    ok.then_some(email)
+}
+
+/// The emailed code: 6 to 8 ASCII digits.
+fn code_shape(code: &str) -> bool {
+    (6..=8).contains(&code.len()) && code.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// POST /api/auth/workos/email/start: `{ email }` in, WorkOS mails a code.
+/// Answers 200 for any well-formed address, member or not, so it says
+/// nothing about who belongs; the invite gate runs at /email/verify.
+async fn email_start(State(st): State<AuthState>, headers: HeaderMap, body: Body) -> Response {
+    let outcome = Reporter::new(&headers, Provider::Workos, Phase::Check);
+    outcome
+        .run(email_start_inner(&st, &headers, body, &outcome))
+        .await
+        .unwrap_or_else(internal)
+}
+
+async fn email_start_inner(
+    st: &AuthState,
+    headers: &HeaderMap,
+    body: Body,
+    outcome: &Reporter,
+) -> Result<Response> {
+    if let Err(r) = st.limiter.check(headers, Kind::Workos, outcome) {
+        return Ok(r);
+    }
+    if !st.config.workos_configured() {
+        return Ok(not_configured(outcome, "workos"));
+    }
+    let body = match read_body(body, outcome).await {
+        Ok(b) => b,
+        Err(r) => return Ok(r),
+    };
+    let Some(email) = text(&body, "email").and_then(normalize_email) else {
+        outcome.record(Outcome::Invalid, Reason::InvalidRequest);
+        return Ok(error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "invalid_email" }),
+        ));
+    };
+    // Per address too, so one mailbox can't be flooded from many clients.
+    if let Err(r) =
+        st.limiter
+            .check_identity(Kind::Workos, Some(&format!("email:{email}")), outcome)
+    {
+        return Ok(r);
+    }
+    match st.workos.send_email_code(&st.config, &email).await {
+        Ok(()) => Ok(Json(json!({ "ok": true })).into_response()),
+        Err(ExchangeError::ProviderUnavailable) => {
+            outcome.record(Outcome::Transient, Reason::ProviderUnavailable);
+            Ok(error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({ "error": "workos_unavailable" }),
+            ))
+        }
+        Err(_) => {
+            outcome.record(Outcome::Invalid, Reason::InvalidRequest);
+            Ok(error(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "invalid_email" }),
+            ))
+        }
+    }
+}
+
+/// POST /api/auth/workos/email/verify: `{ email, code, inviteCode? }` in; a
+/// session cookie and `{ user }` out, or 403 with why the invite was refused.
+async fn email_verify(
+    State(st): State<AuthState>,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    let outcome = Reporter::new(&headers, Provider::Workos, Phase::IdentityVerify);
+    outcome
+        .run(email_verify_inner(&st, &uri, &headers, body, &outcome))
+        .await
+        .unwrap_or_else(internal)
+}
+
+async fn email_verify_inner(
+    st: &AuthState,
+    uri: &Uri,
+    headers: &HeaderMap,
+    body: Body,
+    outcome: &Reporter,
+) -> Result<Response> {
+    if let Err(r) = st.limiter.check(headers, Kind::Workos, outcome) {
+        return Ok(r);
+    }
+    if !st.config.workos_configured() {
+        return Ok(not_configured(outcome, "workos"));
+    }
+    let body = match read_body(body, outcome).await {
+        Ok(b) => b,
+        Err(r) => return Ok(r),
+    };
+    let email = text(&body, "email").and_then(normalize_email);
+    let code = text(&body, "code").map(str::trim).filter(|c| code_shape(c));
+    let (Some(email), Some(code)) = (email, code) else {
+        outcome.record(Outcome::Invalid, Reason::InvalidRequest);
+        return Ok(error(
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "invalid_request" }),
+        ));
+    };
+    // Guessing is capped per address, whichever clients the guesses come from.
+    if let Err(r) =
+        st.limiter
+            .check_identity(Kind::Workos, Some(&format!("email:{email}")), outcome)
+    {
+        return Ok(r);
+    }
+    let identity = match st
+        .workos
+        .exchange_email_code(&st.config, &email, code)
+        .await
+    {
+        Ok(id) => id,
+        Err(e) => {
+            let (status, reason) = if e == ExchangeError::ProviderUnavailable {
+                outcome.record(Outcome::Transient, Reason::ProviderUnavailable);
+                (StatusCode::SERVICE_UNAVAILABLE, "workos_unavailable")
+            } else {
+                outcome.record(Outcome::Invalid, Reason::IdentityTokenInvalid);
+                (StatusCode::UNAUTHORIZED, "email_code_invalid")
+            };
+            return Ok(error(status, json!({ "error": reason })));
+        }
+    };
+    let name = display_name(&identity);
+    let sub = identity.sub;
+    let invite = text(&body, "inviteCode").filter(|i| token_shape(i, 22..=22));
+    if let Err(reason) = admit_or_reason(st, &sub, invite, &name, AuthMode::Workos).await? {
+        outcome.record(Outcome::Denied, Reason::NoInvite);
+        return Ok(error(
+            StatusCode::FORBIDDEN,
+            json!({ "status": "denied", "reason": reason }),
+        ));
+    }
+    let role = members::effective_role(&st.pool, &st.config.admin_subs, &sub).await?;
+    let cookie = session::mint(
+        &st.session_key,
+        &Session {
+            sub: sub.clone(),
+            username: name.clone(),
+            role,
+            auth_mode: AuthMode::Workos,
+            plex_auth_token: None,
+        },
+        st.now(),
+    );
+    outcome.record(Outcome::Authorized, Reason::Cookie);
+    let https = uri.scheme_str() == Some("https");
+    Ok((
+        [(
+            header::SET_COOKIE,
+            session::set_cookie(&st.config, &cookie, https),
+        )],
+        Json(json!({ "user": { "sub": sub, "username": name, "role": role, "email": email } })),
+    )
+        .into_response())
 }
 
 /// POST /api/auth/workos/native/start: the authorize URL bound to the native

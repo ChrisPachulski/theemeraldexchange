@@ -1125,3 +1125,161 @@ async fn logout_clears_the_session_cookie_without_needing_a_session() {
     assert_eq!(r.body, json!({ "ok": true }));
     assert_eq!(r.cookies, vec!["eex.session=; Max-Age=0; Path=/"]);
 }
+
+// ── Email code sign-in (Magic Auth) ──
+
+async fn email_post(h: &Harness, path: &str, body: Value) -> Reply {
+    send(&h.app(), "POST", path, &[("origin", SPA)], Some(body)).await
+}
+
+#[tokio::test]
+async fn email_start_asks_workos_to_mail_a_code_with_the_api_key() {
+    let h = harness(&[]).await;
+    h.fake.reply(
+        201,
+        json!({ "id": "magic_auth_1", "email": "ana@example.test" }),
+    );
+    let r = email_post(
+        &h,
+        "/api/auth/workos/email/start",
+        json!({ "email": " Ana@Example.TEST " }),
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert_eq!(r.body, json!({ "ok": true }));
+    let calls = h.fake.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "/user_management/magic_auth");
+    assert_eq!(calls[0].1, json!({ "email": "ana@example.test" }));
+}
+
+#[tokio::test]
+async fn email_start_rejects_a_malformed_address_without_calling_workos() {
+    let h = harness(&[]).await;
+    for bad in [
+        "",
+        "ana",
+        "ana@",
+        "@x.test",
+        "ana@nodot",
+        "a b@x.test",
+        "ana@x.test.",
+    ] {
+        let r = email_post(&h, "/api/auth/workos/email/start", json!({ "email": bad })).await;
+        assert_eq!(r.status, 400, "{bad}");
+        assert_eq!(r.body, json!({ "error": "invalid_email" }), "{bad}");
+    }
+    assert!(h.fake.calls().is_empty());
+}
+
+#[tokio::test]
+async fn email_start_reports_workos_down_as_unavailable() {
+    let h = harness(&[]).await;
+    h.fake.reply(502, json!({}));
+    let r = email_post(
+        &h,
+        "/api/auth/workos/email/start",
+        json!({ "email": "ana@example.test" }),
+    )
+    .await;
+    assert_eq!(r.status, 503);
+    assert_eq!(r.body, json!({ "error": "workos_unavailable" }));
+}
+
+#[tokio::test]
+async fn email_verify_redeems_an_invite_and_sets_the_session() {
+    let h = harness(&[]).await;
+    let code = invite(&h).await;
+    let r = email_post(
+        &h,
+        "/api/auth/workos/email/verify",
+        json!({ "email": "Ana@example.test", "code": "123456", "inviteCode": code }),
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.cookie("eex.session").is_some());
+    assert_eq!(r.body["user"]["sub"], SUB);
+    let calls = h.fake.calls();
+    assert_eq!(calls[0].0, "/user_management/authenticate");
+    assert_eq!(
+        calls[0].1["grant_type"],
+        "urn:workos:oauth:grant-type:magic-auth:code"
+    );
+    assert_eq!(calls[0].1["email"], "ana@example.test");
+    assert_eq!(calls[0].1["code"], "123456");
+    let mode: String = sqlx::query_scalar("SELECT auth_mode FROM members WHERE sub = ?")
+        .bind(SUB)
+        .fetch_one(&*h.db)
+        .await
+        .unwrap();
+    assert_eq!(mode, "workos");
+}
+
+#[tokio::test]
+async fn email_verify_lets_a_member_in_without_an_invite() {
+    let h = harness(&[]).await;
+    member(&h).await;
+    let r = email_post(
+        &h,
+        "/api/auth/workos/email/verify",
+        json!({ "email": "ana@example.test", "code": "123456" }),
+    )
+    .await;
+    assert_eq!(r.status, 200, "{}", r.body);
+    assert!(r.cookie("eex.session").is_some());
+}
+
+#[tokio::test]
+async fn email_verify_says_why_a_stranger_or_stale_invite_was_refused() {
+    let h = harness(&[]).await;
+    let expired = invite(&h).await;
+    sqlx::query("UPDATE invites SET expires_at = '2020-01-01T00:00:00.000Z'")
+        .execute(&*h.db)
+        .await
+        .unwrap();
+    for (invite_code, reason) in [(None, "no_invite"), (Some(expired), "invite_expired")] {
+        let mut body = json!({ "email": "ana@example.test", "code": "123456" });
+        if let Some(c) = invite_code {
+            body["inviteCode"] = c.into();
+        }
+        let r = email_post(&h, "/api/auth/workos/email/verify", body).await;
+        assert_eq!(r.status, 403, "{reason}");
+        assert_eq!(r.body, json!({ "status": "denied", "reason": reason }));
+        assert!(r.cookie("eex.session").is_none(), "{reason}");
+    }
+}
+
+#[tokio::test]
+async fn email_verify_maps_a_wrong_code_and_workos_down() {
+    let h = harness(&[]).await;
+    member(&h).await;
+    let body = json!({ "email": "ana@example.test", "code": "123456" });
+    h.fake
+        .reply(400, json!({ "code": "invalid_one_time_code" }));
+    let r = email_post(&h, "/api/auth/workos/email/verify", body.clone()).await;
+    assert_eq!(
+        (r.status, r.body.clone()),
+        (401, json!({ "error": "email_code_invalid" }))
+    );
+    h.fake.reply(500, json!({}));
+    let r = email_post(&h, "/api/auth/workos/email/verify", body).await;
+    assert_eq!(
+        (r.status, r.body.clone()),
+        (503, json!({ "error": "workos_unavailable" }))
+    );
+}
+
+#[tokio::test]
+async fn email_verify_rejects_a_malformed_code_without_calling_workos() {
+    let h = harness(&[]).await;
+    for code in ["", "12345", "abcdef", "123456789"] {
+        let r = email_post(
+            &h,
+            "/api/auth/workos/email/verify",
+            json!({ "email": "ana@example.test", "code": code }),
+        )
+        .await;
+        assert_eq!(r.status, 400, "{code}");
+    }
+    assert!(h.fake.calls().is_empty());
+}
