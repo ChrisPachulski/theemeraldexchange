@@ -1,0 +1,74 @@
+/* Inline email-code sign-in. Sits in the sign-in button stack and reuses
+   .walkthrough__signin-button for its submit, so it reads as the email
+   button opened up rather than a separate widget. */
+
+.email-signin {
+  display: grid;
+  gap: var(--s-2);
+  padding: var(--s-3);
+  border: 1px solid var(--hairline-emerald, var(--emerald));
+  border-radius: var(--r-md, var(--r-sm));
+  background: color-mix(in oklch, var(--surface) 70%, transparent);
+}
+
+.email-signin__label {
+  font-family: var(--font-display);
+  font-size: var(--t-xs);
+  font-weight: var(--w-ui);
+  letter-spacing: var(--tr-eyebrow);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.email-signin__address {
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+
+.email-signin__input {
+  width: 100%;
+  padding: var(--s-2) var(--s-3);
+  font-family: var(--font-body);
+  font-size: var(--t-md, 1rem);
+  color: var(--text);
+  background: color-mix(in oklch, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+
+.email-signin__input:focus-visible {
+  outline: none;
+  border-color: var(--emerald);
+  box-shadow: 0 0 0 4px var(--emerald-ghost, transparent);
+}
+
+.email-signin__input--code {
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+  letter-spacing: 0.3em;
+  text-align: center;
+}
+
+.email-signin__help {
+  margin: 0;
+  font-size: var(--t-xs);
+  line-height: 1.5;
+  color: var(--text-subtle);
+}
+
+.email-signin__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.email-signin__link:hover,
+.email-signin__link:focus-visible {
+  color: var(--text);
+}

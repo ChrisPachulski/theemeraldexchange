@@ -20,11 +20,17 @@ export function deniedMessage(reason: unknown): string {
     case 'access_revoked':
       return 'Your access to this library has been revoked. Ask the owner to restore it.'
     case 'workos_state_invalid':
-      return 'That sign-in link expired. Start the WorkOS sign-in again.'
+      return 'That sign-in took too long. Try again.'
     case 'workos_code_invalid':
-      return 'WorkOS rejected the sign-in. Try again.'
+      return "The sign-in didn't go through. Try again."
     case 'workos_unavailable':
-      return 'WorkOS is unreachable right now. Try again in a moment.'
+      return 'Sign-in is unreachable right now. Try again in a moment.'
+    case 'email_code_invalid':
+      return "That code didn't match or has expired. Check the latest email, or send a new code."
+    case 'invalid_email':
+      return "That doesn't look like an email address."
+    case 'invalid_request':
+      return 'Check the email and code, then try again.'
     default:
       return 'Access denied.'
   }

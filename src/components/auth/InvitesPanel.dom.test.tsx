@@ -88,7 +88,7 @@ describe('InvitesPanel sharing', () => {
     expect(text).toContain(`${window.location.origin}/#/invite/${code}`)
     expect(text).toContain('Pick one way to sign in')
     expect(text).toContain('No code needed')
-    expect(text).toContain('WorkOS, our sign-in service')
+    expect(text).not.toContain('WorkOS')
     expect(await screen.findByRole('button', { name: 'Message copied' })).toBeInTheDocument()
   })
 })

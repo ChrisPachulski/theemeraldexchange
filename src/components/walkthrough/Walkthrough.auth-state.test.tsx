@@ -63,13 +63,14 @@ describe('Walkthrough provider-specific progress', () => {
     expect(html).not.toContain('Signing in…')
   })
 
-  it('renders the WorkOS Google, Apple and email links in both blocks', () => {
+  it('renders the Google and Apple links and the email button in both blocks', () => {
     const html = renderToStaticMarkup(<Walkthrough />)
     expect(count(html, '>Sign in with Google<')).toBe(2)
     expect(count(html, 'provider=google')).toBe(2)
     expect(count(html, 'provider=apple')).toBe(2)
-    // Email goes to the hosted page: the start route with no provider at all.
+    // Email stays on this page: a button that opens the code form, never a
+    // link to the hosted page (the start route with no provider).
     expect(count(html, '>Sign in with email<')).toBe(2)
-    expect(count(html, '/api/auth/workos/start?"')).toBe(2)
+    expect(html).not.toMatch(/workos\/start(\?(invite=[^"&]*)?)?"/)
   })
 })

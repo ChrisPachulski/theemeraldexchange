@@ -22,7 +22,7 @@ async function openMenu(page: Page, user: MockUser) {
   await page.getByRole('button', { name: new RegExp(user.username) }).click()
 }
 
-test('the sign-in block offers email through the WorkOS hosted page, invite included', async ({ page }) => {
+test('the sign-in block signs in by emailed code on the page, invite included', async ({ page }) => {
   await installBackgroundMocks(page)
   await page.route('**/api/auth/methods', (route) =>
     route.fulfill(json({ plex: true, apple: false, google: false, workos: true })),
@@ -32,11 +32,20 @@ test('the sign-in block offers email through the WorkOS hosted page, invite incl
 
   const invite = 'A'.repeat(22)
   await page.getByRole('textbox', { name: /Invite code/ }).first().fill(invite)
-  const href = await page.getByRole('link', { name: 'Sign in with email' }).first().getAttribute('href')
-  const url = new URL(href!)
-  expect(url.pathname).toBe('/api/auth/workos/start')
-  expect(url.searchParams.has('provider')).toBe(false)
-  expect(url.searchParams.get('invite')).toBe(invite)
+  const bodies: Record<string, unknown> = {}
+  await page.route('**/api/auth/workos/email/*', (route) => {
+    const path = new URL(route.request().url()).pathname
+    bodies[path] = route.request().postDataJSON()
+    return route.fulfill(json(path.endsWith('/start') ? { ok: true } : { status: 'denied', reason: 'invite_expired' }, path.endsWith('/start') ? 200 : 403))
+  })
+  await page.getByRole('button', { name: 'Sign in with email' }).first().click()
+  await page.getByLabel('Your email').fill('ana@example.test')
+  await page.getByRole('button', { name: 'Email me a code' }).click()
+  await page.getByPlaceholder('6-digit code').fill('123456')
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('expired')
+  expect(bodies['/api/auth/workos/email/start']).toEqual({ email: 'ana@example.test' })
+  expect(bodies['/api/auth/workos/email/verify']).toEqual({ email: 'ana@example.test', code: '123456', inviteCode: invite })
 })
 
 test('the menu names the sign-in provider', async ({ page }) => {

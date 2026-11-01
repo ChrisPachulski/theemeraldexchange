@@ -6,6 +6,7 @@ import type { TrendingItem } from '../../lib/hooks/useTrending'
 import type { DotState } from '../search/FeedbackDots'
 import { inviteCodeError, useAuth } from '../../lib/auth'
 import { AppleSignInButton } from '../auth/AppleSignInButton'
+import { EmailSignIn } from '../auth/EmailSignIn'
 import { apiUrl } from '../../lib/api/base'
 import { deniedMessage } from '../../lib/auth'
 import './Walkthrough.css'
@@ -124,11 +125,7 @@ function SignInBlock({
         <ol className="walkthrough__steps">
           <li>Pick one way to sign in below. Any of them works.</li>
           {showWorkos && (
-            <li>
-              Email opens a plain white page from WorkOS, our sign-in service.
-              The first time, press Sign up, enter your email, then type the
-              6-digit code it sends you. There is no password.
-            </li>
+            <li>Email: type your address, then the 6-digit code we send you. No password.</li>
           )}
           <li>Next time, come back here and sign in the same way. No code needed.</li>
         </ol>
@@ -137,17 +134,17 @@ function SignInBlock({
         className="walkthrough__signin-buttons"
         disabled={pending || Boolean(codeError)}
       >
-        {/* No provider = the WorkOS hosted page, which carries email sign-in
-            for members whose identity is neither Google nor Apple. Listed
-            first: a new guest has one of these, rarely a Plex account. */}
+        {/* Google and Apple deep-link through WorkOS straight to the
+            provider; email stays on this page (EmailSignIn). Listed first: a
+            new guest has one of these, rarely a Plex account. */}
         {showWorkos &&
-          ([['google', 'Google'], ['apple', 'Apple'], [null, 'email']] as const).map(
+          ([['google', 'Google'], ['apple', 'Apple']] as const).map(
             ([provider, label]) => (
               <a
                 key={label}
                 className="walkthrough__signin-button"
                 href={apiUrl('/api/auth/workos/start', {
-                  ...(provider ? { provider } : {}),
+                  provider,
                   ...(code ? { invite: code } : {}),
                 })}
                 aria-disabled={pending || Boolean(codeError) ? true : undefined}
@@ -156,6 +153,13 @@ function SignInBlock({
               </a>
             ),
           )}
+        {showWorkos && (
+          <EmailSignIn
+            inviteCode={code || undefined}
+            disabled={pending || Boolean(codeError)}
+            idPrefix={inviteFieldId}
+          />
+        )}
         {showApple && <AppleSignInButton inviteCode={code || undefined} />}
         {showPlex && (
           <button
