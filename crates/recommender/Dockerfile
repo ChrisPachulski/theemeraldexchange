@@ -6,7 +6,7 @@
 # full workspace: the recommender depends on media-core and emerald-contracts.
 # CI builds this image; the NAS never compiles it.
 
-FROM rust:1.98-slim-bookworm@sha256:ff521445a372125ed4f76e1453a1f8098f2d05332d1601d30db1c1f62757e730 AS builder
+FROM rust:1.99-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400 AS builder
 
 WORKDIR /build
 
