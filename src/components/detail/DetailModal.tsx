@@ -566,17 +566,27 @@ function SeasonBrowser({
       }`
   const airDate = fmtAirDate(current.airDate)
   // The linked episode, while its season is the one shown. Scrolled to once
-  // its row exists (episodes load after the modal opens).
+  // its row exists, a frame later: this child effect runs before the modal's
+  // own open effects (focus the close button, scroll to the top), which would
+  // undo it when the episodes are already cached and render with the modal.
   const focused =
     focusEpisode != null && current.seasonNumber === defaultSeason ? focusEpisode : null
   const focusRef = useRef<HTMLLIElement | null>(null)
+  const focusTabRef = useRef<HTMLButtonElement | null>(null)
   const scrolledTo = useRef<string | null>(null)
   const focusKey = focused == null ? null : `${current.seasonNumber}:${focused}`
   const focusReady = focused != null && !!current.episodes?.some((e) => e.episodeNumber === focused)
   useEffect(() => {
-    if (!focusReady || focusKey === scrolledTo.current || !focusRef.current) return
-    scrolledTo.current = focusKey
-    focusRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    if (!focusReady || focusKey === scrolledTo.current) return
+    const frame = requestAnimationFrame(() => {
+      if (!focusRef.current) return
+      scrolledTo.current = focusKey
+      // Instant, not smooth: the modal's opening transition can cut a smooth
+      // scroll short and leave the page at the top.
+      focusTabRef.current?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'instant' })
+      focusRef.current.scrollIntoView({ block: 'center', behavior: 'instant' })
+    })
+    return () => cancelAnimationFrame(frame)
   }, [focusKey, focusReady])
 
   return (
@@ -590,6 +600,7 @@ function SeasonBrowser({
           return (
             <button
               key={s.seasonNumber}
+              ref={focused != null && s === current ? focusTabRef : undefined}
               type="button"
               role="tab"
               aria-selected={s === current}
