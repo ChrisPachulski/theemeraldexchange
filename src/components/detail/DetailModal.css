@@ -842,6 +842,12 @@ a.detail__btn {
 
 .detail__episode--future { opacity: 0.6; }
 
+/* The episode a shared link points at. */
+.detail__episode--focus {
+  background: color-mix(in oklch, var(--emerald-bg) 55%, transparent);
+  box-shadow: inset 0 0 0 1px var(--emerald-dim);
+}
+
 .detail__episode--play {
   cursor: pointer;
   transition: background var(--dur-fast) var(--ease);

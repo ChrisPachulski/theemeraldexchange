@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { nextHash, parseHash, takeIntent, type Route } from './router'
+import { nextHash, parseHash, splitEpisodeRef, takeIntent, type Route } from './router'
 
 // vitest runs in the `node` environment (see vitest.config.ts) where `window`
 // is undefined — there is no jsdom/happy-dom renderer and no @testing-library.
@@ -123,5 +123,42 @@ describe('open-title intents', () => {
     const bare = stubIntentHash('#/movies')
     expect(takeIntent('movies')).toBeNull()
     expect(bare).not.toHaveBeenCalled()
+  })
+})
+
+describe('episode links', () => {
+  const stubIntentHash = (h: string) => {
+    const replaceState = vi.fn()
+    vi.stubGlobal('window', { location: { hash: h }, history: { state: null, replaceState } })
+    return replaceState
+  }
+
+  it('routes a tv episode link to the tv tab and hands over the whole ref', () => {
+    const replaceState = stubIntentHash('#/tv/tvdb:73871/s9e8')
+    expect(parseHash()).toBe('tv')
+    expect(takeIntent('tv')).toBe('tvdb:73871/s9e8')
+    expect(replaceState).toHaveBeenCalledWith(null, '', '#/tv')
+  })
+
+  it('accepts an upper-case suffix and a library id', () => {
+    stubIntentHash('#/tv/12/S9E8')
+    expect(takeIntent('tv')).toBe('12/s9e8')
+  })
+
+  it('refuses an episode suffix on movies and live, and a malformed suffix', () => {
+    stubHash('#/movies/42/s1e1')
+    expect(parseHash()).toBe('home')
+    stubHash('#/live/200158440/s1e1')
+    expect(parseHash()).toBe('home')
+    stubHash('#/tv/tvdb:73871/s9')
+    expect(parseHash()).toBe('home')
+    stubHash('#/tv/tvdb:73871/e8')
+    expect(parseHash()).toBe('home')
+  })
+
+  it('splits a ref into the show and the episode', () => {
+    expect(splitEpisodeRef('tvdb:73871/s9e8')).toEqual({ show: 'tvdb:73871', season: 9, episode: 8 })
+    expect(splitEpisodeRef('12/s10e1')).toEqual({ show: '12', season: 10, episode: 1 })
+    expect(splitEpisodeRef('tvdb:73871')).toEqual({ show: 'tvdb:73871', season: null, episode: null })
   })
 })

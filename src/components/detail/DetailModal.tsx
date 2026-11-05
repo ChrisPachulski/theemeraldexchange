@@ -113,6 +113,9 @@ type Props = {
   /** Season the browser opens on (the resume target's, else the last
    *  watched); also opens the Seasons section. */
   defaultSeason?: number | null
+  /** Episode of `defaultSeason` a shared link points at: scrolled into view
+   *  and marked. */
+  focusEpisode?: number | null
   /** Movie-only: trigger a manual upgrade search. Admin + in-library. */
   onUpgrade?: () => void
   /** Whether the upgrade mutation is in flight (disables the button). */
@@ -179,6 +182,7 @@ export function DetailModal({
   onAddSeason,
   addingSeason,
   defaultSeason,
+  focusEpisode,
   onUpgrade,
   upgrading,
   playUrl,
@@ -395,6 +399,7 @@ export function DetailModal({
                 key={title}
                 seasons={shownSeasons}
                 defaultSeason={defaultSeason}
+                focusEpisode={focusEpisode}
                 onAddSeason={onAddSeason}
                 addingSeason={addingSeason}
               />
@@ -525,11 +530,13 @@ export function DetailModal({
 function SeasonBrowser({
   seasons,
   defaultSeason,
+  focusEpisode,
   onAddSeason,
   addingSeason,
 }: {
   seasons: SeasonRow[]
   defaultSeason?: number | null
+  focusEpisode?: number | null
   onAddSeason?: (seasonNumber: number) => void
   addingSeason?: number | null
 }) {
@@ -558,6 +565,19 @@ function SeasonBrowser({
         left == null ? '' : left ? ` · ${left} unwatched` : ' · All watched'
       }`
   const airDate = fmtAirDate(current.airDate)
+  // The linked episode, while its season is the one shown. Scrolled to once
+  // its row exists (episodes load after the modal opens).
+  const focused =
+    focusEpisode != null && current.seasonNumber === defaultSeason ? focusEpisode : null
+  const focusRef = useRef<HTMLLIElement | null>(null)
+  const scrolledTo = useRef<string | null>(null)
+  const focusKey = focused == null ? null : `${current.seasonNumber}:${focused}`
+  const focusReady = focused != null && !!current.episodes?.some((e) => e.episodeNumber === focused)
+  useEffect(() => {
+    if (!focusReady || focusKey === scrolledTo.current || !focusRef.current) return
+    scrolledTo.current = focusKey
+    focusRef.current.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }, [focusKey, focusReady])
 
   return (
     <section className="detail__section" aria-labelledby="detail-seasons">
@@ -612,7 +632,9 @@ function SeasonBrowser({
               .map((ep) => {
                 const future = ep.airDate ? new Date(ep.airDate).getTime() > now : false
                 const still = artSrc(ep.still, 342)
-                const className = `detail__episode${future ? ' detail__episode--future' : ''}${ep.hasFile ? ' detail__episode--ready' : ''}`
+                const isFocus = ep.episodeNumber === focused
+                const className = `detail__episode${future ? ' detail__episode--future' : ''}${ep.hasFile ? ' detail__episode--ready' : ''}${isFocus ? ' detail__episode--focus' : ''}`
+                const liRef = isFocus ? focusRef : undefined
                 const row = (
                   <>
                     <span className="detail__episode-thumb">
@@ -639,13 +661,13 @@ function SeasonBrowser({
                   </>
                 )
                 return ep.onPlay ? (
-                  <li key={ep.episodeNumber}>
+                  <li key={ep.episodeNumber} ref={liRef}>
                     <button type="button" className={`${className} detail__episode--play`} onClick={ep.onPlay}>
                       {row}
                     </button>
                   </li>
                 ) : (
-                  <li key={ep.episodeNumber} className={className}>
+                  <li key={ep.episodeNumber} ref={liRef} className={className}>
                     {row}
                   </li>
                 )

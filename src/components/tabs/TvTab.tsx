@@ -41,7 +41,7 @@ import { mediaApi } from '../../lib/api/media'
 import type { RelatedItem } from '../../lib/api/tmdb'
 import { episodeQueue } from '../media/playbackSession'
 import { withViewTransition } from '../../lib/viewTransition'
-import { useIntent } from '../../lib/router'
+import { splitEpisodeRef, useIntent } from '../../lib/router'
 import {
   filterAndSortLibrary,
   byTitleAsc,
@@ -222,6 +222,7 @@ export function TvTab() {
   const playEpisode = (ep: MediaEpisode) => {
     if (!viewing || localShowId == null) return
     const showTitle = viewing.title
+    setLinkedEpisode(null)
     setViewing(null)
     setPlayingEpisode({
       id: ep.id,
@@ -274,18 +275,20 @@ export function TvTab() {
   // entry if we own it, else the Discover detail. Shared by the strip and the
   // `#/tv/<term>` intent. The title fallback covers a `tmdb:` term Sonarr
   // can't resolve (Apple's openRelated).
-  const openLookup = async (term: string, fallbackTitle?: string) => {
+  const openLookup = async (term: string, fallbackTitle?: string): Promise<number | null> => {
     try {
       let results = await sonarr.lookup(term)
       if (!results[0] && fallbackTitle) results = await sonarr.lookup(fallbackTitle)
       const hit = results[0]
       if (!hit) {
         setToast("Couldn't find that show on TVDB")
-        return
+        return null
       }
       openIfAllowed(libraryByTvdb.get(hit.tvdbId) ?? hit)
+      return hit.tvdbId
     } catch (e) {
       setToast(e instanceof Error ? e.message : String(e))
+      return null
     }
   }
   const openRelated = async (item: RelatedItem) => {
@@ -323,12 +326,21 @@ export function TvTab() {
       setToast(e instanceof Error ? e.message : String(e))
     }
   }
-  // Open-a-title intent from another surface (Home shelves, Downloads).
+  // Open-a-title intent from another surface (Home shelves, Downloads), or a
+  // shared `#/tv/<ref>/s<N>e<N>` link: that show opens on that season with the
+  // episode in view. Keyed by tvdbId so another show opened later is unaffected.
+  const [linkedEpisode, setLinkedEpisode] = useState<{ tvdbId: number; season: number; episode: number } | null>(null)
   useIntent('tv', !library.isPending, (ref) => {
-    if (ref.includes(':')) return void openLookup(ref)
-    const series = library.data?.find((s) => s.id === Number(ref))
-    if (series) openIfAllowed(series)
+    const { show, season, episode } = splitEpisodeRef(ref)
+    const focus = (tvdbId: number | null) =>
+      setLinkedEpisode(tvdbId != null && season != null && episode != null ? { tvdbId, season, episode } : null)
+    if (show.includes(':')) return void openLookup(show).then(focus)
+    const series = library.data?.find((s) => s.id === Number(show))
+    if (!series) return
+    focus(series.tvdbId)
+    openIfAllowed(series)
   })
+  const focusedEpisode = viewing && linkedEpisode?.tvdbId === viewing.tvdbId ? linkedEpisode : null
 
   // Episode list only useful for in-library shows (it powers the
   // per-season disclosure inside DetailModal). Discover results don't
@@ -478,6 +490,7 @@ export function TvTab() {
         .catch(() => {})
         .finally(() => qc.invalidateQueries({ queryKey: ['sonarr', 'series'] }))
     }
+    setLinkedEpisode(null)
     setTransient(null)
     setViewing(null)
   }
@@ -722,7 +735,8 @@ export function TvTab() {
             ).length,
           }
         }) : undefined}
-        defaultSeason={playback.defaultSeason}
+        defaultSeason={focusedEpisode?.season ?? playback.defaultSeason}
+        focusEpisode={focusedEpisode?.episode ?? null}
         onAddSeason={isAdmin && viewing && 'id' in viewing ? (seasonNumber) => {
           const seriesId = (viewing as Series).id
           monitorSeasonMutation.mutate({ seriesId, seasonNumber })

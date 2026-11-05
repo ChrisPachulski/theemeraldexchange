@@ -9,13 +9,28 @@ const DEFAULT_ROUTE: Route = 'home'
 // Downloads, a person's filmography) can land on a specific title instead of
 // just the tab. Refs: movies = Radarr id or `tmdb:N`; tv = Sonarr id, `tvdb:N`
 // or `tmdb:N`; live = stream id, or `guide:<streamId>:<startUnixSecs>` for a
-// programme search hit to open in that channel's guide. The tab consumes it
-// once (useIntent).
+// programme search hit to open in that channel's guide. A tv ref may end in
+// `/s<N>e<N>` to open that season with that episode in view, so a shared link
+// can point at one episode. The tab consumes it once (useIntent).
 export type IntentRoute = 'movies' | 'tv' | 'live'
-const INTENT = /^(movies|tv|live)\/((?:tmdb:|tvdb:|guide:\d+:)?\d+)$/
+const INTENT = /^(movies|tv|live)\/((?:tmdb:|tvdb:|guide:\d+:)?\d+(?:\/s\d+e\d+)?)$/
+const EPISODE_SUFFIX = /^(.+)\/s(\d+)e(\d+)$/
 
 function rawHash(): string {
   return window.location.hash.replace(/^#\/?/, '').trim().toLowerCase()
+}
+
+/** The intent for this hash, or null; an episode suffix is tv-only. */
+function matchIntent(): RegExpExecArray | null {
+  const m = INTENT.exec(rawHash())
+  return m && (m[1] === 'tv' || !m[2].includes('/')) ? m : null
+}
+
+/** Split a tv ref into the show ref and the episode it asks for, if any. */
+export function splitEpisodeRef(ref: string): { show: string; season: number | null; episode: number | null } {
+  const m = EPISODE_SUFFIX.exec(ref)
+  if (!m) return { show: ref, season: null, episode: null }
+  return { show: m[1], season: Number(m[2]), episode: Number(m[3]) }
 }
 
 // ponytail: parseHash/nextHash/takeIntent are exported for the node-env unit
@@ -24,7 +39,7 @@ function rawHash(): string {
 export function parseHash(): Route {
   const raw = rawHash()
   if ((ROUTES as string[]).includes(raw)) return raw as Route
-  return (INTENT.exec(raw)?.[1] as Route | undefined) ?? DEFAULT_ROUTE
+  return (matchIntent()?.[1] as Route | undefined) ?? DEFAULT_ROUTE
 }
 
 export function nextHash(current: Route, next: Route): string | null {
@@ -40,7 +55,7 @@ export function openIntent(route: IntentRoute, ref: string | number) {
  *  hashchange) means a reload doesn't reopen it and a repeat open of the same
  *  title is a real hash change. */
 export function takeIntent(route: IntentRoute): string | null {
-  const m = INTENT.exec(rawHash())
+  const m = matchIntent()
   if (!m || m[1] !== route) return null
   window.history.replaceState(window.history.state, '', `#/${route}`)
   return m[2]
