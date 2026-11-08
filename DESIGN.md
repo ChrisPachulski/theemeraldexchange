@@ -393,7 +393,9 @@ bezel. The In-Library badge deliberately breaks its poster's corner (offset
 ### Signature: the atmosphere pair
 - **EmeraldMark** — the brand mark is a live Three.js brilliant-cut gem
   (`src/lib/gemScene.ts`), a single centred stone rendered beside the
-  wordmark in both navs and driving the animated favicon.
+  wordmark in both navs. The favicon and home-screen icons are the
+  Kraken Signet (`public/brand/kraken-signet-*.png`, `apple-touch-icon.png`),
+  the same art as the Apple app icon.
 - **Kraken** — the page background is a full-screen video loop
   (`public/kraken.webm`/`.mp4` on Home; the calmer `resting` variant on
   inner tabs), no pointer-events, behind everything. The static SVG
@@ -475,7 +477,7 @@ Deliberate, bounded departures; ceilings, not precedents.
   Originally a three-gem row, consolidated to a single centred gem in
   `36fc64c` (the row read as a noisy green stripe at mark sizes); the scene
   keeps a `gemCount` option but every placement renders the single variant.
-  Scope: the mark and favicon only.
+  Scope: the nav mark only.
 - **Kraken video atmosphere** (`Kraken.tsx`): the live background loop that
   supersedes the static constellation; it is also why backdrop-blur extends
   beyond a single nav pod (see The Earned Glass Rule).
