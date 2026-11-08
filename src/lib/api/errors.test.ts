@@ -107,6 +107,18 @@ describe('throwApiError', () => {
     })
   })
 
+  it('explains root_folder_reservation_in_flight instead of a bare 409', async () => {
+    const r = jsonResponse(
+      { error: 'root_folder_reservation_in_flight', reserved_bytes: 4e9, free_bytes: 1e11, path: '/tv' },
+      409,
+    )
+    await expect(throwApiError(r, 'Sonarr /series')).rejects.toMatchObject({
+      status: 409,
+      code: 'root_folder_reservation_in_flight',
+      message: expect.stringContaining('Try again in a few minutes'),
+    })
+  })
+
   it('uses data.message when the backend returns one', async () => {
     const r = jsonResponse({ message: 'Custom backend message' }, 500)
     await expect(throwApiError(r, 'Sonarr /series')).rejects.toMatchObject({

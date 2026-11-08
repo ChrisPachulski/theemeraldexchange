@@ -68,6 +68,12 @@ export async function throwApiError(res: Response, scope: string): Promise<never
       `Sonarr/Radarr cannot read the free-space value for ${path}. ` +
       `This usually means the drive is unmounted, freshly added, or the disk probe has not run yet. ` +
       `Wait a minute and retry, or check the mount on your NAS.`
+  } else if (code === 'root_folder_reservation_in_flight') {
+    // Another show's downloads are still being planned against this folder
+    // and the space left would not fit even one more episode. It settles in
+    // minutes, so the action is to wait, not to change anything.
+    message =
+      'Another show is still being queued for download to this folder. Try again in a few minutes.'
   } else if (code === 'unknown_root_folder') {
     const path = typeof data.path === 'string' ? data.path : 'the requested path'
     message = `Sonarr/Radarr does not list ${path} as a root folder. Pick a different folder or add it upstream.`
