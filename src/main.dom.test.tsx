@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   initTelemetryFromServer: vi.fn(() => new Promise<boolean>(() => {})),
-  mountAnimatedFavicon: vi.fn(),
   root: null as { unmount: () => void } | null,
 }))
 
@@ -24,9 +23,6 @@ vi.mock('react-dom/client', async (importOriginal) => {
 })
 vi.mock('./lib/telemetry', () => ({
   initTelemetryFromServer: mocks.initTelemetryFromServer,
-}))
-vi.mock('./lib/animatedFavicon', () => ({
-  mountAnimatedFavicon: mocks.mountAnimatedFavicon,
 }))
 vi.mock('./lib/hooks/useLimits', () => ({ useLimits: () => ({ data: {} }) }))
 vi.mock('./lib/hooks/usePolicy', () => ({
@@ -115,7 +111,6 @@ describe('SPA startup invite handling', () => {
     )
     expect(authProbeHashes.length).toBeGreaterThan(0)
     expect(authProbeHashes).toEqual(authProbeHashes.map(() => ''))
-    expect(mocks.mountAnimatedFavicon).toHaveBeenCalledOnce()
     expect(localSetItem).not.toHaveBeenCalled()
     for (const spy of consoleSpies) {
       expect(JSON.stringify(spy.mock.calls)).not.toContain(sentinel)

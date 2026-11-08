@@ -7,7 +7,6 @@ import { ErrorBoundary } from './components/ErrorBoundary'
 import { initTelemetryFromServer } from './lib/telemetry'
 import { consumeInviteFragment } from './lib/inviteFragment'
 import { consumeLinkFragment } from './lib/linkFragment'
-import { mountAnimatedFavicon } from './lib/animatedFavicon'
 import { setReduceMotion, storedReduceMotion } from './lib/reduceMotion'
 import App from './App'
 import './index.css'
@@ -33,5 +32,3 @@ createRoot(document.getElementById('root')!).render(
     </ErrorBoundary>
   </StrictMode>,
 )
-
-mountAnimatedFavicon()
