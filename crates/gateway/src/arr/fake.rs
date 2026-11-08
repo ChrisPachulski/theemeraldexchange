@@ -28,6 +28,9 @@ pub struct Route {
     pub hold: bool,
     #[serde(default)]
     pub delay_ms: u64,
+    /// Match only a JSON body carrying each of these fields.
+    #[serde(default)]
+    pub body: Option<serde_json::Map<String, Value>>,
 }
 
 impl Route {
@@ -41,7 +44,15 @@ impl Route {
             ct: "application/json".into(),
             hold: false,
             delay_ms: 0,
+            body: None,
         }
+    }
+
+    pub fn body_has(mut self, k: &str, v: Value) -> Route {
+        self.body
+            .get_or_insert_with(Default::default)
+            .insert(k.into(), v);
+        self
     }
 
     pub fn query(mut self, k: &str, v: &str) -> Route {
@@ -118,7 +129,7 @@ impl Fake {
             method: method.clone(),
             path: path.clone(),
             query,
-            body,
+            body: body.clone(),
             key_header,
             secret,
             bearer,
@@ -135,6 +146,7 @@ impl Fake {
                         .iter()
                         .flatten()
                         .all(|(k, v)| super::shared::query_first(&pairs, k) == v.as_str())
+                    && r.body.iter().flatten().all(|(k, v)| body.get(k) == Some(v))
             })
             .cloned();
         let Some(hit) = hit else {

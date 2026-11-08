@@ -387,3 +387,177 @@ async fn a_hang_up_during_the_add_post_still_grabs() {
     fake.until(|f| grab_posts(f) == 1).await;
     st.arr.idle().await;
 }
+
+/// With room for more than one capped episode beyond the floor, a held
+/// reservation does not refuse a second add: its own plan reserves
+/// atomically, so blocking it would only stall the household.
+#[tokio::test]
+async fn a_held_reservation_with_room_to_spare_lets_a_second_add_through() {
+    let fake = Fake::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (st, cookie) = sonarr_state(&dir, &fake, fast()).await;
+    let app = crate::router(st.clone());
+    let path = "/data/tv-roomy";
+    let mut routes = routes(path, 500.0 * GB, 200, false);
+    routes
+        .iter_mut()
+        .find(|r| r.method == "POST" && r.path.ends_with("/release"))
+        .unwrap()
+        .hold = true;
+    fake.set_routes(routes);
+
+    assert_eq!(monitor(&app, &cookie).await.status, 200);
+    fake.until(|f| grab_posts(f) == 1).await;
+    assert_eq!(pending(&st, path), FOUR_GB);
+
+    let add = json!({ "title": "Another Show", "rootFolderPath": path, "qualityProfileId": 7,
+                      "addOptions": { "searchForMissingEpisodes": true } });
+    let added = send(
+        &app,
+        json_req(
+            "POST",
+            "/api/sonarr/api/v3/series",
+            Some(&cookie),
+            Some(&add),
+        ),
+    )
+    .await;
+    assert_eq!(added.status, 201, "{}", added.body);
+    assert_eq!(fake.count("POST", "/sonarr/api/v3/series"), 1);
+    fake.release_held(8);
+    st.arr.idle().await;
+}
+
+const ONE_GB: f64 = GB;
+
+fn release(guid: &str, indexer: u64, weight: u64, ep: u64) -> Value {
+    json!({ "guid": guid, "indexerId": indexer, "indexer": format!("ix-{indexer}"),
+            "size": ONE_GB, "qualityWeight": weight,
+            "title": format!("Show S01E0{ep} {guid}"), "seasonNumber": 1, "episodeNumbers": [ep] })
+}
+
+/// Series 7 with `eps` season-1 episodes, the given releases, and one grab
+/// route per indexer id answering `status`.
+fn indexer_routes(path: &str, eps: u64, releases: Vec<Value>, grabs: &[(u64, u16)]) -> Vec<Route> {
+    let mut routes: Vec<Route> = routes(path, 500.0 * GB, 200, false)
+        .into_iter()
+        .filter(|r| !r.path.ends_with("/release") && !r.path.ends_with("/episode"))
+        .collect();
+    let episodes: Vec<Value> = (1..=eps)
+        .map(|e| json!({ "seasonNumber": 1, "episodeNumber": e, "hasFile": false }))
+        .collect();
+    routes.push(Route::new(
+        "GET",
+        "/sonarr/api/v3/episode",
+        200,
+        &json!(episodes),
+    ));
+    routes.push(Route::new(
+        "GET",
+        "/sonarr/api/v3/release",
+        200,
+        &json!(releases),
+    ));
+    for (ix, status) in grabs {
+        routes.push(
+            Route::new("POST", "/sonarr/api/v3/release", *status, &json!({}))
+                .body_has("indexerId", json!(ix)),
+        );
+    }
+    routes
+}
+
+fn grabbed_guids(fake: &Fake) -> Vec<(String, u64)> {
+    fake.take()
+        .into_iter()
+        .filter(|c| c.method == "POST" && c.path == "/sonarr/api/v3/release")
+        .map(|c| {
+            (
+                c.body["guid"].as_str().unwrap().to_string(),
+                c.body["indexerId"].as_u64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+fn last_error(dir: &tempfile::TempDir) -> String {
+    let log = std::fs::read_to_string(dir.path().join("grabs.jsonl")).unwrap();
+    let last: Value = serde_json::from_str(log.lines().last().unwrap()).unwrap();
+    assert_eq!(last["type"], "grab_failed", "{last}");
+    last["error"].as_str().unwrap().to_string()
+}
+
+/// The 2026-11-08 Voyager run: the preferred indexer hit its API grab limit
+/// and Sonarr answered every grab 409. Each chunk falls back to the other
+/// indexer; after two refusals the spent indexer is not asked again.
+#[tokio::test]
+async fn a_refusing_indexer_falls_back_and_is_skipped_once_spent() {
+    let fake = Fake::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (st, cookie) = sonarr_state(&dir, &fake, fast()).await;
+    let app = crate::router(st.clone());
+    let path = "/data/tv-refusing";
+    let releases = vec![
+        release("a1", 1, 100, 1),
+        release("a2", 1, 100, 2),
+        release("a3", 1, 100, 3),
+        release("b1", 2, 50, 1),
+        release("b2", 2, 50, 2),
+        release("b3", 2, 50, 3),
+    ];
+    fake.set_routes(indexer_routes(path, 3, releases, &[(1, 409), (2, 200)]));
+    assert_eq!(monitor(&app, &cookie).await.status, 200);
+    st.arr.idle().await;
+
+    let tried: Vec<String> = grabbed_guids(&fake).into_iter().map(|(g, _)| g).collect();
+    assert_eq!(tried, ["a1", "b1", "a2", "b2", "b3"]);
+    assert_eq!(pending(&st, path), 0.0);
+    let types = grab_types(&dir);
+    assert_eq!(types.iter().filter(|t| *t == "grab_succeeded").count(), 3);
+    assert_eq!(types.last().unwrap(), "grab_succeeded");
+}
+
+/// No fallback: a spent indexer's remaining chunks are skipped without a
+/// request, their bytes go straight back, and one summary names it.
+#[tokio::test]
+async fn a_spent_indexer_with_no_fallback_skips_and_releases() {
+    let fake = Fake::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (st, cookie) = sonarr_state(&dir, &fake, fast()).await;
+    let app = crate::router(st.clone());
+    let path = "/data/tv-spent";
+    let releases = (1..=5)
+        .map(|e| release(&format!("a{e}"), 1, 100, e))
+        .collect();
+    fake.set_routes(indexer_routes(path, 5, releases, &[(1, 409)]));
+    assert_eq!(monitor(&app, &cookie).await.status, 200);
+    st.arr.idle().await;
+
+    assert_eq!(grabbed_guids(&fake).len(), 2);
+    assert_eq!(pending(&st, path), 0.0);
+    let why = last_error(&dir);
+    assert!(why.starts_with("5 not grabbed"), "{why}");
+    assert!(why.contains("ix-1"), "{why}");
+}
+
+/// Sonarr itself failing stops the run after three grabs instead of
+/// spending the search budget on every remaining chunk.
+#[tokio::test]
+async fn repeated_grab_failures_stop_the_run() {
+    let fake = Fake::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (st, cookie) = sonarr_state(&dir, &fake, fast()).await;
+    let app = crate::router(st.clone());
+    let path = "/data/tv-broken";
+    let releases = (1..=5)
+        .map(|e| release(&format!("a{e}"), 1, 100, e))
+        .collect();
+    fake.set_routes(indexer_routes(path, 5, releases, &[(1, 500)]));
+    assert_eq!(monitor(&app, &cookie).await.status, 200);
+    st.arr.idle().await;
+
+    assert_eq!(grabbed_guids(&fake).len(), 3);
+    assert_eq!(pending(&st, path), 0.0);
+    let why = last_error(&dir);
+    assert!(why.contains("2 not attempted"), "{why}");
+}

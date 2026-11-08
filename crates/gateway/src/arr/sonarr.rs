@@ -577,9 +577,11 @@ async fn folders(st: &AppState) -> Result<Vec<Value>, Response> {
 }
 
 /// The fail-closed free-space gate. With `refuse_in_flight` it also refuses
-/// while another TV grab's planned bytes are reserved on the folder: the
-/// grab is asynchronous, so a second search-bearing request waits for that
-/// plan to settle instead of spending the same headroom twice.
+/// while another TV grab's planned bytes are reserved on the folder AND the
+/// headroom left after them cannot fit even one capped episode: the grab is
+/// asynchronous, so a request that would only contend for the same headroom
+/// waits for that plan to settle. With room to spare it proceeds; its own
+/// plan reserves atomically against the ledger, so it cannot overcommit.
 async fn space_gate(
     st: &AppState,
     root: Option<&Value>,
@@ -596,7 +598,8 @@ async fn space_gate(
     let (folder, available) = gate_root_folder_space(root, &folders, ledger, min_free(st))
         .map_err(|(status, body)| err(status, body))?;
     let reserved = ledger.pending_bytes(&folder);
-    if refuse_in_flight && reserved > 0.0 {
+    let contended = available - min_free(st) < max_episode_bytes(st);
+    if refuse_in_flight && reserved > 0.0 && contended {
         return Err(err(
             StatusCode::CONFLICT,
             json!({
@@ -1282,41 +1285,200 @@ async fn grab_tv_under_cap(
         log.record(SONARR, exceeds(why)).await;
         return Ok(());
     }
-    let _held = Held {
+    let mut held = Held {
         ledger,
         folder,
         bytes: planned,
     };
 
-    for pick in &picks {
-        let grab = tv_call(
-            st,
-            Method::POST,
-            "/api/v3/release",
-            Some(&grab_body(pick)),
-            t.tv_search,
+    // Sonarr answers a grab 409 when it cannot fetch the NZB from the
+    // indexer (an API grab limit, a 429). An indexer refused twice is spent
+    // for the rest of the run: its picks fall back to the next-best release
+    // on another indexer instead of spending a request per episode on it.
+    let mut strikes = Strikes::default();
+    let (mut failed_in_a_row, mut refused) = (0, 0);
+    for (i, pick) in picks.iter().enumerate() {
+        if failed_in_a_row >= MAX_FAILED_GRABS_IN_A_ROW {
+            let rest = picks.len() - i;
+            tracing::warn!(event = "tv-cap", series_id = %id_text, not_attempted = rest, "stopping grabs after repeated failures");
+            let why = format!(
+                "stopped after {failed_in_a_row} failed grabs in a row; {rest} not attempted"
+            );
+            log.record(
+                SONARR,
+                base.clone().put("type", "grab_failed").put("error", why),
+            )
+            .await;
+            break;
+        }
+        let reserved = field_f64(pick, "size");
+        let mut outcome = Outcome::Refused;
+        for cand in candidates(pick, &accepted) {
+            let ix = indexer_of(cand);
+            if strikes.spent(&ix) {
+                continue;
+            }
+            // A larger fallback reserves its difference first.
+            let extra = (field_f64(cand, "size") - reserved).max(0.0);
+            if extra > 0.0 {
+                if !ledger.reserve(folder, extra) {
+                    continue;
+                }
+                held.bytes += extra;
+            }
+            let grab = tv_call(
+                st,
+                Method::POST,
+                "/api/v3/release",
+                Some(&grab_body(cand)),
+                t.tv_search,
+            )
+            .await?;
+            record_grab(st, &base, &id_text, cand, &counts, &grab).await;
+            if grab.is_success() || grab.status == StatusCode::GATEWAY_TIMEOUT {
+                // An unconfirmed grab may have landed: keep its bytes and try
+                // no fallback, which could grab the same episodes twice.
+                strikes.clear(&ix);
+                outcome = if grab.is_success() {
+                    Outcome::Grabbed
+                } else {
+                    Outcome::Unconfirmed
+                };
+                break;
+            }
+            if extra > 0.0 {
+                ledger.release(folder, extra);
+                held.bytes -= extra;
+            }
+            if grab.status != StatusCode::CONFLICT {
+                outcome = Outcome::Failed;
+                break;
+            }
+            strikes.add(ix);
+        }
+        match outcome {
+            Outcome::Grabbed => failed_in_a_row = 0,
+            Outcome::Unconfirmed | Outcome::Failed => failed_in_a_row += 1,
+            Outcome::Refused => refused += 1,
+        }
+        // Nothing will download for this chunk; hand its bytes back now so
+        // the folder is not held for a grab that never happened.
+        if matches!(outcome, Outcome::Failed | Outcome::Refused) {
+            ledger.release(folder, reserved);
+            held.bytes = (held.bytes - reserved).max(0.0);
+        }
+    }
+    if refused > 0 {
+        let spent = strikes.spent_names(&accepted);
+        tracing::warn!(event = "tv-cap", series_id = %id_text, refused, indexers = %spent, "indexers refused grabs");
+        let why = format!("{refused} not grabbed: indexer refused the download ({spent})");
+        log.record(
+            SONARR,
+            base.clone().put("type", "grab_failed").put("error", why),
         )
-        .await?;
-        let size = field_f64(pick, "size");
-        let n = episode_count(pick, &counts).unwrap_or(1);
-        let name = pick
-            .get("title")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        tracing::info!(event = "tv-cap", title = %auth::js_slice(name, 80), size_gb = gb_2dp(size), size_gb_per_episode = gb_2dp(size / n as f64), episode_count = n, series_id = %id_text, status = grab.status.as_u16(), "grab");
-        let release = Obj::new()
-            .opt("title", pick.get("title"))
-            .opt("sizeBytes", pick.get("size"))
-            .opt("qualityWeight", pick.get("qualityWeight"))
-            .opt("seasonNumber", season(pick));
-        let ev = base
-            .clone()
-            .put("type", grab_event_type(&grab))
-            .put("status", grab.status.as_u16())
-            .put("release", release);
-        log.record(SONARR, ev).await;
+        .await;
     }
     Ok(())
+}
+
+/// Consecutive failed grabs (Sonarr or the download client erroring, not an
+/// indexer refusal) after which a run stops: each can cost the full search
+/// budget, and the folder's reservation is held meanwhile.
+const MAX_FAILED_GRABS_IN_A_ROW: usize = 3;
+
+/// Indexer refusals before an indexer is skipped for the rest of the run.
+const INDEXER_STRIKES: u32 = 2;
+
+enum Outcome {
+    Grabbed,
+    /// The grab timed out; it may still have landed.
+    Unconfirmed,
+    /// Sonarr or the download client errored.
+    Failed,
+    /// Every candidate's indexer refused, or was already spent.
+    Refused,
+}
+
+/// Refusals per indexer within one grab run.
+#[derive(Default)]
+struct Strikes(Vec<(String, u32)>);
+
+impl Strikes {
+    fn spent(&self, ix: &str) -> bool {
+        self.0.iter().any(|(k, n)| k == ix && *n >= INDEXER_STRIKES)
+    }
+
+    fn add(&mut self, ix: String) {
+        match self.0.iter_mut().find(|(k, _)| *k == ix) {
+            Some((_, n)) => *n += 1,
+            None => self.0.push((ix, 1)),
+        }
+    }
+
+    fn clear(&mut self, ix: &str) {
+        self.0.retain(|(k, _)| k != ix);
+    }
+
+    /// The refusing indexers by name where a release carried one.
+    fn spent_names(&self, releases: &[&Value]) -> String {
+        let names: Vec<String> = self
+            .0
+            .iter()
+            .map(|(ix, _)| {
+                releases
+                    .iter()
+                    .find(|r| indexer_of(r) == *ix)
+                    .and_then(|r| r.get("indexer").and_then(Value::as_str))
+                    .map_or_else(|| format!("indexer {ix}"), str::to_string)
+            })
+            .collect();
+        names.join(", ")
+    }
+}
+
+fn indexer_of(r: &Value) -> String {
+    r.get("indexerId").map(js_str).unwrap_or_default()
+}
+
+/// The pick, then the other accepted releases for the same chunk, best
+/// first: the higher qualityWeight, then the smaller release.
+fn candidates<'a>(pick: &'a Value, accepted: &[&'a Value]) -> Vec<&'a Value> {
+    let key = chunk_key(pick);
+    let mut rest: Vec<&Value> = accepted
+        .iter()
+        .copied()
+        .filter(|r| !std::ptr::eq(*r, pick) && chunk_key(r) == key)
+        .collect();
+    rest.sort_by(|a, b| rank(a, b));
+    std::iter::once(pick).chain(rest).collect()
+}
+
+async fn record_grab(
+    st: &AppState,
+    base: &Obj,
+    id_text: &str,
+    pick: &Value,
+    counts: &Counts,
+    grab: &Reply,
+) {
+    let size = field_f64(pick, "size");
+    let n = episode_count(pick, counts).unwrap_or(1);
+    let name = pick
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    tracing::info!(event = "tv-cap", title = %auth::js_slice(name, 80), size_gb = gb_2dp(size), size_gb_per_episode = gb_2dp(size / n as f64), episode_count = n, series_id = %id_text, status = grab.status.as_u16(), "grab");
+    let release = Obj::new()
+        .opt("title", pick.get("title"))
+        .opt("sizeBytes", pick.get("size"))
+        .opt("qualityWeight", pick.get("qualityWeight"))
+        .opt("seasonNumber", season(pick));
+    let ev = base
+        .clone()
+        .put("type", grab_event_type(grab))
+        .put("status", grab.status.as_u16())
+        .put("release", release);
+    st.arr.grabs.record(SONARR, ev).await;
 }
 
 #[cfg(test)]
