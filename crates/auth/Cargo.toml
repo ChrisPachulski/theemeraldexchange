@@ -37,7 +37,7 @@ subtle = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1", features = ["sync", "rt", "time"] }
 # The token-sweep schedule (node-cron syntax), as crates/iptv parses it.
-croner = "3"
+croner = "4"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
