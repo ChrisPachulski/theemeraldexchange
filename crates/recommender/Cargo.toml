@@ -45,7 +45,7 @@ candle-core = "0.11"
 candle-nn = "0.11"
 candle-transformers = "0.11"
 # fancy-regex instead of the default onig/esaxx C++ builds.
-tokenizers = { version = "0.22", default-features = false, features = ["fancy-regex"] }
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
 # The encoder's capped thread pool.
 rayon = "1"
 # featurize's perturbation seeds (blake2s, 4-byte digest).
