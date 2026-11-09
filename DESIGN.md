@@ -393,9 +393,12 @@ bezel. The In-Library badge deliberately breaks its poster's corner (offset
 ### Signature: the atmosphere pair
 - **EmeraldMark** — the brand mark is a live Three.js brilliant-cut gem
   (`src/lib/gemScene.ts`), a single centred stone rendered beside the
-  wordmark in both navs. The favicon and home-screen icons are the
-  Kraken Signet (`public/brand/kraken-signet-*.png`, `apple-touch-icon.png`),
-  the same art as the Apple app icon.
+  wordmark in both navs. The home-screen icon (`apple-touch-icon.png`) is
+  the Kraken Signet, the same art as the Apple app icon. The tab icons
+  (`public/brand/kraken-mark-{16,32,192}.png`) are its small-size cut: a
+  wider stone filling the square, a thicker, brighter rim, and only the
+  kraken's black head and lit eyes inside, because the full painting is
+  unreadable at 16 and 32 px.
 - **Kraken** — the page background is a full-screen video loop
   (`public/kraken.webm`/`.mp4` on Home; the calmer `resting` variant on
   inner tabs), no pointer-events, behind everything. The static SVG
