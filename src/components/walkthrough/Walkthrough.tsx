@@ -30,6 +30,20 @@ const DEMO_STRIP: TrendingItem[] = [
   { id: 76479, title: 'The Boys', posterPath: '/2zmTngn1tYC1AvfnrFLhxeD82hz.jpg', year: 2019 },
 ]
 
+// iPhone and iPad (iPadOS reports a Mac with touch): the Emerald app can take
+// the invite from here, so an invitee who installed it after opening the link
+// never types the server or the code.
+function isAppleTouchDevice(): boolean {
+  if (typeof navigator === 'undefined') return false
+  return /iPhone|iPad|iPod/.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+}
+
+function appConnectLink(code: string): string {
+  const origin = typeof window === 'undefined' ? '' : window.location.origin
+  return `emerald://connect?url=${encodeURIComponent(origin)}&code=${encodeURIComponent(code)}`
+}
+
 // Visitors paste whatever the owner sent: the bare code, or the whole invite
 // link. Pull the code out of a link so both work.
 function extractInviteCode(raw: string): string {
@@ -121,6 +135,14 @@ function SignInBlock({
           </button>
         </p>
       )}
+      {invited && isAppleTouchDevice() && (
+        <div className="walkthrough__signin-hint">
+          <a className="walkthrough__signin-button" href={appConnectLink(code)}>
+            Open in the Emerald app
+          </a>
+          <p>Have the Emerald app? It opens there with this invite filled in.</p>
+        </div>
+      )}
       {invited ? (
         <ol className="walkthrough__steps">
           <li>Pick one way to sign in below. Any of them works.</li>
@@ -128,6 +150,10 @@ function SignInBlock({
             <li>Email: type your address, then the 6-digit code we send you. No password.</li>
           )}
           <li>Next time, come back here and sign in the same way. No code needed.</li>
+          <li>
+            Apple TV: once you are signed in here, open Emerald on the TV, choose
+            Connect to The Emerald Exchange, then Sign in with your phone.
+          </li>
         </ol>
       ) : null}
       <fieldset

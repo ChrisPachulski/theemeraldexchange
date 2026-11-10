@@ -1,4 +1,18 @@
 {
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["8PS43TX4WW.com.theemeraldexchange.app"],
+        "components": [
+          {
+            "/": "/*",
+            "#": "/invite/*",
+            "comment": "A shared invite link opens the app with the server and code filled in"
+          }
+        ]
+      }
+    ]
+  },
   "webcredentials": {
     "apps": ["8PS43TX4WW.com.theemeraldexchange.app"]
   }
