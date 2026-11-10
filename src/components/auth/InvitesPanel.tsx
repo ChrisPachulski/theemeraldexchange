@@ -71,6 +71,9 @@ function inviteMessage(origin: string, code: string, expiresAt: string | null): 
     '2. Pick one way to sign in: Google, Apple, email, or Plex. Email sends you a 6-digit code; there is no password.',
     `3. Next time, go to ${origin} and sign in the same way. No code needed.`,
     '',
+    'On iPhone or iPad with the Emerald app, the link opens the app with everything filled in.',
+    'On Apple TV: sign in with the link first, then in Emerald on the TV choose Connect to The Emerald Exchange and Sign in with your phone.',
+    '',
     `The link works once${expiresAt ? ` and expires ${fmtDate(expiresAt)}` : ''}.`,
   ].join('\n')
 }
