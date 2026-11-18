@@ -45,10 +45,25 @@ describe('public Apple release pages', () => {
     const association = JSON.parse(
       read('public/.well-known/apple-app-site-association'),
     ) as {
+      applinks?: unknown
       webcredentials?: { apps?: string[] }
     }
 
     expect(association).toEqual({
+      applinks: {
+        details: [
+          {
+            appIDs: ['8PS43TX4WW.com.theemeraldexchange.app'],
+            components: [
+              {
+                '/': '/*',
+                '#': '/invite/*',
+                comment: 'A shared invite link opens the app with the server and code filled in',
+              },
+            ],
+          },
+        ],
+      },
       webcredentials: {
         apps: ['8PS43TX4WW.com.theemeraldexchange.app'],
       },
