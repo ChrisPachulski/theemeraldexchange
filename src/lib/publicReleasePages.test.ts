@@ -60,6 +60,11 @@ describe('public Apple release pages', () => {
                 '#': '/invite/*',
                 comment: 'A shared invite link opens the app with the server and code filled in',
               },
+              {
+                '/': '/*',
+                '#': '/link/*',
+                comment: "A TV's sign-in QR opens the app, which approves the TV in one tap",
+              },
             ],
           },
         ],
