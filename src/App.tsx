@@ -152,6 +152,7 @@ function Shell() {
       {linkCode !== null && (
         <LinkDeviceModal
           initialCode={linkCode}
+          autoSubmit
           onClose={() => {
             clearPendingLinkCode()
             setLinkCode(null)
