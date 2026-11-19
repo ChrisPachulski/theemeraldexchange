@@ -282,3 +282,18 @@ fn passes_the_forwarded_host_through_without_an_allowlist() {
     headers.insert("x-forwarded-proto", HeaderValue::from_static("gopher"));
     assert_eq!(public_base_url(&headers, &[]), "http://localhost");
 }
+
+#[test]
+fn stills_map_episode_numbers_to_cdn_urls_and_skip_missing_ones() {
+    let season = serde_json::json!({ "episodes": [
+        { "episode_number": 1, "still_path": "/a.jpg" },
+        { "episode_number": 2, "still_path": null },
+        { "episode_number": 3 },
+        { "episode_number": 4, "still_path": "/d.jpg" },
+    ]});
+    let stills = super::project_stills(&season);
+    assert_eq!(stills.len(), 2);
+    assert_eq!(stills["1"], "https://image.tmdb.org/t/p/w780/a.jpg");
+    assert_eq!(stills["4"], "https://image.tmdb.org/t/p/w780/d.jpg");
+    assert!(super::project_stills(&serde_json::json!({})).is_empty());
+}
