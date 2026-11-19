@@ -219,7 +219,12 @@ async fn stills(State(st): State<AppState>, _auth: auth::RequireAuth, uri: Uri) 
     let Some(season) = query_first(&q, "season").and_then(|s| s.parse::<u32>().ok()) else {
         return err(StatusCode::BAD_REQUEST, "invalid_season");
     };
-    let find = tmdb_fetch(&st, &format!("/find/{tvdb_id}"), &[("external_source", "tvdb_id")]).await;
+    let find = tmdb_fetch(
+        &st,
+        &format!("/find/{tvdb_id}"),
+        &[("external_source", "tvdb_id")],
+    )
+    .await;
     if !find.is_success() {
         return failed("tmdb_find_failed", &find);
     }
@@ -251,7 +256,10 @@ fn project_stills(season: &Value) -> IndexMap<String, Value> {
         .flatten()
         .filter_map(|e| {
             let n = e.get("episode_number").and_then(Value::as_u64)?;
-            let path = e.get("still_path").and_then(Value::as_str).filter(|p| p.starts_with('/'))?;
+            let path = e
+                .get("still_path")
+                .and_then(Value::as_str)
+                .filter(|p| p.starts_with('/'))?;
             Some((n.to_string(), Value::String(format!("{STILL_BASE}{path}"))))
         })
         .collect()
