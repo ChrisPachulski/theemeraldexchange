@@ -35,6 +35,7 @@ const RELATED_CAP: usize = 20;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/tmdb/credits", get(credits))
+        .route("/api/tmdb/stills", get(stills))
         .route("/api/tmdb/person/{person_id}", get(person))
         .route("/api/tmdb/person/{person_id}/credits", get(person_credits))
         .route("/api/tmdb/trending/{kind}", get(trending))
@@ -196,6 +197,64 @@ async fn credits(State(st): State<AppState>, _auth: auth::RequireAuth, uri: Uri)
         }
         _ => err(StatusCode::BAD_REQUEST, "invalid_query"),
     }
+}
+
+// --- episode stills --------------------------------------------------------------------
+
+/// TMDB's still CDN at a TV card's size.
+const STILL_BASE: &str = "https://image.tmdb.org/t/p/w780";
+
+/// GET /api/tmdb/stills?tvdbId=&season=: `{ stills: { "<episode>": url } }`,
+/// TMDB's per-episode stills for one season. Sonarr has no screenshot for many
+/// older shows, so the apps' episode cards all showed the same series art
+/// (24 on the Apple TV, 2026-11-18). An unknown show or season is empty.
+async fn stills(State(st): State<AppState>, _auth: auth::RequireAuth, uri: Uri) -> Response {
+    if !st.config.tmdb_configured() {
+        return not_configured();
+    }
+    let q = query_pairs(&uri);
+    let Some(tvdb_id) = positive_id(query_first(&q, "tvdbId")) else {
+        return err(StatusCode::BAD_REQUEST, "invalid_tvdbId");
+    };
+    let Some(season) = query_first(&q, "season").and_then(|s| s.parse::<u32>().ok()) else {
+        return err(StatusCode::BAD_REQUEST, "invalid_season");
+    };
+    let find = tmdb_fetch(&st, &format!("/find/{tvdb_id}"), &[("external_source", "tvdb_id")]).await;
+    if !find.is_success() {
+        return failed("tmdb_find_failed", &find);
+    }
+    let Some(data) = parse(&find) else {
+        return internal();
+    };
+    let Some(id) = data.pointer("/tv_results/0/id").filter(|v| truthy(v)) else {
+        return Json(json!({ "stills": {} })).into_response();
+    };
+    let reply = tmdb_fetch(&st, &format!("/tv/{}/season/{season}", js_string(id)), &[]).await;
+    if reply.status == StatusCode::NOT_FOUND {
+        return Json(json!({ "stills": {} })).into_response();
+    }
+    if !reply.is_success() {
+        return failed("tmdb_season_failed", &reply);
+    }
+    let Some(body) = parse(&reply) else {
+        return internal();
+    };
+    Json(json!({ "stills": project_stills(&body) })).into_response()
+}
+
+/// Episode number -> still URL, for the episodes TMDB has a still for.
+fn project_stills(season: &Value) -> IndexMap<String, Value> {
+    season
+        .get("episodes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| {
+            let n = e.get("episode_number").and_then(Value::as_u64)?;
+            let path = e.get("still_path").and_then(Value::as_str).filter(|p| p.starts_with('/'))?;
+            Some((n.to_string(), Value::String(format!("{STILL_BASE}{path}"))))
+        })
+        .collect()
 }
 
 // --- person ----------------------------------------------------------------------------
