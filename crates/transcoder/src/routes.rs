@@ -594,7 +594,8 @@ async fn grant(
 /// the faster-than-realtime encoder reaching a freshly-requested frontier
 /// segment; bounded so a request for a segment that will never exist (e.g. a
 /// far-forward seek past where the encoder will reach in time) can't hang.
-const NATIVE_SEGMENT_WAIT: Duration = Duration::from_secs(20);
+/// Shared with the gateway, whose transcode timeout is derived from it.
+const NATIVE_SEGMENT_WAIT: Duration = media_core::playback_budget::NATIVE_ASSET_WAIT;
 const NATIVE_SEGMENT_POLL: Duration = Duration::from_millis(500);
 
 /// True for native Apple HLS clients (AVPlayer / AVKit on iOS, tvOS, Safari),

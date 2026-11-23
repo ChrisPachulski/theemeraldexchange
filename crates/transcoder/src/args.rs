@@ -349,6 +349,8 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
     // `subtitles` filter, which runs on CPU frames the GPU path doesn't have. The
     // caller gates `hw_decode` on a HW-decodable source codec, since
     // -hwaccel_output_format vaapi has no software fallback for an undecodable one.
+    // Dolby Vision rides the same pipeline (libplacebo applies the RPU on the
+    // GPU); the caller only sets `hw_decode` for it on a VAAPI-decodable source.
     let full_hw = hw_decode
         && matches!(encoder, HwEncoder::Vaapi)
         && matches!(
@@ -356,8 +358,9 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
             VideoOp::EncodeH264 {
                 burn_subtitle_index: None,
                 ..
-            }
+            } | VideoOp::EncodeDolbyVision { .. }
         );
+    let is_dolby_vision = matches!(video, VideoOp::EncodeDolbyVision { .. });
 
     // VAAPI and QSV both encode from Intel hardware surfaces, so they need a
     // device initialized BEFORE -i (a global option) and the filtergraph
@@ -400,8 +403,9 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
     // Suppress the VAAPI full-HW decode route for the AV1/VP9 tone-map case (its
     // surfaces can't reach Vulkan) — everything else keeps its prior gate.
     let full_hw = full_hw && !cpu_vulkan_tonemap;
-    // Full-HW (VAAPI-decode) HDR tone-map: hevc/h264 only, needs a Vulkan device.
-    let full_hw_tonemap = full_hw && is_hdr_tonemap;
+    // Full-HW (VAAPI-decode) HDR tone-map or Dolby Vision: hevc/h264 only, needs
+    // a Vulkan device for libplacebo.
+    let full_hw_tonemap = full_hw && (is_hdr_tonemap || is_dolby_vision);
     if cpu_vulkan_tonemap {
         // No -hwaccel: decode on the CPU. Both a Vulkan device (for libplacebo)
         // and a VAAPI device (for the h264_vaapi encode the filtergraph hwmaps
@@ -441,12 +445,14 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         }
     }
 
-    // Dolby Vision re-encode runs through libplacebo — a VULKAN filter — which
-    // applies the DV RPU. Initialize a Vulkan device (Mesa ANV on the iGPU)
-    // BEFORE -i. Decode stays on the CPU (libplacebo `hwupload`s CPU frames into
-    // Vulkan), so this path deliberately uses NO `-hwaccel`; full_hw /
-    // hw_surface_reencode above never fire for it (they match only EncodeH264).
-    if matches!(video, VideoOp::EncodeDolbyVision { .. }) {
+    // Software fallback for a Dolby Vision re-encode (no VAAPI full-HW: another
+    // encoder, a failed boot probe, or a source the iGPU cannot decode). It
+    // still runs libplacebo, a VULKAN filter, which applies the DV RPU, so
+    // initialize a Vulkan device (Mesa ANV on the iGPU) BEFORE -i. Decode stays
+    // on the CPU (libplacebo `hwupload`s CPU frames into Vulkan) and the encode
+    // is libx264: about 0.5x realtime for a 4K source on the NAS, which is why
+    // the full-HW route above is preferred whenever it is available.
+    if is_dolby_vision && !full_hw {
         push(&mut a, "-init_hw_device");
         push(&mut a, "vulkan");
     }
@@ -542,33 +548,7 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
             // Alder Lake exposes, so ffmpeg uses it deterministically rather than
             // probing for the absent full entrypoint.
             if matches!(encoder, HwEncoder::Vaapi) {
-                push(&mut a, "-low_power");
-                push(&mut a, "1");
-                // Quality knobs for the VDEnc fixed-function pipe (every flag
-                // here is a VAAPI option — never emit them for libx264/NVENC/
-                // VideoToolbox, whose option namespaces differ):
-                // * QVBR: quality-targeted rate control inside the -b:v/
-                //   -maxrate envelope — right for VOD HLS, where dumb VBR
-                //   over-spends flat scenes and starves action. global_quality
-                //   23 ≈ the x264-crf-like sweet spot for this mode.
-                // * -profile:v high: CABAC entropy coding, ~10-15% efficiency
-                //   over the driver's default at zero cost.
-                // * -compression_level 2: pin target-usage to a quality tier;
-                //   unset, the iHD driver default (TU4, historically silently
-                //   promoted toward TU7) trades quality for speed we don't
-                //   need on a faster-than-realtime VOD encode.
-                // * -bf 2: Gen12 VDEnc supports Low-Delay-B references —
-                //   modest efficiency gain; >2 risks driver rejection.
-                push(&mut a, "-rc_mode");
-                push(&mut a, "QVBR");
-                push(&mut a, "-global_quality");
-                push(&mut a, "23");
-                push(&mut a, "-profile:v");
-                push(&mut a, "high");
-                push(&mut a, "-compression_level");
-                push(&mut a, "2");
-                push(&mut a, "-bf");
-                push(&mut a, "2");
+                push_vaapi_h264_quality(&mut a);
             } else {
                 // CPU encodes: `veryfast` only where wall-clock matters (live
                 // -re pacing); a finite VOD title encodes faster than realtime
@@ -669,12 +649,39 @@ pub fn ffmpeg_args_for(spec: &ArgSpec<'_>) -> Vec<String> {
         VideoOp::EncodeDolbyVision {
             scale_to_height,
             source_height,
+        } if full_hw => {
+            // Full-HW: VAAPI decode -> Vulkan (libplacebo applies the RPU,
+            // tone-maps and scales) -> VAAPI h264. Same encoder settings, rate
+            // ladder and forced keyframes as every other iGPU re-encode, so the
+            // synthesized native VOD manifest matches the segments one-for-one.
+            push(&mut a, "-c:v");
+            push(&mut a, encoder.h264_encoder());
+            push_vaapi_h264_quality(&mut a);
+            let (br, maxrate, bufsize) = h264_rate_control(
+                scale_to_height.or(*source_height),
+                source_avg_kbps,
+                client_max_kbps,
+            );
+            push(&mut a, "-b:v");
+            a.push(format!("{br}k"));
+            push(&mut a, "-maxrate");
+            a.push(format!("{maxrate}k"));
+            push(&mut a, "-bufsize");
+            a.push(format!("{bufsize}k"));
+            push(&mut a, "-force_key_frames");
+            a.push(format!("expr:gte(t,n_forced*{HLS_SEGMENT_SECS})"));
+            push(&mut a, "-vf");
+            a.push(build_vaapi_dv_filter(*scale_to_height));
+        }
+        VideoOp::EncodeDolbyVision {
+            scale_to_height,
+            source_height,
         } => {
-            // libplacebo (Vulkan) applies the DV RPU and tone-maps to BT.709
-            // SDR; the iGPU's VAAPI encoder can't consume Vulkan frames, so the
-            // encode lands on the CPU (libx264). Forced keyframes keep segments
-            // exactly HLS_SEGMENT_SECS long, so the synthesized native VOD
-            // manifest still matches the on-disk segments one-for-one.
+            // Software fallback: libplacebo (Vulkan) applies the DV RPU and
+            // tone-maps to BT.709 SDR on CPU-decoded frames, then libx264
+            // encodes. Forced keyframes keep segments exactly HLS_SEGMENT_SECS
+            // long, so the synthesized native VOD manifest still matches the
+            // on-disk segments one-for-one.
             push(&mut a, "-c:v");
             push(&mut a, "libx264");
             push(&mut a, "-preset");
@@ -956,6 +963,60 @@ fn build_cpu_vulkan_tonemap_filter(scale_to_height: Option<i64>) -> String {
     }
 }
 
+/// The VAAPI H.264 options every iGPU re-encode uses (plain, HDR tone-map and
+/// Dolby Vision alike). Every flag is a VAAPI option, never emitted for
+/// libx264/NVENC/VideoToolbox, whose option namespaces differ:
+/// * `-low_power 1`: the Low-Power entrypoint, the only one Alder Lake exposes,
+///   pinned so ffmpeg does not probe for the absent full entrypoint. VAAPI has
+///   no preset concept, so none is passed.
+/// * QVBR: quality-targeted rate control inside the -b:v/-maxrate envelope,
+///   right for VOD HLS, where dumb VBR over-spends flat scenes and starves
+///   action. global_quality 23 is the x264-crf-like sweet spot for this mode.
+/// * `-profile:v high`: CABAC entropy coding, ~10-15% efficiency over the
+///   driver's default at zero cost.
+/// * `-compression_level 2`: pin target-usage to a quality tier; unset, the iHD
+///   driver default (TU4, historically silently promoted toward TU7) trades
+///   quality for speed a faster-than-realtime VOD encode does not need.
+/// * `-bf 2`: Gen12 VDEnc supports Low-Delay-B references, a modest efficiency
+///   gain; more than 2 risks driver rejection.
+fn push_vaapi_h264_quality(a: &mut Vec<String>) {
+    for s in [
+        "-low_power",
+        "1",
+        "-rc_mode",
+        "QVBR",
+        "-global_quality",
+        "23",
+        "-profile:v",
+        "high",
+        "-compression_level",
+        "2",
+        "-bf",
+        "2",
+    ] {
+        a.push(s.to_string());
+    }
+}
+
+/// Full-hardware Dolby Vision filtergraph: VAAPI-decoded HEVC surfaces are
+/// mapped to Vulkan, libplacebo applies the per-frame RPU and tone-maps to
+/// BT.709 SDR (scaling in the same pass), and the result is mapped back to a
+/// VAAPI surface for h264_vaapi. Nothing touches the CPU. The HEVC decoder
+/// attaches the RPU side data on the hardware path too: the frame grab of The
+/// Polar Express (Profile 5) matched the CPU-decoded reference, while the
+/// same frame without `apply_dolbyvision` came out green and magenta.
+/// Measured 2.6x realtime on the NAS for a 3840x1608 P5 source scaled to 1080p,
+/// against 0.47x for the CPU-decode + libx264 path (2026-11-23).
+fn build_vaapi_dv_filter(scale_to_height: Option<i64>) -> String {
+    let placebo = "libplacebo=apply_dolbyvision=true:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=nv12";
+    match scale_to_height {
+        Some(h) => {
+            format!("hwmap=derive_device=vulkan,{placebo}:w=-2:h={h},hwmap=derive_device=vaapi")
+        }
+        None => format!("hwmap=derive_device=vulkan,{placebo},hwmap=derive_device=vaapi"),
+    }
+}
+
 fn build_vaapi_hw_filter(scale_to_height: Option<i64>, tone_map: bool) -> String {
     // HDR->SDR: libplacebo on Vulkan, NOT tonemap_vaapi. tonemap_vaapi errors
     // "No mastering display data from input" -> "Invalid argument" on HDR10 lacking
@@ -1155,10 +1216,87 @@ mod tests {
         assert!(!alt.contains("0:a:1"), "{alt}");
     }
 
+    fn dv_args_full_hw(scale_to_height: Option<i64>, source_codec: &str) -> Vec<String> {
+        let plan = transcode(
+            VideoOp::EncodeDolbyVision {
+                scale_to_height,
+                source_height: Some(1608),
+            },
+            AudioOp::Copy,
+            SubtitleOp::None,
+        );
+        ffmpeg_args_for(&ArgSpec {
+            plan: &plan,
+            input: "/lib/polar.mkv",
+            session_dir: "/tmp/s",
+            start_secs: 0,
+            encoder: HwEncoder::Vaapi,
+            hw_decode: true,
+            source_codec: Some(source_codec),
+            media_kind: "movie",
+            start_number: 0,
+            source_avg_kbps: None,
+            client_max_kbps: None,
+        })
+    }
+
+    #[test]
+    fn dolby_vision_full_hw_decodes_tone_maps_and_encodes_on_the_gpu() {
+        // The Polar Express (DV P5, 3840x1608): the software route ran at 0.47x
+        // realtime and stalled every few seconds; this exact graph ran at 2.6x on
+        // the NAS with colors matching the CPU reference (2026-11-23).
+        let args = dv_args_full_hw(Some(1080), "hevc");
+        let j = args.join(" ");
+        let vf = args.iter().position(|s| s == "-vf").expect("missing -vf");
+        assert_eq!(
+            args[vf + 1],
+            "hwmap=derive_device=vulkan,libplacebo=apply_dolbyvision=true:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=nv12:w=-2:h=1080,hwmap=derive_device=vaapi",
+            "{j}"
+        );
+        assert!(j.contains("-init_hw_device vulkan=vk"), "{j}");
+        assert_eq!(
+            j.matches("-init_hw_device").count(),
+            1,
+            "one Vulkan device: {j}"
+        );
+        assert!(
+            j.contains(
+                "-hwaccel vaapi -hwaccel_device /dev/dri/renderD128 -hwaccel_output_format vaapi"
+            ),
+            "{j}"
+        );
+        assert!(
+            j.contains("-c:v h264_vaapi -low_power 1 -rc_mode QVBR"),
+            "{j}"
+        );
+        assert!(
+            j.contains("-force_key_frames expr:gte(t,n_forced*2)"),
+            "{j}"
+        );
+        assert!(!j.contains("libx264"), "{j}");
+        assert!(!j.contains("hwupload"), "{j}");
+        assert!(!j.contains("-preset"), "{j}");
+        let hwaccel = args.iter().position(|s| s == "-hwaccel").unwrap();
+        let input = args.iter().position(|s| s == "-i").unwrap();
+        assert!(hwaccel < input, "-hwaccel is an input option: {j}");
+    }
+
+    #[test]
+    fn dolby_vision_full_hw_unscaled_keeps_source_size() {
+        let args = dv_args_full_hw(None, "hevc");
+        let vf = args.iter().position(|s| s == "-vf").unwrap();
+        assert!(
+            args[vf + 1].ends_with("format=nv12,hwmap=derive_device=vaapi"),
+            "{}",
+            args[vf + 1]
+        );
+    }
+
     #[test]
     fn dolby_vision_uses_vulkan_libplacebo_libx264() {
-        // Even with a VAAPI encoder configured, DV must take the Vulkan/libplacebo
-        // path (the iGPU VAAPI encoder can't consume Vulkan frames), NOT -hwaccel.
+        // Without the full-HW pipeline (hw_decode false: no VAAPI decode probe,
+        // or a source the iGPU cannot decode), DV keeps the software route:
+        // CPU decode, hwupload to Vulkan for libplacebo, libx264. No -hwaccel.
         let plan = transcode(
             VideoOp::EncodeDolbyVision {
                 scale_to_height: None,

@@ -950,6 +950,11 @@ impl SessionManager {
     /// CPU cap. A 4K HDR software decode+tonemap saturates cores even when the
     /// final encode is on the GPU; charging by encoder family alone let several
     /// of those stack up and starve the box.
+    ///
+    /// Dolby Vision qualifies too (libplacebo applies the RPU on the GPU). On the
+    /// software route it ran at 0.47x realtime for The Polar Express and 0.56x
+    /// for a 4K Profile 8 title, so every 4K DV title stalled every few seconds
+    /// and held the household's only CPU slot (2026-11-23).
     fn uses_full_hw_pipeline(
         &self,
         plan: &TranscodePlan,
@@ -981,7 +986,7 @@ impl SessionManager {
                     video: VideoOp::EncodeH264 {
                         burn_subtitle_index: None,
                         ..
-                    },
+                    } | VideoOp::EncodeDolbyVision { .. },
                     ..
                 }
             )
@@ -989,7 +994,8 @@ impl SessionManager {
                 || !matches!(
                     plan,
                     TranscodePlan::Transcode {
-                        video: VideoOp::EncodeH264 { tone_map: true, .. },
+                        video: VideoOp::EncodeH264 { tone_map: true, .. }
+                            | VideoOp::EncodeDolbyVision { .. },
                         ..
                     }
                 ))
@@ -4331,6 +4337,59 @@ mod tests {
             .await
             .expect("full-HW re-encodes must not charge the cpu cap");
         assert_eq!(mgr.limiter().active(), (2, 0));
+    }
+
+    fn dolby_vision_opts(input: &str, media_id: i64, source_codec: &str) -> StartOpts {
+        let mut opts = encode_opts_id(input, media_id);
+        opts.plan = TranscodePlan::Transcode {
+            segment_format: crate::plan::SegmentFormat::MpegTs,
+            video: VideoOp::EncodeDolbyVision {
+                scale_to_height: Some(1080),
+                source_height: Some(1608),
+            },
+            audio: AudioOp::Copy,
+            subtitle: SubtitleOp::None,
+            audio_index: 0,
+            extra_audio: Vec::new(),
+            alt_audio: Vec::new(),
+            reason: "test".into(),
+        };
+        opts.source_codec = Some(source_codec.into());
+        opts
+    }
+
+    #[tokio::test]
+    async fn full_hw_dolby_vision_does_not_charge_cpu_cap() {
+        // Two household members on 4K Dolby Vision titles at once: on the GPU
+        // route neither touches the CPU, so both must start under max_cpu=1
+        // (on the software route the second one got 503 transcoder_busy).
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = cap_matrix_manager(&tmp, HwEncoder::Vaapi, true);
+        let _a = mgr
+            .start(dolby_vision_opts("/lib/polar.mkv", 576, "hevc"))
+            .await
+            .unwrap();
+        let _b = mgr
+            .start(dolby_vision_opts("/lib/arcane.mkv", 649, "hevc"))
+            .await
+            .expect("full-HW Dolby Vision must not charge the cpu cap");
+        assert_eq!(mgr.limiter().active(), (2, 0));
+    }
+
+    #[tokio::test]
+    async fn software_dolby_vision_still_charges_cpu_cap() {
+        // No full-HW probe: DV falls back to CPU decode + libx264, real CPU load.
+        let tmp = tempfile::tempdir().unwrap();
+        let mgr = cap_matrix_manager(&tmp, HwEncoder::Vaapi, false);
+        let _a = mgr
+            .start(dolby_vision_opts("/lib/polar.mkv", 576, "hevc"))
+            .await
+            .unwrap();
+        let err = mgr
+            .start(dolby_vision_opts("/lib/arcane.mkv", 649, "hevc"))
+            .await
+            .expect_err("software DV holds the only cpu slot");
+        assert!(matches!(err, StartError::Busy(Busy { cpu_cap: true })));
     }
 
     #[tokio::test]

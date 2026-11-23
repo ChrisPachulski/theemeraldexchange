@@ -17,6 +17,7 @@ pub mod db;
 pub mod error;
 pub mod filename;
 pub mod models;
+pub mod playback_budget;
 pub mod podcasts;
 pub mod probe;
 pub mod rate_limit;
