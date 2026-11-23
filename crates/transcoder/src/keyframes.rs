@@ -48,7 +48,8 @@ struct CacheEntry {
 
 /// `(mtime_secs, mtime_nanos, size)` identity used to invalidate the cache when
 /// the underlying file changes (re-grab, re-mux). `None` if the file is gone.
-async fn file_identity(path: &Path) -> Option<(u64, u32, u64)> {
+/// Shared with [`crate::subcache`], which invalidates the same way.
+pub(crate) async fn file_identity(path: &Path) -> Option<(u64, u32, u64)> {
     let md = tokio::fs::metadata(path).await.ok()?;
     let modified = md.modified().ok()?;
     let dur = modified.duration_since(UNIX_EPOCH).ok()?;
@@ -120,7 +121,7 @@ pub(crate) async fn ensure(cache_root: &Path, ffmpeg_bin: &str, path: &Path) -> 
 
 /// Write `bytes` to `dest` atomically (temp + rename) so a crash mid-write never
 /// leaves a half-written cache file a later `load` would deserialize-fail on.
-async fn write_atomic(cache_root: &Path, dest: &Path, bytes: &[u8]) {
+pub(crate) async fn write_atomic(cache_root: &Path, dest: &Path, bytes: &[u8]) {
     if tokio::fs::create_dir_all(cache_root).await.is_err() {
         return;
     }
