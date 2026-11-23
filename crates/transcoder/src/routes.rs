@@ -1063,19 +1063,31 @@ mod tests {
     use tower::ServiceExt;
 
     fn write_stub(dir: &std::path::Path) -> std::path::PathBuf {
+        write_stub_with_sidecar_delay(dir, 0)
+    }
+
+    /// The route stub, with the sidecar subtitle extraction taking
+    /// `sidecar_delay_secs` before it writes `subtitles.vtt` (a large remux
+    /// demuxes end to end: 42 s for a 7.4 GB UHD WEB-DL on the NAS).
+    fn write_stub_with_sidecar_delay(
+        dir: &std::path::Path,
+        sidecar_delay_secs: u32,
+    ) -> std::path::PathBuf {
         let path = dir.join("ffmpeg_stub.sh");
         let mut f = std::fs::File::create(&path).unwrap();
-        let script = "#!/bin/sh\n\
+        let script = format!(
+            "#!/bin/sh\n\
              for a in \"$@\"; do last=\"$a\"; done\n\
              d=$(dirname \"$last\")\n\
              mkdir -p \"$d\"\n\
              case \"$last\" in *subtitles.vtt.partial)\n\
-               printf 'WEBVTT\\n' > \"$last\"; exit 0;; esac\n\
+               sleep {sidecar_delay_secs}; printf 'WEBVTT\\n' > \"$last\"; exit 0;; esac\n\
              case \"$last\" in *.jpg.*.partial)\n\
                printf 'JPEG' > \"$last\"; exit 0;; esac\n\
              printf '#EXTM3U\\n' > \"$last\"\n\
              printf 'seg' > \"$d/seg_00000.ts\"\n\
-             sleep 30\n";
+             sleep 30\n"
+        );
         f.write_all(script.as_bytes()).unwrap();
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
@@ -1465,6 +1477,81 @@ mod tests {
         .unwrap();
         assert!(subs.contains("subtitles.vtt\n"), "{subs}");
         assert!(subs.ends_with("#EXT-X-ENDLIST\n"), "{subs}");
+    }
+
+    // 2026-11-22: The Polar Express (7.4 GB UHD WEB-DL, English SubRip) never
+    // started on the Apple TV. The master advertised the subtitle rendition at
+    // once, tvOS auto-selected it, and AVPlayer will not start an item while a
+    // selected rendition is unavailable: subtitles.vtt took 42 s to extract,
+    // the gateway answered 504 at 15 s, and the player sat at 0:00 until the
+    // app's 25 s load timeout. A rendition is advertised only once it exists.
+    #[tokio::test]
+    async fn native_master_omits_subtitle_rendition_until_sidecar_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let stub = write_stub_with_sidecar_delay(tmp.path(), 30);
+        let app = router(AppState {
+            sessions: SessionManager::new(
+                Limiter::new(Caps {
+                    max_total: 4,
+                    max_cpu: 4,
+                }),
+                stub.to_string_lossy().into_owned(),
+                tmp.path().join("sessions"),
+                HwEncoder::VideoToolbox,
+            ),
+            principal_mode: PrincipalMode::Off,
+            internal_principal_secret: None,
+        });
+        let mut file = h264_file();
+        file.subtitle_tracks_json =
+            "[{\"index\":2,\"codec\":\"subrip\",\"language\":\"eng\",\"forced\":false}]".into();
+        let resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/api/transcode/grant")
+                    .header("content-type", "application/json")
+                    .body(Body::from(grant_body(&file)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        let session_id = v["sessionId"].as_str().unwrap();
+
+        let resp = app
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/api/transcode/session/{session_id}/index.m3u8"))
+                    .header("user-agent", "AppleCoreMedia/1.0.0 (Apple TV)")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let master = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), 64 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(
+            !master.contains("TYPE=SUBTITLES"),
+            "a rendition whose subtitles.vtt is not written yet blocks AVPlayer at 0:00: {master}"
+        );
+        assert!(!master.contains("SUBTITLES=\"subs\""), "{master}");
+        assert!(
+            master.contains("media.m3u8"),
+            "the video variant is still served: {master}"
+        );
     }
 
     #[tokio::test]

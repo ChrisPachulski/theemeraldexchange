@@ -71,6 +71,13 @@ pub type SessionId = String;
 /// player as a `<track>`. Passes [`is_safe_segment_name`] (alnum + `.`).
 pub const SIDECAR_SUBTITLE_NAME: &str = "subtitles.vtt";
 
+/// How long a native master waits for a still-running sidecar extraction before
+/// it is served without the subtitle rendition. Small files finish inside this;
+/// a large remux (42 s for a 7.4 GB UHD WEB-DL) starts without subtitles rather
+/// than not at all, and its cues are cached for the next play.
+const MASTER_SUBTITLE_WAIT: Duration = Duration::from_secs(3);
+const MASTER_SUBTITLE_POLL: Duration = Duration::from_millis(100);
+
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -887,9 +894,11 @@ impl SessionManager {
         };
         let mut removed = 0u32;
         while let Ok(Some(entry)) = rd.next_entry().await {
-            // The keyframe cache lives under the scratch root but is DURABLE —
-            // it is not a session dir and must survive a restart.
-            if entry.file_name() == crate::keyframes::KFCACHE_DIRNAME {
+            // The keyframe and subtitle caches live under the scratch root but
+            // are DURABLE — they are not session dirs and must survive a restart.
+            if entry.file_name() == crate::keyframes::KFCACHE_DIRNAME
+                || entry.file_name() == crate::subcache::SUBCACHE_DIRNAME
+            {
                 continue;
             }
             if entry.file_type().await.map(|t| t.is_dir()).unwrap_or(false) {
@@ -1079,11 +1088,30 @@ impl SessionManager {
         // would stream the still-growing (often 0-byte) file as a 200, the
         // player's one-shot <track> would load it empty, and — because segments
         // and this asset carry an `immutable` cache header — never recover. With
-        // the rename, `subtitles.vtt` simply 404s until the cues are complete,
-        // which the player retries through. (Per-session token ⇒ a prior
+        // the rename, `subtitles.vtt` simply 404s until the cues are complete:
+        // the web <track> retries through that, and the native master does not
+        // advertise the rendition until the file exists, since AVPlayer will
+        // not start an item while a selected rendition is unavailable
+        // (The Polar Express, 2026-11-22: 42 s extraction, never started).
+        // (Per-session token ⇒ a prior
         // session's empty cache entry can never alias a new session's URL.)
         let out_path = dir.join(SIDECAR_SUBTITLE_NAME);
         let partial_path = dir.join(format!("{SIDECAR_SUBTITLE_NAME}.partial"));
+        // A file extracted before publishes its cached cues now, before start
+        // returns, so the native master can advertise the rendition from 0:00
+        // (see `advertisable_subtitle`). Same partial + rename publish.
+        let cache_root = self.tmp_root.join(crate::subcache::SUBCACHE_DIRNAME);
+        let source = PathBuf::from(input);
+        if let Some(vtt) = crate::subcache::load(&cache_root, &source, source_index).await {
+            let published = tokio::fs::write(&partial_path, vtt.as_bytes())
+                .await
+                .is_ok()
+                && tokio::fs::rename(&partial_path, &out_path).await.is_ok();
+            if published {
+                tracing::debug!(session = %session_id, "sidecar subtitle served from cache");
+                return;
+            }
+        }
         let args = sidecar_vtt_args(input, source_index, &partial_path.to_string_lossy());
         let mut cmd = Command::new(&self.ffmpeg_bin);
         cmd.args(&args)
@@ -1121,7 +1149,15 @@ impl SessionManager {
                     // final name), so the worst case is "no subtitles", never a
                     // truncated track.
                     match tokio::fs::rename(&partial_path, &out_path).await {
-                        Ok(()) => tracing::debug!(session = %id, "sidecar subtitle extracted"),
+                        Ok(()) => {
+                            tracing::debug!(session = %id, "sidecar subtitle extracted");
+                            // Keep the cues so the next play of this file has
+                            // them before AVPlayer reads the master.
+                            if let Ok(vtt) = tokio::fs::read_to_string(&out_path).await {
+                                crate::subcache::store(&cache_root, &source, source_index, vtt)
+                                    .await;
+                            }
+                        }
                         Err(e) => tracing::warn!(
                             session = %id, error = %e,
                             "sidecar subtitle extracted but could not be published"
@@ -1740,8 +1776,13 @@ impl SessionManager {
                 .source_avg_kbps
                 .map(|kbps| kbps.saturating_mul(1000))
                 .unwrap_or(6_000_000);
-            (bandwidth_bps, s.subtitle.clone(), s.alt_audio_renditions())
+            (
+                bandwidth_bps,
+                s.subtitle.clone().map(|sub| (sub, s.dir.clone())),
+                s.alt_audio_renditions(),
+            )
         };
+        let subtitle = Self::advertisable_subtitle(subtitle).await;
         // The I-frame rendition is real here (re-encode ⇒ the thumbnail pass runs
         // on the same gate). Alternate audio joins it when the flag is on.
         Some(crate::trickplay::master(
@@ -1765,7 +1806,7 @@ impl SessionManager {
         let (subtitle, audio, bandwidth_bps) = {
             let guard = self.sessions.lock().await;
             let s = guard.get(id)?;
-            let subtitle = s.subtitle.clone();
+            let subtitle = s.subtitle.clone().map(|sub| (sub, s.dir.clone()));
             let audio = s.alt_audio_renditions();
             // No rendition group to advertise ⇒ no master; fall through to the
             // plain media playlist (unchanged serving path).
@@ -1778,6 +1819,12 @@ impl SessionManager {
                 .unwrap_or(6_000_000);
             (subtitle, audio, bandwidth_bps)
         };
+        let subtitle = Self::advertisable_subtitle(subtitle).await;
+        // A subtitle that is not extracted yet leaves nothing to advertise:
+        // same fall-through as a session that never had one.
+        if subtitle.is_none() && audio.is_empty() {
+            return None;
+        }
         // The master's variant points at media.m3u8, which serves vod_manifest —
         // only advertise the master when that will actually resolve. No I-frame
         // rendition: this path has no thumbnail pass (copy-remux / trick-play off).
@@ -1789,6 +1836,30 @@ impl SessionManager {
             subtitle.as_ref(),
             &audio,
         ))
+    }
+
+    /// The session's sidecar subtitle when its `subtitles.vtt` exists, waiting up
+    /// to [`MASTER_SUBTITLE_WAIT`] for an extraction still running; `None`
+    /// otherwise. A master must never advertise a rendition the player cannot
+    /// fetch yet: tvOS auto-selects it and AVPlayer then will not start the item
+    /// at all (it sits at 0:00 retrying the file). A late extraction still
+    /// lands in [`crate::subcache`], so the next play of the file has it.
+    async fn advertisable_subtitle(
+        subtitle: Option<(crate::plan::SidecarSubtitle, PathBuf)>,
+    ) -> Option<crate::plan::SidecarSubtitle> {
+        let (subtitle, dir) = subtitle?;
+        let vtt = dir.join(SIDECAR_SUBTITLE_NAME);
+        let mut waited = Duration::ZERO;
+        loop {
+            if tokio::fs::try_exists(&vtt).await.unwrap_or(false) {
+                return Some(subtitle);
+            }
+            if waited >= MASTER_SUBTITLE_WAIT {
+                return None;
+            }
+            tokio::time::sleep(MASTER_SUBTITLE_POLL).await;
+            waited += MASTER_SUBTITLE_POLL;
+        }
     }
 
     /// Build the subtitle MEDIA playlist (`subs.m3u8`) for `id`, or `None` when
@@ -2814,6 +2885,74 @@ mod tests {
         wait_for(|| vtt.exists()).await;
 
         mgr.stop(&id).await;
+    }
+
+    // 2026-11-22: a large remux's sidecar takes ~42 s, so the native master
+    // leaves its subtitle rendition out on that first play. The cues are
+    // cached, and the next play (here after a transcoder restart, whose boot
+    // sweep must keep the cache) has subtitles.vtt the moment start returns.
+    #[tokio::test]
+    async fn sidecar_subtitle_is_cached_for_the_next_play() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("movie.mkv");
+        std::fs::write(&source, b"source bytes").unwrap();
+        let subtitled = || {
+            let mut o = opts(&source.to_string_lossy());
+            o.subtitle = Some(SidecarSubtitle {
+                source_index: 2,
+                language: Some("eng".into()),
+                forced: false,
+            });
+            o
+        };
+
+        let fast_dir = tmp.path().join("fast");
+        std::fs::create_dir_all(&fast_dir).unwrap();
+        let first = manager_with_stub(&tmp, write_stub(&fast_dir, "run"));
+        let id = first.start(subtitled()).await.unwrap();
+        let vtt = first.asset_path(&id, SIDECAR_SUBTITLE_NAME).await.unwrap();
+        wait_for(|| vtt.exists()).await;
+        let cache = tmp
+            .path()
+            .join("sessions")
+            .join(crate::subcache::SUBCACHE_DIRNAME);
+        // The published entry, not the `.json.tmp` an atomic write passes through:
+        // stop aborts a store still in flight.
+        wait_for(|| {
+            std::fs::read_dir(&cache)
+                .map(|d| {
+                    d.flatten()
+                        .any(|e| e.path().extension().is_some_and(|x| x == "json"))
+                })
+                .unwrap_or(false)
+        })
+        .await;
+        first.stop(&id).await;
+
+        // After a restart the extraction would never finish: only the cache can
+        // put subtitles.vtt in place.
+        let slow_dir = tmp.path().join("slow");
+        std::fs::create_dir_all(&slow_dir).unwrap();
+        let slow = write_stub(&slow_dir, "run");
+        let script = std::fs::read_to_string(&slow).unwrap();
+        let never = script.replace(
+            "printf 'WEBVTT\\n' > \"$last\"; exit 0;;",
+            "sleep 30; exit 0;;",
+        );
+        assert_ne!(script, never, "the stub's sidecar branch must be replaced");
+        std::fs::write(&slow, never).unwrap();
+        let second = manager_with_stub(&tmp, slow);
+        second.sweep_scratch_on_boot().await;
+        assert!(cache.exists(), "the boot sweep keeps the subtitle cache");
+
+        let id = second.start(subtitled()).await.unwrap();
+        let vtt = second.asset_path(&id, SIDECAR_SUBTITLE_NAME).await.unwrap();
+        assert!(
+            vtt.exists(),
+            "a cached sidecar is in place before start returns"
+        );
+        assert_eq!(std::fs::read_to_string(&vtt).unwrap(), "WEBVTT\n");
+        second.stop(&id).await;
     }
 
     #[tokio::test]
