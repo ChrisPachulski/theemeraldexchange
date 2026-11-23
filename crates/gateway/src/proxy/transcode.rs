@@ -18,12 +18,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 
 use super::media::FORWARD_RESPONSE;
-use super::{MEDIA_TTFB, copy, principal, query_without_token, req_id, token_caller};
+use super::{copy, principal, query_without_token, req_id, token_caller};
 use crate::AppState;
 use crate::arr::shared::{query_first, query_pairs};
 use crate::media_token;
 use crate::principal::Caller;
 use crate::routes::err;
+use media_core::playback_budget::TRANSCODE_TTFB;
 
 /// Range on segments, revalidation of the manifest, and the client's
 /// User-Agent: the transcoder serves AppleCoreMedia a finite VOD playlist
@@ -128,7 +129,7 @@ async fn proxy(State(st): State<AppState>, req: Request) -> Response {
             &url,
             headers,
             forwarded,
-            MEDIA_TTFB,
+            TRANSCODE_TTFB,
         )
         .await
     {
