@@ -33,7 +33,7 @@ sentry-tracing = "0.49"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "macros"] }
 # The sqlite sqlx links; sqlite-vec registers on it through sqlite3_auto_extension.
-libsqlite3-sys = "0.37"
+libsqlite3-sys = "0.39"
 # Pinned to the Python lock's sqlite-vec so the vec0 shadow tables match.
 sqlite-vec = "=0.1.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
