@@ -60,7 +60,7 @@ if red:
 elif not runs or open_:
     print("pending %d/%d" % (len(runs) - len(open_), len(runs)))
 else:
-    print("pass", len(runs), ("allowed red: " + ", ".join(waived)) if waived else "")
+    print("pass %d" % len(runs) + (" allowed red: " + ", ".join(waived) if waived else ""))
 '
 }
 

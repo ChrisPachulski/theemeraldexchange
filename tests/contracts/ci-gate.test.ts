@@ -104,6 +104,25 @@ describe('scripts/ci-gate.sh', () => {
     expect(r.stderr).toContain('never pushed')
   })
 
+  it('CI_GATE_ALLOW_RED ships past only the named red check, loudly', async () => {
+    checkRuns([ok('test'), { name: 'audit', status: 'completed', conclusion: 'failure' }])
+    const r = await run({ CI_GATE_ALLOW_RED: 'audit' })
+    expect(r.status).toBe(0)
+    expect(r.stderr).toContain('red: audit')
+  })
+
+  it('CI_GATE_ALLOW_RED still refuses a red check it does not name', async () => {
+    // 33e998c (2026-11-10): audit AND test red; waiving the audit must not ship it.
+    checkRuns([
+      { name: 'audit', status: 'completed', conclusion: 'failure' },
+      { name: 'test', status: 'completed', conclusion: 'failure' },
+    ])
+    const r = await run({ CI_GATE_ALLOW_RED: 'audit' })
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('test (failure)')
+    expect(r.stderr).not.toContain('audit (failure)')
+  })
+
   it('SKIP_CI_GATE=1 bypasses a red verdict loudly', async () => {
     checkRuns([{ name: 'rust', status: 'completed', conclusion: 'failure' }])
     const r = await run({ SKIP_CI_GATE: '1' })
