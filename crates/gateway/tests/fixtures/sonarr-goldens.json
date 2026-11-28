@@ -7032,7 +7032,7 @@
           ],
           "grabs": [
             "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Picked Release\",\"type\":\"grab_started\"}",
-            "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Picked Release\",\"type\":\"grab_succeeded\",\"status\":200,\"release\":{\"title\":\"Picked Release\",\"sizeBytes\":3221225472,\"qualityWeight\":50}}"
+            "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Picked Release\",\"type\":\"grab_succeeded\",\"status\":200,\"release\":{\"title\":\"Picked Release\",\"sizeBytes\":3221225472,\"qualityWeight\":50,\"seasonNumber\":1}}"
           ]
         },
         {
@@ -7067,7 +7067,7 @@
             }
           ],
           "grabs": [
-            "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Huge\",\"type\":\"all_rejected_by_cap\",\"eligible\":0,\"release\":{\"title\":\"Huge\",\"sizeBytes\":32212254720,\"qualityWeight\":50}}"
+            "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Huge\",\"type\":\"all_rejected_by_cap\",\"eligible\":0,\"release\":{\"title\":\"Huge\",\"sizeBytes\":32212254720,\"qualityWeight\":50,\"seasonNumber\":1}}"
           ]
         },
         {
@@ -7115,7 +7115,7 @@
           ],
           "grabs": [
             "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Huge\",\"type\":\"grab_started\"}",
-            "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Huge\",\"type\":\"grab_succeeded\",\"status\":200,\"release\":{\"title\":\"Huge\",\"sizeBytes\":32212254720,\"qualityWeight\":50}}"
+            "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Huge\",\"type\":\"grab_succeeded\",\"status\":200,\"release\":{\"title\":\"Huge\",\"sizeBytes\":32212254720,\"qualityWeight\":50,\"seasonNumber\":1}}"
           ]
         },
         {
@@ -7163,7 +7163,7 @@
           ],
           "grabs": [
             "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Season Pack\",\"type\":\"grab_started\"}",
-            "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Season Pack\",\"type\":\"grab_succeeded\",\"status\":200,\"release\":{\"title\":\"Season Pack\",\"sizeBytes\":9663676416,\"qualityWeight\":60}}"
+            "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Season Pack\",\"type\":\"grab_succeeded\",\"status\":200,\"release\":{\"title\":\"Season Pack\",\"sizeBytes\":9663676416,\"qualityWeight\":60,\"seasonNumber\":1}}"
           ]
         },
         {
@@ -7292,7 +7292,7 @@
           ],
           "grabs": [
             "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Picked Release\",\"type\":\"grab_started\"}",
-            "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Picked Release\",\"type\":\"grab_succeeded\",\"status\":200,\"release\":{\"title\":\"Picked Release\",\"sizeBytes\":3221225472,\"qualityWeight\":50}}"
+            "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Picked Release\",\"type\":\"grab_succeeded\",\"status\":200,\"release\":{\"title\":\"Picked Release\",\"sizeBytes\":3221225472,\"qualityWeight\":50,\"seasonNumber\":1}}"
           ]
         }
       ]
@@ -7370,7 +7370,7 @@
           ],
           "grabs": [
             "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Picked Release\",\"type\":\"grab_started\"}",
-            "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Picked Release\",\"type\":\"grab_failed\",\"status\":500,\"release\":{\"title\":\"Picked Release\",\"sizeBytes\":3221225472,\"qualityWeight\":50}}"
+            "{\"ts\":\"<ts>\",\"app\":\"sonarr\",\"itemId\":5,\"sub\":\"local:01ARZ3NDEKTSV4RRFFQ69G5FAV\",\"capGb\":5,\"title\":\"Picked Release\",\"type\":\"grab_failed\",\"status\":500,\"release\":{\"title\":\"Picked Release\",\"sizeBytes\":3221225472,\"qualityWeight\":50,\"seasonNumber\":1}}"
           ]
         }
       ]

@@ -1258,6 +1258,25 @@ pub fn map_history(raw: &Value) -> Vec<Value> {
     rows.into_iter().map(|(_, v)| v).collect()
 }
 
+/// The grab log's `release` record, from an upstream release. Every grab
+/// path (both automatic pipelines and the interactive grab) builds it here,
+/// so a reader can count on its fields: `sizeBytes` and `qualityWeight`
+/// default to 0 (the Apple client decodes them as required), and
+/// `seasonNumber` rides along whenever the release has one, which Downloads
+/// shows as "Season N". The interactive grab once built its own and dropped
+/// the season.
+pub fn release_summary(r: &Value) -> Obj {
+    let present = |k: &str| r.get(k).filter(|v| !v.is_null()).cloned();
+    Obj::new()
+        .opt("title", present("title"))
+        .put("sizeBytes", present("size").unwrap_or_else(|| 0.into()))
+        .put(
+            "qualityWeight",
+            present("qualityWeight").unwrap_or_else(|| 0.into()),
+        )
+        .opt("seasonNumber", present("seasonNumber"))
+}
+
 /// A hand-picked release to grab.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GrabPick {
@@ -1322,17 +1341,7 @@ pub async fn execute_interactive_grab(
     };
     let size = as_num(picked.get("size")).unwrap_or(0.0);
     let title = picked.get("title").cloned();
-    let release = Obj::new()
-        .opt("title", title.clone())
-        .put("sizeBytes", num(size))
-        .put(
-            "qualityWeight",
-            picked
-                .get("qualityWeight")
-                .filter(|v| !v.is_null())
-                .cloned()
-                .unwrap_or_else(|| 0.into()),
-        );
+    let release = release_summary(picked);
     if cap_for(picked).is_some_and(|c| size > c) && !req.pick.allow_over_cap {
         let ev = base
             .clone()

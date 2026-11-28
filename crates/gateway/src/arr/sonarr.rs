@@ -1468,11 +1468,7 @@ async fn record_grab(
         .and_then(Value::as_str)
         .unwrap_or_default();
     tracing::info!(event = "tv-cap", title = %auth::js_slice(name, 80), size_gb = gb_2dp(size), size_gb_per_episode = gb_2dp(size / n as f64), episode_count = n, series_id = %id_text, status = grab.status.as_u16(), "grab");
-    let release = Obj::new()
-        .opt("title", pick.get("title"))
-        .opt("sizeBytes", pick.get("size"))
-        .opt("qualityWeight", pick.get("qualityWeight"))
-        .opt("seasonNumber", season(pick));
+    let release = release_summary(pick);
     let ev = base
         .clone()
         .put("type", grab_event_type(grab))

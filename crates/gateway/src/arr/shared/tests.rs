@@ -850,3 +850,47 @@ fn obj_keeps_insertion_order_and_spread_semantics() {
         r#"{"z":1,"inner":{"y":true,"x":0}}"#
     );
 }
+
+/// The canary: a hand-picked Sonarr release from a season pack. Its grab-log
+/// record must carry the season, as the automatic pipeline's does, or
+/// Downloads loses the "Season N" label (6 such rows in prod by 2026-11-27).
+#[tokio::test]
+async fn an_interactive_grab_logs_the_release_season() {
+    use std::sync::atomic::AtomicUsize;
+    let dir = tempfile::tempdir().unwrap();
+    let log = log_in(&dir);
+    let pick = GrabPick {
+        guid: "g".into(),
+        indexer_id: 9.0,
+        allow_over_cap: false,
+    };
+    let releases = vec![json!({
+        "guid": "g", "indexerId": 9, "title": "Show.S03.1080p",
+        "size": DEC_GB, "qualityWeight": 50, "seasonNumber": 3
+    })];
+    let posted = AtomicUsize::new(0);
+    let out = interactive(&log, pick, Some(releases), 200, None, &posted).await;
+    assert!(matches!(out, InteractiveGrab::Grabbed { .. }), "{out:?}");
+    let text = std::fs::read_to_string(dir.path().join("grabs.jsonl")).unwrap();
+    let done: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+    assert_eq!(done["type"], "grab_succeeded");
+    assert_eq!(done["release"]["seasonNumber"], 3, "{text}");
+}
+
+/// Every writer's record decodes in the Apple client, which requires
+/// `sizeBytes` and `qualityWeight`; key order matches the automatic logs.
+#[test]
+fn a_release_summary_fills_the_fields_readers_require() {
+    let bare = release_summary(&json!({ "title": "T", "qualityWeight": null }));
+    assert_eq!(
+        bare.json(),
+        r#"{"title":"T","sizeBytes":0,"qualityWeight":0}"#
+    );
+    let full = release_summary(&json!({
+        "title": "T", "size": 12, "qualityWeight": 5, "seasonNumber": 2, "guid": "x"
+    }));
+    assert_eq!(
+        full.json(),
+        r#"{"title":"T","sizeBytes":12,"qualityWeight":5,"seasonNumber":2}"#
+    );
+}
