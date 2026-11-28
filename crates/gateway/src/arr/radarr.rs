@@ -996,10 +996,7 @@ async fn grab_best_under_cap(
     let grab = grab.map_err(|_| "radarr is not configured".to_string())?;
     let kind = grab_event_type(&grab);
     tracing::info!(event = "movie-cap", title = %js_str(best.get("title").unwrap_or(&serde_json::Value::Null)), size_gb = gb_2dp(size), movie_id = %id, status = grab.status.as_u16(), "grab");
-    let release = Obj::new()
-        .opt("title", best.get("title"))
-        .opt("sizeBytes", best.get("size"))
-        .opt("qualityWeight", best.get("qualityWeight"));
+    let release = release_summary(best);
     log.record(
         RADARR,
         base.put("type", kind)

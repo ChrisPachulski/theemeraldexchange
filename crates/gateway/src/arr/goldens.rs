@@ -10,7 +10,10 @@
 //! background TV grab through [`super::ArrState::idle`]; a `wait_for` step
 //! waits until the fake has seen that request.
 //!
-//! Known edge deltas (implementation-notes Deviations): Hono's text 404 for an
+//! Known edge deltas (implementation-notes Deviations): an interactive Sonarr
+//! grab's grabs.jsonl `release` carries the release's `seasonNumber`, as the
+//! background grab's always did (the TS route dropped it, so Downloads showed
+//! no "Season N"; sonarr-goldens.json updated 2026-11-27). Hono's text 404 for an
 //! unknown path or a known path's wrong method is the gateway's JSON
 //! `{"error":"not_found"}`. Requests both sides send concurrently (the folder
 //! and profile lists, a release search and its episode counts, the Sonarr and
