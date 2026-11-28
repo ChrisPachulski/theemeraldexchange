@@ -9,10 +9,14 @@ on:
   # so main can sit without its sha- images; this rebuilds them on demand.
   workflow_dispatch:
 
-# Cancel in-progress runs for the same ref when a new commit lands.
+# A PR's new commit cancels its in-progress run. On main every sha runs to
+# the end: deploy-nas.sh's CI gate needs a verdict for the sha it ships, and
+# a push landing mid-run used to leave that sha "cancelled", which the gate
+# refuses (5910c7c had to be deployed in place of 845e06a, 2026-11-27). The
+# group gets the sha on main, so runs there never queue behind each other.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name != 'pull_request' && format('-{0}', github.sha) || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least-privilege token (production-readiness re-review): every job here only
 # checks out code and uploads workflow artifacts (artifact upload uses the

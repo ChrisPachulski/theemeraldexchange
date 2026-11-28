@@ -42,9 +42,11 @@ on:
 permissions:
   contents: read
 
+# Only a PR's runs cancel each other; on main every sha keeps its verdict
+# for deploy-nas.sh's CI gate (see ci.yml).
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}${{ github.event_name != 'pull_request' && format('-{0}', github.sha) || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   e2e-integration:
