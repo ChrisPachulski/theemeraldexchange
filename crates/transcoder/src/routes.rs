@@ -11,6 +11,7 @@
 //! transcoder when online, 503 when not". This crate exposes the surface that
 //! turns that seam real.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use std::time::Duration;
@@ -32,7 +33,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::concurrency::Busy;
-use crate::plan::{TranscodePlan, plan_sidecar_subtitle, plan_transcode, plan_transcode_forced};
+use crate::plan::{
+    TranscodePlan, needs_audio_start_probe, plan_sidecar_subtitle, plan_transcode,
+    plan_transcode_forced, reencode_late_packet_configured_audio,
+};
 use crate::session::{SIDECAR_SUBTITLE_NAME, SessionManager, StartError, StartOpts, segment_index};
 
 /// Transcoder app state — the session manager + principal posture.
@@ -392,6 +396,54 @@ async fn probe_dolby_vision(ffmpeg_bin: &str, path: &str) -> bool {
     text.contains("Dolby Vision") || text.contains("DOVI configuration")
 }
 
+/// Start time (seconds) of every audio stream in `path`, keyed by absolute
+/// stream index. The probe window matches Plex's (20 s / 20 MB): ffmpeg's
+/// default 5 s window misses a track that starts at 5.4 s. Bounded by a
+/// timeout; ANY failure returns an empty map, which leaves the plan unchanged.
+async fn probe_audio_start_secs(ffmpeg_bin: &str, path: &str) -> HashMap<i64, f64> {
+    let mut cmd = tokio::process::Command::new(ffprobe_bin(ffmpeg_bin));
+    cmd.args([
+        "-v",
+        "error",
+        "-analyzeduration",
+        "20000000",
+        "-probesize",
+        "20000000",
+        "-select_streams",
+        "a",
+        "-show_entries",
+        "stream=index,start_time",
+        "-print_format",
+        "json",
+        path,
+    ]);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::null());
+    match crate::keyframes::output_within(&mut cmd, Duration::from_secs(10)).await {
+        Some(o) if o.status.success() => parse_stream_start_secs(&o.stdout),
+        _ => HashMap::new(),
+    }
+}
+
+/// Parse ffprobe's `-show_entries stream=index,start_time -print_format json`
+/// output. ffprobe prints `start_time` as a string; a stream without one
+/// (or with "N/A") is left out.
+fn parse_stream_start_secs(stdout: &[u8]) -> HashMap<i64, f64> {
+    let Ok(doc) = serde_json::from_slice::<Value>(stdout) else {
+        return HashMap::new();
+    };
+    doc.get("streams")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|s| {
+            let index = s.get("index")?.as_i64()?;
+            let start = s.get("start_time")?.as_str()?.parse::<f64>().ok()?;
+            Some((index, start))
+        })
+        .collect()
+}
+
 /// `POST /api/transcode/grant` — plan + start. Direct-play files return a plan
 /// with no session (the caller streams directly from media-core); transcode
 /// files start a session and return its `index.m3u8` URL. A cap hit yields
@@ -488,11 +540,28 @@ async fn grant(
         .max_bitrate
         .filter(|bps| *bps > 0)
         .and_then(|bps| u32::try_from(bps / 1000).ok());
-    let plan = if force_transcode {
+    let mut plan = if force_transcode {
         plan_transcode_forced(&row, &caps)
     } else {
         plan_transcode(&row, &caps)
     };
+
+    // A copied AC-3/E-AC-3 track that starts late breaks the fMP4 init segment
+    // (see reencode_late_packet_configured_audio). Only plans that copy one
+    // into fMP4 pay for the start-time probe (~50 ms); a failed probe keeps
+    // the plan as it was.
+    if needs_audio_start_probe(&plan, &row) {
+        let starts = probe_audio_start_secs(state.sessions.ffmpeg_bin(), &input_path).await;
+        let changed = reencode_late_packet_configured_audio(&mut plan, &row, &starts);
+        if !changed.is_empty() {
+            tracing::info!(
+                media_kind = %media_kind,
+                media_id = %media_id,
+                streams = ?changed,
+                "late-starting AC-3/E-AC-3 re-encoded to AAC for the fMP4 init segment"
+            );
+        }
+    }
 
     if let TranscodePlan::DirectPlay { reason } = &plan {
         return Json(json!({
@@ -1062,6 +1131,24 @@ mod tests {
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     use tower::ServiceExt;
+
+    #[test]
+    fn parses_ffprobe_audio_start_times() {
+        // Captured from Howl's Moving Castle (2004) on the NAS.
+        let out = br#"{"programs":[],"streams":[{"index":1,"codec_name":"eac3","start_time":"0.000000"},{"index":2,"codec_name":"dts","start_time":"5.400000"},{"index":3,"codec_name":"ac3","start_time":"5.400000"}]}"#;
+        let starts = parse_stream_start_secs(out);
+        assert_eq!(starts.len(), 3);
+        assert_eq!(starts[&1], 0.0);
+        assert_eq!(starts[&3], 5.4);
+    }
+
+    #[test]
+    fn unparseable_probe_output_is_empty() {
+        assert!(parse_stream_start_secs(b"not json").is_empty());
+        assert!(
+            parse_stream_start_secs(br#"{"streams":[{"index":1,"start_time":"N/A"}]}"#).is_empty()
+        );
+    }
 
     fn write_stub(dir: &std::path::Path) -> std::path::PathBuf {
         write_stub_with_sidecar_delay(dir, 0)

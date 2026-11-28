@@ -661,15 +661,105 @@ fn audio_op_for(track: &AudioTrack, caps: &ClientCaps) -> AudioOp {
     if codec_accepted && channels_safe {
         AudioOp::Copy
     } else {
-        let is_downmix = track.channels.is_none_or(|c| c > 2);
-        AudioOp::EncodeAac {
-            bitrate_kbps: if is_downmix {
-                DOWNMIX_AAC_BITRATE_KBPS
-            } else {
-                DEFAULT_AAC_BITRATE_KBPS
-            },
+        encode_aac_for(track)
+    }
+}
+
+/// The stereo AAC re-encode for one track: the higher downmix bitrate when the
+/// source is (or may be) multichannel, else the default.
+fn encode_aac_for(track: &AudioTrack) -> AudioOp {
+    let is_downmix = track.channels.is_none_or(|c| c > 2);
+    AudioOp::EncodeAac {
+        bitrate_kbps: if is_downmix {
+            DOWNMIX_AAC_BITRATE_KBPS
+        } else {
+            DEFAULT_AAC_BITRATE_KBPS
+        },
+    }
+}
+
+/// A copied audio track whose first packet lands later than this (seconds from
+/// the file start) is re-encoded in an fMP4 plan; see
+/// [`reencode_late_packet_configured_audio`]. The init segment is written when
+/// the first segment closes, never before `HLS_SEGMENT_SECS` (2 s), so 1 s
+/// leaves margin and still keeps every ordinary file (Patriot Games' AC-3
+/// starts at 0.015 s) on the copy path.
+pub const LATE_AUDIO_START_SECS: f64 = 1.0;
+
+/// Codecs whose MP4 sample entry (`dac3`/`dec3`) ffmpeg builds from a PARSED
+/// packet rather than from stream extradata.
+fn is_packet_configured(track: &AudioTrack) -> bool {
+    matches!(
+        track
+            .codec
+            .as_deref()
+            .map(|c| c.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("ac3" | "eac3")
+    )
+}
+
+/// Every in-band audio slot of an fMP4 plan as `(audio-relative index, op)`:
+/// the primary, then each `extra_audio` rendition. Empty for MPEG-TS plans and
+/// direct play. `alt_audio` renditions are MPEG-TS and never at risk.
+fn fmp4_audio_slots(plan: &mut TranscodePlan) -> Vec<(usize, &mut AudioOp)> {
+    match plan {
+        TranscodePlan::Transcode {
+            audio,
+            audio_index,
+            extra_audio,
+            segment_format: SegmentFormat::Fmp4,
+            ..
+        } => std::iter::once((*audio_index, audio))
+            .chain(extra_audio.iter_mut().map(|(i, op)| (*i, op)))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// True when the plan stream-copies an AC-3/E-AC-3 track into fMP4 segments:
+/// the only case whose correctness depends on the track's start time, so the
+/// only case worth the grant-time start probe.
+pub fn needs_audio_start_probe(plan: &TranscodePlan, file: &MediaFileRow) -> bool {
+    let tracks = file.audio_tracks();
+    let mut plan = plan.clone();
+    fmp4_audio_slots(&mut plan)
+        .into_iter()
+        .any(|(i, op)| *op == AudioOp::Copy && tracks.get(i).is_some_and(is_packet_configured))
+}
+
+/// Re-encode every copied AC-3/E-AC-3 track that starts late, returning the
+/// absolute stream indexes it changed.
+///
+/// ffmpeg's HLS muxer writes the fMP4 init segment when the first segment
+/// closes. A copied AC-3/E-AC-3 track that has not delivered a packet by then
+/// gets an empty `dac3`/`dec3` box ("Cannot write moov atom before AC3
+/// packets"), and AVPlayer rejects the whole stream with CoreMediaErrorDomain
+/// -16172 within a second. Howl's Moving Castle (2004) is the case: its Italian
+/// AC-3 starts at 5.4 s while the first video segment closes at 5 s. An AAC
+/// re-encode has its config from the encoder, so it is immune.
+///
+/// `start_secs` maps ABSOLUTE stream index (ffprobe's `index`, the same as
+/// [`AudioTrack::index`]) to that stream's start time. A track missing from it
+/// keeps its op: the probe is best-effort and the old behavior is the fallback.
+pub fn reencode_late_packet_configured_audio(
+    plan: &mut TranscodePlan,
+    file: &MediaFileRow,
+    start_secs: &std::collections::HashMap<i64, f64>,
+) -> Vec<i64> {
+    let tracks = file.audio_tracks();
+    let mut changed = Vec::new();
+    for (i, op) in fmp4_audio_slots(plan) {
+        let Some(track) = tracks.get(i) else { continue };
+        let late = start_secs
+            .get(&track.index)
+            .is_some_and(|s| *s > LATE_AUDIO_START_SECS);
+        if *op == AudioOp::Copy && is_packet_configured(track) && late {
+            *op = encode_aac_for(track);
+            changed.push(track.index);
         }
     }
+    changed
 }
 
 /// The ADDITIONAL audio tracks to mux after the primary (English-preferred) one,
@@ -950,6 +1040,160 @@ mod tests {
             args.contains("-map 0:a:1?"),
             "english track not mapped; args: {args}"
         );
+    }
+
+    /// The Apple app's `PlaybackCaps.appleNative` (EmeraldKit Media.swift).
+    fn caps_apple_tv() -> ClientCaps {
+        ClientCaps {
+            containers: vec!["mp4".into()],
+            video_codecs: vec!["h264".into(), "hevc".into()],
+            max_height: Some(2160),
+            hdr: true,
+            audio_codecs: vec!["aac".into(), "ac3".into(), "eac3".into()],
+            aac_max_channels: 6,
+            hls_fmp4_hevc: true,
+            native_hls: true,
+            ..ClientCaps::default()
+        }
+    }
+
+    fn track(index: i64, codec: &str, lang: &str) -> AudioTrack {
+        AudioTrack {
+            index,
+            codec: Some(codec.into()),
+            channels: Some(6),
+            language: Some(lang.into()),
+            title: None,
+        }
+    }
+
+    /// Howl's Moving Castle (2004): 4K HDR HEVC in mkv, Japanese E-AC-3 at 0 s,
+    /// English DTS and Italian AC-3 both starting at 5.4 s.
+    fn howls() -> MediaFileRow {
+        file(
+            Some("mkv"),
+            Some("hevc"),
+            Some(2160),
+            Some("HDR10"),
+            vec![
+                track(1, "eac3", "jpn"),
+                track(2, "dts", "eng"),
+                track(3, "ac3", "ita"),
+            ],
+            vec![],
+        )
+    }
+
+    fn starts(pairs: &[(i64, f64)]) -> std::collections::HashMap<i64, f64> {
+        pairs.iter().copied().collect()
+    }
+
+    fn audio_ops(plan: &TranscodePlan) -> (AudioOp, Vec<(usize, AudioOp)>) {
+        match plan {
+            TranscodePlan::Transcode {
+                audio, extra_audio, ..
+            } => (audio.clone(), extra_audio.clone()),
+            other => panic!("expected transcode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn late_ac3_copy_in_fmp4_is_reencoded_to_aac() {
+        let f = howls();
+        let mut plan = plan_transcode(&f, &caps_apple_tv());
+        assert!(
+            matches!(
+                plan,
+                TranscodePlan::Transcode {
+                    segment_format: SegmentFormat::Fmp4,
+                    ..
+                }
+            ),
+            "HEVC copy must be fMP4: {plan:?}"
+        );
+        assert!(needs_audio_start_probe(&plan, &f));
+        let changed = reencode_late_packet_configured_audio(
+            &mut plan,
+            &f,
+            &starts(&[(1, 0.0), (2, 5.4), (3, 5.4)]),
+        );
+        assert_eq!(changed, vec![3], "only the late AC-3 changes");
+        let (primary, extras) = audio_ops(&plan);
+        assert!(
+            matches!(primary, AudioOp::EncodeAac { .. }),
+            "DTS stays AAC"
+        );
+        assert_eq!(
+            extras,
+            vec![
+                (0, AudioOp::Copy),
+                (
+                    2,
+                    AudioOp::EncodeAac {
+                        bitrate_kbps: DOWNMIX_AAC_BITRATE_KBPS
+                    }
+                ),
+            ],
+            "E-AC-3 at 0 s keeps passthrough; the late AC-3 becomes AAC"
+        );
+        let args =
+            crate::args::ffmpeg_args(&plan, "/in.mkv", "/tmp/s", 0, crate::args::HwEncoder::Cpu)
+                .join(" ");
+        assert!(args.contains("-c:a:1 copy"), "E-AC-3 copied: {args}");
+        assert!(
+            args.contains("-c:a:2 aac -ac:a:2 2 -b:a:2 256k"),
+            "late AC-3 encoded: {args}"
+        );
+    }
+
+    #[test]
+    fn early_ac3_keeps_passthrough() {
+        // Patriot Games (1992): AC-3 starts at 0.015 s and plays as a copy.
+        let f = file(
+            Some("mkv"),
+            Some("hevc"),
+            Some(1080),
+            None,
+            vec![track(1, "ac3", "eng")],
+            vec![],
+        );
+        let mut plan = plan_transcode(&f, &caps_apple_tv());
+        assert!(needs_audio_start_probe(&plan, &f));
+        let before = plan.clone();
+        assert!(
+            reencode_late_packet_configured_audio(&mut plan, &f, &starts(&[(1, 0.015)])).is_empty()
+        );
+        assert_eq!(plan, before);
+    }
+
+    #[test]
+    fn missing_start_time_keeps_the_plan() {
+        // A failed or partial probe falls back to the prior behavior.
+        let f = howls();
+        let mut plan = plan_transcode(&f, &caps_apple_tv());
+        let before = plan.clone();
+        assert!(reencode_late_packet_configured_audio(&mut plan, &f, &starts(&[])).is_empty());
+        assert_eq!(plan, before);
+    }
+
+    #[test]
+    fn mpeg_ts_plans_never_probe_or_change() {
+        // H.264 copy rides MPEG-TS, whose AC-3 needs no init box.
+        let f = file(
+            Some("mkv"),
+            Some("h264"),
+            Some(1080),
+            None,
+            vec![track(1, "ac3", "eng")],
+            vec![],
+        );
+        let mut plan = plan_transcode(&f, &caps_apple_tv());
+        assert!(!needs_audio_start_probe(&plan, &f));
+        let before = plan.clone();
+        assert!(
+            reencode_late_packet_configured_audio(&mut plan, &f, &starts(&[(1, 9.0)])).is_empty()
+        );
+        assert_eq!(plan, before);
     }
 
     /// Stereo AAC — the browser-safe, copyable baseline.
