@@ -894,3 +894,45 @@ fn a_release_summary_fills_the_fields_readers_require() {
         r#"{"title":"T","sizeBytes":12,"qualityWeight":5,"seasonNumber":2}"#
     );
 }
+
+/// The six pre-d22861b rows on prod, as logged: the reader supplies the
+/// season from the release name, keeps the key order, and leaves every other
+/// line (Radarr, a row that has its season, a name without one) untouched.
+#[test]
+fn legacy_sonarr_rows_gain_the_season_from_the_release_name() {
+    let raw = |s: &str| serde_json::from_str::<Box<RawValue>>(s).unwrap();
+    let read = |s: &str| with_legacy_season(raw(s)).get().to_string();
+    for (title, season) in [
+        (
+            "Reacher.2022.S01.1080p.BluRay.x265.HEVC.10bit.AAC.5.1-Vyndros",
+            1,
+        ),
+        (
+            "Reacher.S02.2023.Complete.1080p.Amazon.WEB-DL.AVC.DDP.5.1-DBTV",
+            2,
+        ),
+        ("Reacher.S03.COMPLETE.1080p.WEB-DL.x264.6CH-Pahe.in", 3),
+        (
+            "Lanterns.2026.S01E03.OutKast.1080p.HMAX.WEB-DL.MULTi.DDP5.1.Atmos.H.26",
+            1,
+        ),
+    ] {
+        let line = format!(
+            r#"{{"ts":"t","app":"sonarr","itemId":5,"type":"grab_succeeded","release":{{"title":"{title}","sizeBytes":1,"qualityWeight":5}}}}"#
+        );
+        assert_eq!(
+            read(&line),
+            format!(
+                r#"{{"ts":"t","app":"sonarr","itemId":5,"type":"grab_succeeded","release":{{"title":"{title}","sizeBytes":1,"qualityWeight":5,"seasonNumber":{season}}}}}"#
+            )
+        );
+    }
+    for untouched in [
+        r#"{"app":"radarr","release":{"title":"Film.S01.2024","sizeBytes":1}}"#,
+        r#"{"app":"sonarr","release":{"title":"Show.S04","seasonNumber":2}}"#,
+        r#"{"app":"sonarr","release":{"title":"Show.Complete.Series.1080p"}}"#,
+        r#"{"app":"sonarr","type":"grab_started"}"#,
+    ] {
+        assert_eq!(read(untouched), untouched);
+    }
+}

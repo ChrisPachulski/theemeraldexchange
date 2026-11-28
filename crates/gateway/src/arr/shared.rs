@@ -650,7 +650,42 @@ fn parse(lines: Vec<String>) -> Vec<Box<RawValue>> {
     lines
         .iter()
         .filter_map(|l| serde_json::from_str::<Box<RawValue>>(l).ok())
+        .map(with_legacy_season)
         .collect()
+}
+
+/// Interactive Sonarr grabs logged before d22861b (2026-11-27) have no
+/// `release.seasonNumber`, so Downloads showed them without "Season N" (6
+/// rows on prod). The season is in the release name ("Show.S03.1080p",
+/// "Show.S01E01..."), so it is read from there as the log is read; the file
+/// is never rewritten. Any other line comes back byte for byte.
+fn with_legacy_season(raw: Box<RawValue>) -> Box<RawValue> {
+    static SEASON: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"(?i)\bS(\d{2})(?:E\d{2,3})*\b").expect("season pattern")
+    });
+    type Fields = indexmap::IndexMap<String, Box<RawValue>>;
+    let fill = || -> Option<Box<RawValue>> {
+        let mut event: Fields = serde_json::from_str(raw.get()).ok()?;
+        if event.get("app")?.get() != r#""sonarr""# {
+            return None;
+        }
+        let mut release: Fields = serde_json::from_str(event.get("release")?.get()).ok()?;
+        if release.contains_key("seasonNumber") {
+            return None;
+        }
+        let title: String = serde_json::from_str(release.get("title")?.get()).ok()?;
+        let season: u32 = SEASON.captures(&title)?[1].parse().ok()?;
+        release.insert(
+            "seasonNumber".into(),
+            RawValue::from_string(season.to_string()).ok()?,
+        );
+        event.insert(
+            "release".into(),
+            serde_json::value::to_raw_value(&release).ok()?,
+        );
+        serde_json::value::to_raw_value(&event).ok()
+    };
+    fill().unwrap_or(raw)
 }
 
 /// A JSON array of raw events.
