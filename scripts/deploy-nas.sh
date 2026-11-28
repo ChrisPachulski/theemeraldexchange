@@ -37,6 +37,9 @@
 #                   is git archive HEAD. Commit first unless you know better.
 #   --skip-ci-gate  Ship HEAD without waiting for a green GitHub Actions
 #                   verdict (scripts/ci-gate.sh). Same as SKIP_CI_GATE=1.
+#                   Waives EVERY check; when one check unrelated to the
+#                   change is red, CI_GATE_ALLOW_RED=<check> (e.g. audit)
+#                   waives only that one.
 #   --build-on-nas  Legacy path: compile each service on the NAS through
 #                   nas-safe-build.sh instead of pulling the CI images. Only
 #                   for when GHCR is unreachable; it is slow and has wedged
