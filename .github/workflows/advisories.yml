@@ -1,0 +1,54 @@
+name: Advisories
+
+# A new RustSec or npm advisory against dependencies nobody changed turns CI's
+# audit job red only on the next push: from 2026-11-05 to 11-23 main sat red
+# on one, and deploys had to skip the CI gate. This runs the same two audits
+# daily, so a fresh advisory fails a scheduled run and GitHub emails the owner
+# the day it is published. Linux only, a couple of minutes a day.
+on:
+  schedule:
+    - cron: '17 14 * * *'   # daily, 06:17 Pacific
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+          cache: npm
+
+      - name: Install JS dependencies (for npm audit)
+        run: npm ci
+
+      - name: npm audit (moderate+)
+        run: npm audit --audit-level=moderate --omit=dev
+
+      # Same binaries and cache key as ci.yml's audit job.
+      - name: Cache cargo-audit + cargo-deny binaries
+        id: cargo-tools
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo-tools/bin
+          key: ${{ runner.os }}-cargo-tools-cargo-audit-0.22.2-cargo-deny-0.20.2
+
+      # Both tools, as ci.yml installs them: this key is shared, and a cache
+      # saved here without cargo-deny would break ci.yml's license gate.
+      - name: Install cargo-audit + cargo-deny (cache miss only)
+        if: steps.cargo-tools.outputs.cache-hit != 'true'
+        run: |
+          cargo install --locked --root ~/.cargo-tools cargo-audit@0.22.2
+          cargo install --locked --root ~/.cargo-tools cargo-deny@0.20.2
+
+      - name: Put the cached tools on PATH
+        run: echo "$HOME/.cargo-tools/bin" >> "$GITHUB_PATH"
+
+      - name: cargo audit
+        run: cargo audit
